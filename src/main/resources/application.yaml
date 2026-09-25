@@ -1,0 +1,11 @@
+spring:
+  application:
+    name: linkro
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/linkro}
+    username: ${DB_USERNAME:linkro}
+    password: ${DB_PASSWORD:linkro}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true

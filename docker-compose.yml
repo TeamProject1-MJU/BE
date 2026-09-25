@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: linkro-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-linkro}
+      POSTGRES_USER: ${POSTGRES_USER:-linkro}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-linkro}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - linkro-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  linkro-postgres-data:
