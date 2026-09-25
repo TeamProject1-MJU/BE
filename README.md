@@ -187,9 +187,9 @@ chore: Spring Boot 프로젝트 초기 세팅 (#1)
 
 ## 🔗 Related Repository
 
-### Frontend
+### Backend
 
-[TeamProject1-MJU/FE](https://github.com/TeamProject1-MJU/FE)
+[TeamProject1-MJU/FE](https://github.com/TeamProject1-MJU/BE)
 
 ---
 
