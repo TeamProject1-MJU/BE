@@ -12,5 +12,18 @@ services:
     volumes:
       - linkro-postgres-data:/var/lib/postgresql/data
 
+  app:
+    build: .
+    container_name: linkro-app
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-linkro}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-linkro}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-linkro}
+    ports:
+      - "8080:8080"
+
 volumes:
   linkro-postgres-data:
