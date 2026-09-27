@@ -21,7 +21,7 @@ Spring Boot(Java)와 PostgreSQL을 기반으로
 
 ### Infra
 
-![AWS EC2](https://img.shields.io/badge/AWS_EC2-FF9900?style=flat-square&logo=amazonec2&logoColor=white)
+![AWS Lightsail](https://img.shields.io/badge/AWS_Lightsail-FF9900?style=flat-square&logo=amazonaws&logoColor=white)
 ![Ubuntu](https://img.shields.io/badge/Ubuntu-E95420?style=flat-square&logo=ubuntu&logoColor=white)
 
 ### Collaboration
@@ -74,15 +74,14 @@ cd BE
 
 ### 3. 환경 변수 설정
 
-`src/main/resources/application-local.yml` 파일을 생성하고 아래 항목을 채워주세요.
+Docker Compose를 사용하는 경우 `.env.example`을 복사하여 `.env` 파일을 생성합니다.
 
-```yaml
-spring:
-  datasource:
-    url: jdbc:postgresql://localhost:5432/linkro
-    username: ${DB_USERNAME}
-    password: ${DB_PASSWORD}
-```
+Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+
+---
 
 ### 4. 프로젝트 빌드 및 실행
 
