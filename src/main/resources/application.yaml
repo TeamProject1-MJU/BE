@@ -6,6 +6,7 @@ spring:
     username: ${DB_USERNAME:linkro}
     password: ${DB_PASSWORD:linkro}
   jpa:
+    open-in-view: false
     hibernate:
       ddl-auto: update
     show-sql: true
