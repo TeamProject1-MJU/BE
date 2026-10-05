@@ -22,6 +22,8 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-linkro}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-linkro}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-linkro}
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-}
     ports:
       - "8080:8080"
 

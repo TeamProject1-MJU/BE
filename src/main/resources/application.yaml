@@ -10,3 +10,8 @@ spring:
     hibernate:
       ddl-auto: update
     show-sql: true
+
+auth:
+  jwt:
+    secret: ${JWT_SECRET}
+    access-token-ttl: ${JWT_ACCESS_TOKEN_TTL}
