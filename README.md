@@ -199,3 +199,12 @@ chore: Spring Boot 프로젝트 초기 세팅 (#1)
 **지하철 이동의 여러 순간을 하나의 흐름으로 연결합니다.**
 
 </div>
+
+### 공통 응답 예외 처리 정책
+
+- Success는 항상 true, Failure는 항상 false이며 팩토리 사용 방식은 유지합니다.
+- details는 클라이언트에 공개 가능한 값만 담으며, null 키/값은 제거하고 불변 복사본을 보관합니다.
+- 검증 오류가 동일 키에 여러 개 있으면 메시지 사전순으로 가장 앞선 값을 사용합니다. 클래스 레벨 검증에는 예약 키 `_global`을 사용합니다.
+- 404/406은 NOT_FOUND/NOT_ACCEPTABLE을 반환합니다. 미매핑 MVC 상태는 기존 HTTP 상태와 헤더를 유지하면서 고정 INTERNAL_ERROR 코드를 사용합니다.
+- 5xx BusinessException의 원인과 스택은 ERROR 로그에 기록하며 응답에는 ErrorCode의 공개 메시지만 반환합니다.
+- Spring Security 도입 시 인증/인가 예외는 Security filter chain에서 AuthenticationEntryPoint / AccessDeniedHandler를 통해 동일한 ApiResponse 실패 형식으로 반환해야 합니다. 해당 예외가 INTERNAL_ERROR(500)으로 변환되지 않도록 인증 기능 PR에서 반드시 연동합니다. 이번 #14에서는 Security 의존성 및 구현을 추가하지 않습니다.
