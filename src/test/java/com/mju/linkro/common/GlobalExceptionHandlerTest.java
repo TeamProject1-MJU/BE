@@ -129,12 +129,16 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void missingUrlUsesNotFound() throws Exception {
-        failure(mvc.perform(get("/missing")), 404, "NOT_FOUND");
+        assertThat(ErrorCode.NOT_FOUND.getMessage()).isEqualTo("요청한 리소스를 찾을 수 없습니다.");
+        failure(mvc.perform(get("/missing")), 404, "NOT_FOUND")
+                .andExpect(jsonPath("$.error.message").value("요청한 리소스를 찾을 수 없습니다."));
     }
 
     @Test
     void unacceptableResponseUsesStableCode() throws Exception {
-        failure(mvc.perform(get("/test/success").accept(MediaType.APPLICATION_XML)), 406, "NOT_ACCEPTABLE");
+        assertThat(ErrorCode.NOT_ACCEPTABLE.getMessage()).isEqualTo("요청한 응답 형식을 제공할 수 없습니다.");
+        failure(mvc.perform(get("/test/success").accept(MediaType.APPLICATION_XML)), 406, "NOT_ACCEPTABLE")
+                .andExpect(jsonPath("$.error.message").value("요청한 응답 형식을 제공할 수 없습니다."));
     }
 
     @Test
