@@ -1,0 +1,15 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:linkro;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    open-in-view: false
+auth:
+  kakao:
+    app-id: 1234
+  jwt:
+    secret: dGVzdC1vbmx5LXNlY3JldC0wMTIzNDU2Nzg5YWJjZGVmZ2hpams=
+    access-token-ttl: 15m

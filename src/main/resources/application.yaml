@@ -10,3 +10,13 @@ spring:
     hibernate:
       ddl-auto: update
     show-sql: true
+
+auth:
+  kakao:
+    app-id: ${KAKAO_APP_ID}
+    base-url: ${KAKAO_BASE_URL:https://kapi.kakao.com}
+    connect-timeout: ${KAKAO_CONNECT_TIMEOUT:3s}
+    read-timeout: ${KAKAO_READ_TIMEOUT:5s}
+  jwt:
+    secret: ${JWT_SECRET}
+    access-token-ttl: ${JWT_ACCESS_TOKEN_TTL}

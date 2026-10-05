@@ -11,20 +11,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: linkro
-          POSTGRES_USER: linkro
-          POSTGRES_PASSWORD: linkro
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,8 +24,7 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # 테스트는 위 postgres 서비스 컨테이너(localhost:5432)에 접속합니다.
-      # application.yaml의 기본 DB 설정(linkro/linkro)과 동일하게 맞춰 두었습니다.
+      # DB tests explicitly use the test profile or per-test H2 properties.
       - name: Run tests
         run: ./gradlew test --no-daemon
 

@@ -25,6 +25,25 @@ jobs:
           script: |
             set -euo pipefail
             cd ~/BE
+            if [ ! -f .env ]; then
+              echo "배포 중단: ~/BE/.env 파일이 없습니다."
+              exit 1
+            fi
+            for setting in JWT_SECRET JWT_ACCESS_TOKEN_TTL KAKAO_APP_ID; do
+              if ! awk -v key="$setting" '
+                $0 ~ "^" key "=" {
+                  value = substr($0, length(key) + 2)
+                  sub(/[[:space:]]+#.*$/, "", value)
+                  gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+                  gsub(/^["\047]|["\047]$/, "", value)
+                  gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+                }
+                END { exit (value == "") }
+              ' .env; then
+                echo "배포 중단: ~/BE/.env의 $setting 설정이 없거나 비어 있습니다."
+                exit 1
+              fi
+            done
             git checkout dev
             git pull origin dev
             echo "배포 대상 커밋: $(git rev-parse HEAD)"
