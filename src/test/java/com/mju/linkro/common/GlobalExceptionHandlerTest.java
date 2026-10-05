@@ -9,6 +9,13 @@ import jakarta.validation.Validation;
 import jakarta.validation.ValidatorFactory;
 import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.Min;
+import org.springframework.test.json.JsonCompareMode;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import org.slf4j.LoggerFactory;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,11 +54,11 @@ class GlobalExceptionHandlerTest {
     void successResponsesHaveExactEnvelope() throws Exception {
         mvc.perform(get("/test/success"))
                 .andExpect(status().isOk())
-                .andExpect(content().json("{\"success\":true,\"data\":{\"id\":1}}"))
+                .andExpect(content().json("{\"success\":true,\"data\":{\"id\":1}}", JsonCompareMode.STRICT))
                 .andExpect(jsonPath("$.error").doesNotExist());
         var result = mvc.perform(get("/test/empty"))
                 .andExpect(status().isOk()).andReturn();
-        assertThat(result.getResponse().getContentAsString()).isEqualTo("{\"success\":true,\"data\":null}");
+        assertThat(result.getResponse().getContentAsString()).isEqualTo("{\"data\":null,\"success\":true}");
     }
 
     @ParameterizedTest
@@ -120,9 +127,78 @@ class GlobalExceptionHandlerTest {
         assertThat(result.getResponse().getContentAsString()).doesNotContain("secret SQL", "RuntimeException", "stackTrace");
     }
 
+    @Test
+    void missingUrlUsesNotFound() throws Exception {
+        failure(mvc.perform(get("/missing")), 404, "NOT_FOUND");
+    }
+
+    @Test
+    void unacceptableResponseUsesStableCode() throws Exception {
+        failure(mvc.perform(get("/test/success").accept(MediaType.APPLICATION_XML)), 406, "NOT_ACCEPTABLE");
+    }
+
+    @Test
+    void methodParameterValidationIncludesNames() throws Exception {
+        failure(mvc.perform(get("/test/validated/0").param("size", "0")), 400, "VALIDATION_ERROR")
+                .andExpect(jsonPath("$.error.details.size").value("minimum size"))
+                .andExpect(jsonPath("$.error.details.id").value("minimum id"))
+                .andExpect(result -> assertThat(result.getResolvedException())
+                        .isInstanceOf(org.springframework.web.method.annotation.HandlerMethodValidationException.class));
+    }
+
+    @Test
+    void classLevelValidationUsesGlobalKey() throws Exception {
+        failure(mvc.perform(post("/test/global").contentType(MediaType.APPLICATION_JSON).content("{}")),
+                400, "VALIDATION_ERROR").andExpect(jsonPath("$.error.details._global").value("global reason"));
+    }
+
+    @Test
+    void globalAndDuplicateFieldErrorsChooseDeterministicMessages() throws Exception {
+        for (boolean reverse : new boolean[] {false, true}) {
+            var binding = new org.springframework.validation.BeanPropertyBindingResult(new Request("x"), "request");
+            var messages = reverse ? java.util.List.of("z reason", "a reason") : java.util.List.of("a reason", "z reason");
+            messages.forEach(message -> {
+                binding.addError(new org.springframework.validation.ObjectError("request", message));
+                binding.addError(new org.springframework.validation.FieldError("request", "nickname", message));
+            });
+            var method = TestController.class.getDeclaredMethod("body", Request.class);
+            var exception = new org.springframework.web.bind.MethodArgumentNotValidException(
+                    new org.springframework.core.MethodParameter(method, 0), binding);
+            var handler = new GlobalExceptionHandler();
+            var response = handler.handleException(exception,
+                    new org.springframework.web.context.request.ServletWebRequest(new org.springframework.mock.web.MockHttpServletRequest()));
+            var error = ((ApiResponse.Failure) response.getBody()).error();
+            assertThat(error.details()).isEqualTo(Map.of("_global", "a reason", "nickname", "a reason"));
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ErrorCode.class, names = {"EXTERNAL_API_ERROR", "AI_UNAVAILABLE"})
+    void serverBusinessCausesAreLoggedButNeverReturned(ErrorCode code) throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            failure(mvc.perform(get("/test/cause").param("code", code.name())), code.getStatus().value(), code.getCode())
+                    .andExpect(content().json("{\"success\":false,\"error\":{\"code\":\"" + code.getCode()
+                            + "\",\"message\":\"" + code.getMessage() + "\",\"details\":{}}}", JsonCompareMode.STRICT));
+            assertThat(appender.list).anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+                assertThat(event.getThrowableProxy().getCause().getMessage()).isEqualTo("private upstream secret");
+                assertThat(event.getThrowableProxy().getStackTraceElementProxyArray()).isNotEmpty();
+            });
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
     private ResultActions failure(ResultActions result, int statusCode, String code) throws Exception {
         return result.andExpect(status().is(statusCode))
                 .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$.error.length()").value(3))
                 .andExpect(jsonPath("$.data").doesNotExist())
                 .andExpect(jsonPath("$.error.code").value(code))
                 .andExpect(jsonPath("$.error.details").isMap())
@@ -162,9 +238,39 @@ class GlobalExceptionHandlerTest {
             }
         }
 
+        @PostMapping("/global")
+        ApiResponse<Void> global(@Valid @RequestBody GlobalRequest request) { return ApiResponse.success(); }
+
+        @GetMapping("/validated/{id}")
+        ApiResponse<Void> validated(@PathVariable("id") @Min(value = 1, message = "minimum id") int id,
+                @RequestParam("size") @Min(value = 1, message = "minimum size") int size) {
+            return ApiResponse.success();
+        }
+
+        @GetMapping("/cause")
+        ApiResponse<Void> cause(@RequestParam("code") ErrorCode code) {
+            throw new BusinessException(code, new IllegalStateException("private upstream secret"));
+        }
+
         @GetMapping("/unexpected")
         ApiResponse<Void> unexpected() { throw new RuntimeException("secret SQL information"); }
     }
+
+    @java.lang.annotation.Target(java.lang.annotation.ElementType.TYPE)
+    @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
+    @jakarta.validation.Constraint(validatedBy = GlobalValidator.class)
+    @interface GlobalConstraint {
+        String message() default "global reason";
+        Class<?>[] groups() default {};
+        Class<? extends jakarta.validation.Payload>[] payload() default {};
+    }
+
+    public static class GlobalValidator implements jakarta.validation.ConstraintValidator<GlobalConstraint, GlobalRequest> {
+        public boolean isValid(GlobalRequest request, jakarta.validation.ConstraintValidatorContext context) { return false; }
+    }
+
+    @GlobalConstraint
+    record GlobalRequest() {}
 
     record Request(@Size(max = 20, message = "20자 이하여야 합니다.") String nickname) {}
 }

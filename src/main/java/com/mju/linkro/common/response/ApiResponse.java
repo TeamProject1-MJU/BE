@@ -1,6 +1,7 @@
 package com.mju.linkro.common.response;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.Map;
 import java.util.Objects;
 
@@ -8,7 +9,7 @@ import java.util.Objects;
 public sealed interface ApiResponse<T> {
 
     static <T> ApiResponse<T> success(T data) {
-        return new Success<>(true, data);
+        return new Success<>(data);
     }
 
     static ApiResponse<Void> success() {
@@ -16,21 +17,38 @@ public sealed interface ApiResponse<T> {
     }
 
     static ApiResponse<Void> failure(String code, String message, Map<String, ?> details) {
-        return new Failure(false, new Error(code, message, details));
+        return new Failure( new Error(code, message, details));
     }
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
-    record Success<T>(boolean success, T data) implements ApiResponse<T> {}
+    record Success<T>(T data) implements ApiResponse<T> {
+        @JsonProperty("success")
+        public boolean success() { return true; }
+    }
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
-    record Failure(boolean success, Error error) implements ApiResponse<Void> {}
+    record Failure(Error error) implements ApiResponse<Void> {
+        public Failure { Objects.requireNonNull(error); }
+        @JsonProperty("success")
+        public boolean success() { return false; }
+    }
+
+    /** Drops null keys/values and snapshots client-safe details as an immutable map. */
+    static Map<String, ?> safeDetails(Map<String, ?> details) {
+        if (details == null) { return Map.of(); }
+        Map<String, Object> copy = new java.util.TreeMap<>();
+        details.forEach((key, value) -> {
+            if (key != null && value != null) { copy.put(key, value); }
+        });
+        return java.util.Collections.unmodifiableMap(copy);
+    }
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
     record Error(String code, String message, Map<String, ?> details) {
         public Error {
             Objects.requireNonNull(code);
             Objects.requireNonNull(message);
-            details = details == null ? Map.of() : Map.copyOf(details);
+            details = safeDetails(details);
         }
     }
 }
