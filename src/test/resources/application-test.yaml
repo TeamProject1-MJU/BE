@@ -8,6 +8,8 @@ spring:
       ddl-auto: create-drop
     open-in-view: false
 auth:
+  kakao:
+    app-id: 1234
   jwt:
     secret: dGVzdC1vbmx5LXNlY3JldC0wMTIzNDU2Nzg5YWJjZGVmZ2hpams=
     access-token-ttl: 15m

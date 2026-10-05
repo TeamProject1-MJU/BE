@@ -1,6 +1,6 @@
 # Issue #12 카카오 로그인
 
-`POST /api/v1/auth/kakao`를 구현했습니다. SDK에서 받은 카카오 토큰으로 서버가 직접 사용자 정보를 조회하고, LinkRo JWT를 발급합니다. 기존 PostgreSQL 설정과 `ddl-auto: update`를 유지합니다. Refresh Token과 인증 필터는 포함하지 않습니다.
+`POST /api/v1/auth/kakao`를 구현했습니다. SDK에서 받은 카카오 토큰의 `/v1/user/access_token_info` 응답에서 App ID·만료 여부를 검증한 후 `/v2/user/me`로 회원 ID·닉네임을 조회하고 LinkRo JWT를 발급합니다. 두 API의 회원 ID가 다르면 인증에 실패합니다. 기존 PostgreSQL 설정과 `ddl-auto: update`를 유지합니다. Refresh Token과 인증 필터는 포함하지 않습니다.
 
 ## 변경 파일과 목적
 
@@ -22,7 +22,7 @@ Java 파일 경로는 `src/main/java/com/mju/linkro/` 기준입니다.
 | `src/main/resources/application.yaml` | JWT 환경 설정, 기존 DB 설정 유지 |
 | `.env.example` | JWT 변수 안내, 기존 로컬 변경 보존 |
 | `docker-compose.yml` | app 컨테이너로 JWT 변수 전달 |
-| `src/test/resources/application.yaml` | H2 격리 DB 및 테스트 전용 secret·수명 |
+| `src/test/resources/application-test.yaml` | 명시적인 test profile의 H2 DB 및 테스트 전용 인증 설정 |
 | `src/test/java/com/mju/linkro/auth/AuthServiceTest.java` | 실제 JPA 가입·복구·동시 로그인·JWT 검증, KakaoClient mock |
 | `src/test/java/com/mju/linkro/auth/client/KakaoEndpointTest.java` | 외부 HTTP mock과 MVC를 통한 401·502 및 최신 프로필 필드 검증 |
 | `KAKAO_LOGIN.md` | 실행·Postman·설정·검증 안내 |
@@ -44,6 +44,9 @@ uuid-creator와 테스트 전용 H2는 dev 공통 기반에 이미 존재하는 
 | --- | --- |
 | `JWT_SECRET` | 필수. 최소 32바이트 무작위 키를 Base64 인코딩한 값 |
 | `JWT_ACCESS_TOKEN_TTL` | 필수. Spring Duration 형식 (`15m`, `1h` 등). 실제 정책은 미확정 |
+| `KAKAO_APP_ID` | 필수. Kakao Developers의 숫자 App ID. Native App Key / REST API Key와 다른 값 |
+| `KAKAO_BASE_URL` | `https://kapi.kakao.com` |
+| `KAKAO_CONNECT_TIMEOUT` / `KAKAO_READ_TIMEOUT` | `3s` / `5s`. Boot 기본 HTTP client를 명시적인 request factory로 대체 |
 | `DB_URL` | `jdbc:postgresql://localhost:5432/linkro` |
 | `DB_USERNAME` | `linkro` |
 | `DB_PASSWORD` | `linkro` |
@@ -54,7 +57,7 @@ uuid-creator와 테스트 전용 H2는 dev 공통 기반에 이미 존재하는 
 
 로컬 기본값으로 실행하려면 `.env`의 PostgreSQL 값도 linkro로 맞추세요. 파일의 실제 비밀키를 저장소에 커밋하지 마세요. Spring Boot는 `.env` 파일을 자동으로 로드하지 않으므로 bootRun에는 셸 환경변수 또는 IntelliJ Run Configuration을 사용합니다. Compose는 `.env`를 읽습니다.
 
-`docker compose up -d postgres`는 JWT 변수 없이 실행할 수 있습니다. app에 전달하는 JWT 변수는 Compose 필수 보간을 사용하지 않으며, app 실행 시 Spring Boot가 필수 설정을 검증합니다.
+`docker compose up -d postgres`는 JWT/Kakao 변수 없이 실행할 수 있습니다. app의 JWT/Kakao App ID는 Compose 필수 보간을 사용하지 않으며, app 실행 시 Spring Boot가 필수 설정을 검증합니다. 배포 workflow는 컨테이너 교체 전에 서버 `~/BE/.env`의 JWT_SECRET·JWT_ACCESS_TOKEN_TTL·KAKAO_APP_ID가 비어 있지 않은지 검사하고, 값은 출력하지 않습니다. 머지 전에 서버에 세 값을 수동 설정해야 합니다.
 
 ## 실행 (PowerShell)
 
@@ -65,6 +68,7 @@ $jwtKeyBytes = New-Object byte[] 32
 [System.Security.Cryptography.RandomNumberGenerator]::Fill($jwtKeyBytes)
 $env:JWT_SECRET = [Convert]::ToBase64String($jwtKeyBytes)
 $env:JWT_ACCESS_TOKEN_TTL = '15m'
+$env:KAKAO_APP_ID = '본인 앱의 숫자 App ID'
 docker compose up -d postgres
 .\gradlew.bat bootRun
 ```
@@ -98,6 +102,7 @@ userId·nickname을 요청에 보내도 회원 정보를 결정하는 데 사용
 - Access Token의 운영 수명은 명세 확정 후 환경변수로 결정해야 합니다.
 - 실제 SDK 토큰을 이용한 종단 간 검증과 PostgreSQL 16에서의 동시 가입·DDL 검증은 별도 필요합니다. 자동 테스트는 H2 PostgreSQL 모드입니다.
 - H2의 varchar 길이 계산은 PostgreSQL과 다르므로 이모지 닉네임의 code point 절단은 별도 단위 테스트로 검증합니다. H2 테스트가 실제 PostgreSQL UUID·시간·문자열 호환성을 모두 보장하지는 않습니다.
+- 애플리케이션 context 테스트는 `@ActiveProfiles("test")`로 H2·테스트 인증 설정을 선택합니다. #16 기반 테스트는 자체 H2 properties를 유지합니다. CI에는 미사용 PostgreSQL 서비스를 두지 않습니다.
 - DB CHECK 제약 및 Flyway 전환은 별도 작업입니다. 이번에는 기존 ddl-auto 설정을 유지합니다.
 - 추후 JWT 인증 필터를 JwtProvider 기반으로 연결할 수 있습니다. Refresh Token은 이번 구현에 없습니다.
 
