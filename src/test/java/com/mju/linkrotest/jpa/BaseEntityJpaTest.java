@@ -16,6 +16,9 @@ import java.util.Optional;
 import java.util.UUID;
 import org.hibernate.SessionFactory;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.persistence.autoconfigure.EntityScan;
@@ -47,6 +50,70 @@ class BaseEntityJpaTest {
     @Autowired private UuidTimeRepository uuidTimeRepository;
     @Autowired private EntityManager entityManager;
     @Autowired private AuditingHandler auditingHandler;
+
+    @Test
+    void equalityUsesSameConcreteEntityTypeAndUuid() {
+        var entity = new UuidRecord("one");
+        var sameId = new UuidRecord("two");
+        var differentId = new UuidRecord("three");
+        var differentType = new UuidTimeRecord("four");
+        ReflectionTestUtils.setField(sameId, "id", entity.getId());
+        ReflectionTestUtils.setField(differentType, "id", entity.getId());
+
+        assertThat(entity.equals(entity)).isTrue();
+        assertThat(entity.equals(sameId)).isTrue();
+        assertThat(sameId.equals(entity)).isTrue();
+        assertThat(sameId.hashCode()).isEqualTo(entity.hashCode());
+        assertThat(entity.equals(differentId)).isFalse();
+        assertThat(entity.equals(differentType)).isFalse();
+        assertThat(differentType.equals(entity)).isFalse();
+        assertThat(entity.equals(null)).isFalse();
+        assertThat(entity.equals(entity.getId())).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void equalityAndHashRemainStableThroughPersistLoadAndDetachedProxy(boolean withTime) {
+        BaseUuidEntity entity = withTime ? new UuidTimeRecord("original") : new UuidRecord("original");
+        int hash = entity.hashCode();
+        var set = new java.util.HashSet<BaseUuidEntity>();
+        var map = new java.util.HashMap<BaseUuidEntity, String>();
+        set.add(entity);
+        map.put(entity, "value");
+        if (withTime) {
+            uuidTimeRepository.saveAndFlush((UuidTimeRecord) entity);
+        } else {
+            uuidRepository.saveAndFlush((UuidRecord) entity);
+        }
+        assertThat(entity.hashCode()).isEqualTo(hash);
+        assertThat(set.contains(entity)).isTrue();
+        assertThat(map.get(entity)).isEqualTo("value");
+        entityManager.clear();
+
+        BaseUuidEntity loaded = withTime ? uuidTimeRepository.findById(entity.getId()).orElseThrow()
+                : uuidRepository.findById(entity.getId()).orElseThrow();
+        assertThat(entity.equals(loaded)).isTrue();
+        assertThat(loaded.equals(entity)).isTrue();
+        assertThat(loaded.hashCode()).isEqualTo(hash);
+        assertThat(set.contains(loaded)).isTrue();
+        assertThat(map.get(loaded)).isEqualTo("value");
+        entityManager.clear();
+
+        BaseUuidEntity proxy = withTime ? uuidTimeRepository.getReferenceById(entity.getId())
+                : uuidRepository.getReferenceById(entity.getId());
+        assertThat(proxy).isInstanceOf(org.hibernate.proxy.HibernateProxy.class);
+        assertThat(org.hibernate.Hibernate.isInitialized(proxy)).isFalse();
+        entityManager.clear();
+        assertThat(proxy.equals(proxy)).isTrue();
+        assertThat(entity.equals(proxy)).isTrue();
+        assertThat(proxy.equals(entity)).isTrue();
+        assertThat(loaded.equals(proxy)).isTrue();
+        assertThat(proxy.equals(loaded)).isTrue();
+        assertThat(proxy.hashCode()).isEqualTo(hash);
+        assertThat(set.contains(proxy)).isTrue();
+        assertThat(map.get(proxy)).isEqualTo("value");
+        assertThat(org.hibernate.Hibernate.isInitialized(proxy)).isFalse();
+    }
 
     @Test
     void newUuidEntityHasVersionSevenAndIndependentNewState() {

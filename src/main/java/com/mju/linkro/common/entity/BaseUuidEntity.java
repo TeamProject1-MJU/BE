@@ -8,6 +8,7 @@ import jakarta.persistence.PostLoad;
 import jakarta.persistence.PostPersist;
 import jakarta.persistence.Transient;
 import java.util.UUID;
+import org.hibernate.proxy.HibernateProxy;
 import org.springframework.data.domain.Persistable;
 
 /** UUID-only foundation; does not impose timestamps or soft deletion on an entity. */
@@ -29,9 +30,37 @@ public abstract class BaseUuidEntity implements Persistable<UUID> {
     }
 
     @Override
-    @Transient
     public boolean isNew() {
         return newEntity;
+    }
+
+    /** Compares the concrete mapped entity type and its immutable, preassigned UUID. */
+    @Override
+    public final boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof BaseUuidEntity entity) || persistentClass(this) != persistentClass(entity)) {
+            return false;
+        }
+        UUID identifier = identifier(this);
+        return identifier != null && identifier.equals(identifier(entity));
+    }
+
+    @Override
+    public final int hashCode() {
+        return identifier(this).hashCode();
+    }
+
+    // Read proxy metadata rather than its constructor-generated fields or initializing it.
+    private static Class<?> persistentClass(BaseUuidEntity entity) {
+        return entity instanceof HibernateProxy proxy
+                ? proxy.getHibernateLazyInitializer().getPersistentClass() : entity.getClass();
+    }
+
+    private static UUID identifier(BaseUuidEntity entity) {
+        return entity instanceof HibernateProxy proxy
+                ? (UUID) proxy.getHibernateLazyInitializer().getInternalIdentifier() : entity.id;
     }
 
     @PostPersist

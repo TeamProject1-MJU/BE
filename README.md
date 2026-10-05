@@ -208,3 +208,8 @@ chore: Spring Boot 프로젝트 초기 세팅 (#1)
 - 404/406은 NOT_FOUND/NOT_ACCEPTABLE을 반환합니다. 미매핑 MVC 상태는 기존 HTTP 상태와 헤더를 유지하면서 고정 INTERNAL_ERROR 코드를 사용합니다.
 - 5xx BusinessException의 원인과 스택은 ERROR 로그에 기록하며 응답에는 ErrorCode의 공개 메시지만 반환합니다.
 - Spring Security 도입 시 인증/인가 예외는 Security filter chain에서 AuthenticationEntryPoint / AccessDeniedHandler를 통해 동일한 ApiResponse 실패 형식으로 반환해야 합니다. 해당 예외가 INTERNAL_ERROR(500)으로 변환되지 않도록 인증 기능 PR에서 반드시 연동합니다. 이번 #14에서는 Security 의존성 및 구현을 추가하지 않습니다.
+
+### 공통 JPA 기반
+
+- LinkRo 명세에 따라 UUIDv7을 애플리케이션 객체 생성 시점에 할당하기 위해 uuid-creator를 사용하며, persist 시점 생성 방식은 사용하지 않습니다.
+- 기존 운영 테이블에 `created_at` / `updated_at`의 `nullable=false` 설정을 적용할 때는 기존 데이터 처리와 컬럼 변경을 migration으로 관리해야 합니다. 실제 도메인 적용 및 migration은 후속 작업입니다.
