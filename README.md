@@ -74,12 +74,23 @@ cd BE
 
 ### 3. 환경 변수 설정
 
-Docker Compose를 사용하는 경우 `.env.example`을 복사하여 `.env` 파일을 생성합니다.
+`.env.example`을 복사하여 `.env` 파일을 생성하고 값을 채웁니다.
+
+macOS / Linux:
+
+```bash
+cp .env.example .env
+```
 
 Windows PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
+```
+
+- 로컬 실행(IntelliJ, `./gradlew bootRun`) 시 Spring이 프로젝트 루트의 `.env`를 자동으로 읽으므로, IntelliJ 실행 구성에 환경 변수를 따로 입력하지 않아도 됩니다.
+- OS 환경 변수가 `.env`보다 우선 적용됩니다.
+- `.env` 값은 따옴표 없이 `KEY=value` 형식으로 작성합니다.
 
 ---
 
