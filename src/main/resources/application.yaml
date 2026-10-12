@@ -25,7 +25,10 @@ auth:
     read-timeout: ${KAKAO_READ_TIMEOUT:5s}
   jwt:
     secret: ${JWT_SECRET}
+    # Spring Duration: 15m locally, 30m in production.
     access-token-ttl: ${JWT_ACCESS_TOKEN_TTL}
+    # Each rotation restarts this lifetime from the time of reissue.
+    refresh-token-ttl: 14d
 
 cors:
   allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}

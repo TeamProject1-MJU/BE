@@ -52,6 +52,11 @@ public class JwtProvider {
 			.expiration(Date.from(now.plus(accessTokenTtl))).signWith(key, Jwts.SIG.HS256).compact();
 	}
 
+	/** Seconds until a freshly issued access token expires. */
+	public long accessTokenExpiresIn() {
+		return accessTokenTtl.toSeconds();
+	}
+
 	/** Exception details and raw tokens are intentionally discarded; only the error code reaches clients. */
 	public UUID parseUserId(String token) {
 		if (token == null || token.isBlank()) {
