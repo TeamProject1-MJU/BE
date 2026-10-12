@@ -92,5 +92,12 @@ public class RefreshTokenService {
 		static Rotation failure(ErrorCode error) {
 			return new Rotation(null, null, error);
 		}
+
+		/** Masks the raw refresh token so it never reaches logs. */
+		@Override
+		public String toString() {
+			return "Rotation[userId=" + userId + ", refreshToken=" + (refreshToken == null ? null : "***")
+				+ ", error=" + error + "]";
+		}
 	}
 }

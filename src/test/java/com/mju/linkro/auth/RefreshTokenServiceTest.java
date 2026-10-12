@@ -146,11 +146,20 @@ class RefreshTokenServiceTest {
 
 	@Test
 	void deletedUserTokenIsInvalid() {
-		String token = issue(user.getId(), UUID.randomUUID());
+		UUID family = UUID.randomUUID();
+		String token = issue(user.getId(), family);
+		String sibling = issue(user.getId(), family);
 		user.softDelete();
 		users.saveAndFlush(user);
+		long rows = refreshTokens.count();
 
 		assertError(() -> authService.refresh(token), ErrorCode.TOKEN_INVALID);
+
+		// The user check runs after the conditional UPDATE, so the presented token is used up
+		// while the rest of the family is left to account deletion (API spec 4.6).
+		assertThat(refreshTokens.count()).isEqualTo(rows);
+		assertThat(find(token).getRevokedAt()).isNotNull();
+		assertThat(find(sibling).getRevokedAt()).isNull();
 	}
 
 	@Test
