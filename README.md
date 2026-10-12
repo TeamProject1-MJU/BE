@@ -223,5 +223,5 @@ chore: Spring Boot 프로젝트 초기 세팅 (#1)
 ### 공통 JPA 기반
 
 - LinkRo 명세에 따라 UUIDv7을 애플리케이션 객체 생성 시점에 할당하기 위해 uuid-creator를 사용하며, persist 시점 생성 방식은 사용하지 않습니다.
-- 기존 운영 테이블에 `created_at` / `updated_at`의 `nullable=false` 설정을 적용할 때는 기존 데이터 처리와 컬럼 변경을 migration으로 관리해야 합니다. 실제 도메인 적용 및 migration은 후속 작업입니다.
+- 기존 운영 테이블에 `created_at` / `updated_at`의 `nullable=false` 설정을 적용할 때는 기존 데이터 처리와 컬럼 변경을 migration으로 관리해야 합니다. `users` 테이블은 Flyway `V1__create_users.sql`로 관리하며, 기존 DB는 baseline(V1)으로 처리되어 `default now()`가 적용되지 않습니다.
 - DB 변경은 `db/migration`에 `V{번호}__설명.sql`로만 추가하며, 이미 적용된 마이그레이션 파일은 수정하지 않습니다.
