@@ -4,6 +4,7 @@ import com.mju.linkro.auth.client.KakaoClient;
 import com.mju.linkro.auth.dto.KakaoUserInfo;
 import com.mju.linkro.auth.jwt.JwtProvider;
 import com.mju.linkro.auth.service.AuthService;
+import com.mju.linkro.auth.service.RefreshTokenService;
 import com.mju.linkro.auth.service.UserLoginService;
 import com.mju.linkro.user.domain.User;
 import com.mju.linkro.user.repository.UserRepository;
@@ -39,7 +40,9 @@ class UserLoginServiceTest {
         when(users.login(info)).thenThrow(new DataIntegrityViolationException("duplicate"));
         when(users.loginExisting("123")).thenReturn(new UserLoginService.LoginResult(winner, false));
         when(jwt.createAccessToken(winner.getId())).thenReturn("test-jwt");
-        var result = new AuthService(client, users, jwt).login("test-token");
+        var refreshTokens = mock(RefreshTokenService.class);
+        when(refreshTokens.issue(eq(winner.getId()), any())).thenReturn("test-refresh");
+        var result = new AuthService(client, users, jwt, refreshTokens).login("test-token");
         assertThat(result.user().id()).isEqualTo(winner.getId());
         assertThat(result.user().nickname()).isEqualTo("existing nickname");
         assertThat(result.isNewUser()).isFalse();

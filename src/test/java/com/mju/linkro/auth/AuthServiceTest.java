@@ -69,10 +69,12 @@ class AuthServiceTest {
 			.andReturn().getResponse().getContentAsString();
 		var body = tools.jackson.databind.json.JsonMapper.builder().build().readTree(response);
 		String token = body.get("data").get("accessToken").asString();
+		String refreshToken = body.get("data").get("refreshToken").asString();
 		var user = users.findByKakaoId("123").orElseThrow();
 		org.springframework.test.json.JsonAssert.comparator(org.springframework.test.json.JsonCompareMode.STRICT)
 			.assertIsMatch("{\"success\":true,\"data\":{\"accessToken\":\"" + token
-				+ "\",\"user\":{\"id\":\"" + user.getId() + "\",\"nickname\":\"인준\"},\"isNewUser\":true}}", response);
+				+ "\",\"refreshToken\":\"" + refreshToken + "\",\"accessTokenExpiresIn\":" + ttl.toSeconds()
+				+ ",\"user\":{\"id\":\"" + user.getId() + "\",\"nickname\":\"인준\"},\"isNewUser\":true}}", response);
 		assertThat(user.getId().version()).isEqualTo(7);
 		assertThat(users.count()).isEqualTo(1);
 	}

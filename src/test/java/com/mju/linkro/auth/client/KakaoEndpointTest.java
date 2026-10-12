@@ -3,6 +3,7 @@ package com.mju.linkro.auth.client;
 import com.mju.linkro.auth.controller.AuthController;
 import com.mju.linkro.auth.jwt.JwtProvider;
 import com.mju.linkro.auth.service.AuthService;
+import com.mju.linkro.auth.service.RefreshTokenService;
 import com.mju.linkro.auth.service.UserLoginService;
 import com.mju.linkro.common.exception.GlobalExceptionHandler;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,6 +32,7 @@ class KakaoEndpointTest {
 	KakaoClient client;
 	UserLoginService users;
 	JwtProvider jwt;
+	RefreshTokenService refreshTokens;
 	MockMvc mvc;
 
 	@BeforeEach
@@ -40,7 +42,8 @@ class KakaoEndpointTest {
 		client = new KakaoClient(builder.build(), 1234);
 		users = mock(UserLoginService.class);
 		jwt = mock(JwtProvider.class);
-		mvc = MockMvcBuilders.standaloneSetup(new AuthController(new AuthService(client, users, jwt)))
+		refreshTokens = mock(RefreshTokenService.class);
+		mvc = MockMvcBuilders.standaloneSetup(new AuthController(new AuthService(client, users, jwt, refreshTokens)))
 			.setControllerAdvice(new GlobalExceptionHandler()).build();
 	}
 
@@ -125,8 +128,11 @@ class KakaoEndpointTest {
 		var user = new com.mju.linkro.user.domain.User("123", "name");
 		when(users.login(any())).thenReturn(new UserLoginService.LoginResult(user, true));
 		when(jwt.createAccessToken(user.getId())).thenReturn("test-jwt");
+		when(jwt.accessTokenExpiresIn()).thenReturn(900L);
+		when(refreshTokens.issue(eq(user.getId()), any())).thenReturn("test-refresh");
 		request().andExpect(status().isOk()).andExpect(content().json(
-			"{\"success\":true,\"data\":{\"accessToken\":\"test-jwt\",\"user\":{\"id\":\"" + user.getId()
+			"{\"success\":true,\"data\":{\"accessToken\":\"test-jwt\",\"refreshToken\":\"test-refresh\","
+				+ "\"accessTokenExpiresIn\":900,\"user\":{\"id\":\"" + user.getId()
 				+ "\",\"nickname\":\"name\"},\"isNewUser\":true}}", JsonCompareMode.STRICT));
 		server.verify();
 	}
