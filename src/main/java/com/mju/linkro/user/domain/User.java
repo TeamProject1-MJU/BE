@@ -25,6 +25,10 @@ public class User extends BaseUuidTimeEntity {
 		this.nickname = nickname;
 	}
 
+	public void changeNickname(String nickname) {
+		this.nickname = nickname;
+	}
+
 	public void restore() {
 		deletedAt = null;
 	}
