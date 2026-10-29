@@ -31,7 +31,7 @@ class ErrorCodeTest {
         Map<ErrorCode, HttpStatus> expected = new EnumMap<>(ErrorCode.class);
         put(expected, BAD_REQUEST, "VALIDATION_ERROR", "IMAGE_INVALID");
         put(expected, UNAUTHORIZED, "AUTH_REQUIRED", "TOKEN_EXPIRED", "TOKEN_INVALID", "KAKAO_AUTH_FAILED");
-        put(expected, FORBIDDEN, "NOT_ROOM_MEMBER", "NOT_ROOM_OWNER", "NOT_PROPOSAL_OWNER");
+        put(expected, FORBIDDEN, "ACCESS_DENIED", "NOT_ROOM_MEMBER", "NOT_ROOM_OWNER", "NOT_PROPOSAL_OWNER");
         put(expected, NOT_FOUND, "STATION_NOT_FOUND", "ROOM_NOT_FOUND", "ROOM_CODE_INVALID", "ROUTE_NOT_FOUND",
                 "PROPOSAL_NOT_FOUND", "RUN_NOT_FOUND", "RESULT_NOT_FOUND");
         put(expected, CONFLICT, "ROOM_FULL", "ALREADY_JOINED", "ROOM_BUSY", "ALREADY_PROPOSED");

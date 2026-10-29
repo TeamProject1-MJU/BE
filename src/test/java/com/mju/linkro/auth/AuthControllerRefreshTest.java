@@ -27,27 +27,53 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 import tools.jackson.databind.json.JsonMapper;
 
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** Full context, so requests pass through the real JWT interceptor without an Authorization header. */
+/** Full context, so requests pass through the real JWT filter without an Authorization header. */
 @SpringBootTest
 @ActiveProfiles("test")
 class AuthControllerRefreshTest {
 	@Autowired WebApplicationContext context;
 	@Autowired UserRepository users;
 	@Autowired RefreshTokenRepository refreshTokens;
+	@org.springframework.beans.factory.annotation.Value("${auth.jwt.secret}") String jwtSecret;
 	@MockitoBean KakaoClient kakaoClient;
 	MockMvc mvc;
 
 	@BeforeEach
 	void setUp() {
-		mvc = MockMvcBuilders.webAppContextSetup(context).build();
+		mvc = MockMvcBuilders.webAppContextSetup(context)
+			.apply(springSecurity()).build();
 		refreshTokens.deleteAll();
 		users.deleteAll();
+	}
+
+	@Test
+	void loginRefreshLogoutIgnoreExpiredAccessTokenHeader() throws Exception {
+		String expired = io.jsonwebtoken.Jwts.builder().subject(UUID.randomUUID().toString())
+			.expiration(java.util.Date.from(Instant.now().minusSeconds(60)))
+			.signWith(io.jsonwebtoken.security.Keys.hmacShaKeyFor(io.jsonwebtoken.io.Decoders.BASE64.decode(jwtSecret)),
+				io.jsonwebtoken.Jwts.SIG.HS256).compact();
+		when(kakaoClient.getUserInfo("test-token")).thenReturn(new KakaoUserInfo("123", "tester"));
+		var login = data(mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+			.post("/api/v1/auth/kakao").header(HttpHeaders.AUTHORIZATION, "Bearer " + expired)
+			.contentType(MediaType.APPLICATION_JSON).content("{\"kakaoAccessToken\":\"test-token\"}"))
+			.andExpect(status().isOk()));
+		var refreshed = data(mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+			.post("/api/v1/auth/refresh").header(HttpHeaders.AUTHORIZATION, "Bearer " + expired)
+			.contentType(MediaType.APPLICATION_JSON).content(body(login.get("refreshToken").asString())))
+			.andExpect(status().isOk()));
+		mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/v1/auth/logout")
+			.header(HttpHeaders.AUTHORIZATION, "Bearer " + expired).contentType(MediaType.APPLICATION_JSON)
+			.content(body(refreshed.get("refreshToken").asString())))
+			.andExpect(status().isOk());
+		assertFailure(post("/api/v1/auth/refresh", body(refreshed.get("refreshToken").asString())), ErrorCode.TOKEN_INVALID);
 	}
 
 	@Test

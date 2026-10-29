@@ -29,6 +29,8 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 import tools.jackson.databind.json.JsonMapper;
 
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -38,7 +40,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** Full context, so the real JWT interceptor and @CurrentUser resolver run in front of the controller. */
+/** Full context, so the real JWT filter and @CurrentUser resolver run in front of the controller. */
 @SpringBootTest
 @ActiveProfiles("test")
 class UserControllerTest {
@@ -54,7 +56,8 @@ class UserControllerTest {
 
 	@BeforeEach
 	void setUp() {
-		mvc = MockMvcBuilders.webAppContextSetup(context).build();
+		mvc = MockMvcBuilders.webAppContextSetup(context)
+			.apply(springSecurity()).build();
 		refreshTokens.deleteAll();
 		users.deleteAll();
 		user = users.saveAndFlush(new User("123", "인준"));

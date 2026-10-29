@@ -1,21 +1,27 @@
 package com.mju.linkro.common.config;
 
 import com.mju.linkro.auth.config.AuthWebConfig;
+import com.mju.linkro.auth.config.SecurityConfig;
 import com.mju.linkro.auth.jwt.JwtProvider;
 import com.mju.linkro.auth.web.CurrentUser;
 import com.mju.linkro.common.exception.GlobalExceptionHandler;
 import com.mju.linkro.common.response.ApiResponse;
+import com.mju.linkro.user.domain.User;
+import com.mju.linkro.user.repository.UserRepository;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentMatchers;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.BeanCreationException;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -35,13 +41,14 @@ import org.springframework.web.servlet.config.annotation.EnableWebMvc;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** Runs CorsConfig together with the real JWT interceptor so their ordering is covered. */
+/** Runs CorsConfig together with the real JWT filter so their ordering is covered. */
 class CorsConfigTest {
     private static final String ALLOWED = "http://localhost:5173";
     private static final String DISALLOWED = "https://evil.example.com";
@@ -192,13 +199,22 @@ class CorsConfigTest {
                 .addFirst(new MapPropertySource("test", Map.of("cors.allowed-origins", allowedOrigins)));
         context.register(TestConfig.class);
         context.refresh();
-        return MockMvcBuilders.webAppContextSetup(context).build();
+        return MockMvcBuilders.webAppContextSetup(context)
+                .apply(springSecurity()).build();
     }
 
     @Configuration(proxyBeanMethods = false)
     @EnableWebMvc
-    @Import({CorsConfig.class, AuthWebConfig.class, GlobalExceptionHandler.class, TestController.class})
+    @Import({SecurityConfig.class, CorsConfig.class, AuthWebConfig.class, GlobalExceptionHandler.class, TestController.class})
     static class TestConfig {
+        @Bean
+        UserRepository users() {
+            var users = Mockito.mock(UserRepository.class);
+            Mockito.when(users.findById(ArgumentMatchers.any(UUID.class)))
+                .thenReturn(Optional.of(new User("123", "tester")));
+            return users;
+        }
+
         @Bean
         JwtProvider jwtProvider() {
             return new JwtProvider(Base64.getEncoder().encodeToString(KEY), Duration.ofMinutes(15));
