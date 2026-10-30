@@ -3,3 +3,7 @@ build/
 .env
 .gradle/
 .DS_Store
+
+### Cursor / VS Code ###
+.vscode/
+.cursor/
