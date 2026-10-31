@@ -235,3 +235,14 @@ chore: Spring Boot 프로젝트 초기 세팅 (#1)
 - 세션을 사용하지 않으며 폼 로그인·HTTP Basic·CSRF는 비활성화합니다. 토큰은 Authorization 헤더 또는 요청 body로 전달하고 쿠키 인증을 사용하지 않습니다.
 - CORS는 Security 체인에서 인증보다 먼저 처리합니다. `CORS_ALLOWED_ORIGINS`와 기존 메서드·헤더 정책, `allowCredentials=false`를 유지합니다.
 - 외부 카카오 인증정보 없이 테스트: Windows `.\gradlew.bat test`, macOS/Linux `./gradlew test`. 테스트 프로필은 H2와 카카오 클라이언트 mock을 사용합니다.
+
+### PR #44 리뷰 반영 및 후속 운영 작업
+
+- JWT 검증·활성 사용자 조회·인증 정보 설정 중 예상 밖 RuntimeException은 SecurityContext를 정리하고 기존 SecurityErrorHandler로 `INTERNAL_ERROR`(500) 공통 JSON을 반환합니다. 다음 체인은 실행하지 않습니다. BusinessException의 기존 상태·메시지는 유지하며, 다음 필터·컨트롤러 실행은 인증 try/catch 밖에 있습니다.
+- 서버에는 예상 밖 오류의 예외 유형과 스택 위치를 기록합니다. 토큰·Authorization 헤더·비밀번호·SQL 등이 포함될 수 있는 예외 메시지와 원인 메시지는 기록하지 않으며, 응답에는 고정 공개 메시지만 반환합니다.
+- 공개 인증 POST 3개, `/swagger-ui.html`, `/swagger-ui/**`, `/v3/api-docs`, `/v3/api-docs/**`를 명시적으로 허용합니다. 나머지 `/api/v1/**`는 인증이 필요하고 그 외는 `denyAll`입니다. ERROR 디스패치는 계속 허용합니다. 일반 REQUEST의 `/error`는 공개하지 않습니다.
+- 미등록 외부 경로는 기존 MVC 404 대신 무인증이면 `AUTH_REQUIRED`(401), 이미 인증된 SecurityContext이면 `ACCESS_DENIED`(403) 공통 응답을 반환합니다. JWT 인증은 `/api/v1/**`에만 적용되므로 외부 경로에 Bearer 헤더만 보내면 인증되지 않아 401입니다. 인증된 미등록 API 경로는 MVC 404를 유지합니다.
+- 이번 작업(#32 / PR #44)에서 추가된 `ACCESS_DENIED`(403, `접근 권한이 없습니다.`)는 Security의 일반 인가 거부 코드입니다. 방 권한 오류 `NOT_ROOM_MEMBER` / `NOT_ROOM_OWNER` / `NOT_PROPOSAL_OWNER`를 대체하지 않습니다. API 명세 v1.10에 추가 반영이 필요하며, 이번에 명세 파일을 수정하지 않았습니다.
+- 개발·시연용 Swagger UI와 문서 API는 현재 인증 없이 공개합니다. `deploy.yml`이 `/v3/api-docs`를 배포 헬스체크로 사용하므로 이번 PR에서는 이 동작을 유지합니다. 운영 공개 문제는 **해결 완료가 아닌 후속 운영 작업으로 분리**합니다.
+- 후속 운영 작업: 운영 프로필에서 `springdoc.swagger-ui.enabled=false`, `springdoc.api-docs.enabled=false` 설정, 문서 API에 의존하지 않는 전용 헬스체크로 배포 확인 변경, 실제 배포 환경의 프로필 활성화 및 환경변수 전달 확인을 함께 수행해야 합니다. 이번 PR에서는 운영 프로필·배포 워크플로우·새 헬스체크 API를 추가하거나 변경하지 않습니다.
+- 현재 `/ws` 및 STOMP 구현은 없습니다. 미구현 경로를 미리 공개하지 않으며, 이슈 #42 구현 시 실제 핸드셰이크 경로에 필요한 명시적 허용 설정을 추가해야 합니다.

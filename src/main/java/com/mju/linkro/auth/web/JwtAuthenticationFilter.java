@@ -11,6 +11,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -20,6 +21,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 /** Identifies the user from the access token only; room permissions are checked by each API. */
 @RequiredArgsConstructor
+@Slf4j
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 	private static final String BEARER_PREFIX = "Bearer ";
 	// Package-private so tests can pin the exact list.
@@ -52,6 +54,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 		} catch (BusinessException exception) {
 			SecurityContextHolder.clearContext();
 			errors.write(response, exception.getErrorCode());
+			return;
+		} catch (RuntimeException exception) {
+			SecurityContextHolder.clearContext();
+			// Exception messages/causes may contain SQL, credentials or token values.
+			log.error("Unexpected JWT authentication failure: type={}, stack={}",
+				exception.getClass().getName(), java.util.Arrays.toString(exception.getStackTrace()));
+			errors.write(response, ErrorCode.INTERNAL_ERROR);
 			return;
 		}
 		// Do not rewrite downstream failures as JWT failures.

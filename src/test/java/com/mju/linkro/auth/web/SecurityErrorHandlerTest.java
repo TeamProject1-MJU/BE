@@ -49,6 +49,42 @@ class SecurityErrorHandlerTest {
 		assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
 	}
 
+	@Test
+	void repositoryFailureClearsExistingAuthenticationAndStopsChainWithSafeLog() throws Exception {
+		var jwt = mock(JwtProvider.class);
+		var users = mock(UserRepository.class);
+		UUID id = UUID.randomUUID();
+		when(jwt.parseUserId("secret-token")).thenReturn(id);
+		when(users.findById(id)).thenThrow(new org.springframework.dao.DataAccessResourceFailureException(
+			"jdbc:private password=secret-token"));
+		var filter = new JwtAuthenticationFilter(jwt, users, new SecurityErrorHandler());
+		var request = new MockHttpServletRequest("GET", "/api/v1/test/me");
+		request.addHeader("Authorization", "Bearer secret-token");
+		var response = new MockHttpServletResponse();
+		var chain = mock(jakarta.servlet.FilterChain.class);
+		var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(JwtAuthenticationFilter.class);
+		var logs = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+		logs.start();
+		logger.addAppender(logs);
+		SecurityContextHolder.getContext().setAuthentication(
+			new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(id, null, java.util.List.of()));
+		try {
+			filter.doFilter(request, response, chain);
+			assertFailure(response, ErrorCode.INTERNAL_ERROR);
+			assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+			verifyNoInteractions(chain);
+			assertThat(logs.list).hasSize(1);
+			assertThat(logs.list.get(0).getLevel()).isEqualTo(ch.qos.logback.classic.Level.ERROR);
+			assertThat(logs.list.get(0).getFormattedMessage()).contains("DataAccessResourceFailureException", "SecurityErrorHandlerTest")
+				.doesNotContain("jdbc:private", "password", "secret-token", "Authorization");
+			assertThat(logs.list.get(0).getThrowableProxy()).isNull();
+		} finally {
+			logger.detachAppender(logs);
+			logs.stop();
+			SecurityContextHolder.clearContext();
+		}
+	}
+
 	private static void assertFailure(MockHttpServletResponse response, ErrorCode code) throws Exception {
 		assertThat(response.getStatus()).isEqualTo(code.getStatus().value());
 		assertThat(response.getContentType()).isEqualTo("application/json");

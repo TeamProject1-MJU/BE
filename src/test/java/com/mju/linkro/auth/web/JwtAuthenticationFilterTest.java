@@ -229,6 +229,73 @@ class JwtAuthenticationFilterTest {
 		assertThat(status).isIn(400, 401);
 	}
 
+	@Test
+	void databaseFailureReturnsSafeJsonWithCorsAndDoesNotLeakIntoNextRequest() throws Exception {
+		UUID id = UUID.randomUUID();
+		Mockito.when(context.getBean(UserRepository.class).findById(id))
+			.thenThrow(new org.springframework.dao.DataAccessResourceFailureException("jdbc:secret password=hidden"));
+		var result = mvc.perform(get("/api/v1/test/me")
+			.header(HttpHeaders.ORIGIN, "http://localhost:3000")
+			.header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(id)))
+			.andExpect(status().isInternalServerError())
+			.andExpect(content().contentType(MediaType.APPLICATION_JSON))
+			.andExpect(content().json("{\"success\":false,\"error\":{\"code\":\"INTERNAL_ERROR\",\"message\":\""
+				+ ErrorCode.INTERNAL_ERROR.getMessage() + "\",\"details\":{}}}", JsonCompareMode.STRICT))
+			.andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+				.string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "http://localhost:3000"))
+			.andReturn();
+		assertThat(result.getHandler()).isNull();
+		assertThat(result.getResponse().getContentAsString()).doesNotContain("jdbc", "password", "DataAccess", "stack");
+		assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+		assertFailure(mvc.perform(get("/api/v1/test/me")), "AUTH_REQUIRED", ErrorCode.AUTH_REQUIRED.getMessage());
+		UUID nextId = UUID.randomUUID();
+		mvc.perform(get("/api/v1/test/me").header(HttpHeaders.AUTHORIZATION,
+			"Bearer " + jwtProvider.createAccessToken(nextId)))
+			.andExpect(status().isOk()).andExpect(jsonPath("$.data.userId").value(nextId.toString()));
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = {"/", "/unknown", "/ws", "/ws/connect", "/swagger-ui-extra", "/v3/api-docsx", "/error"})
+	void unlistedExternalPathsRequireAuthentication(String path) throws Exception {
+		assertFailure(mvc.perform(get(path)), "AUTH_REQUIRED", ErrorCode.AUTH_REQUIRED.getMessage());
+	}
+
+	@Test
+	void authenticatedRequestToUnlistedPathIsDeniedWithCommonJson() throws Exception {
+		mvc.perform(get("/unknown").with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors
+			.authentication(new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(UUID.randomUUID(), null, java.util.List.of()))))
+			.andExpect(status().isForbidden())
+			.andExpect(content().json("{\"success\":false,\"error\":{\"code\":\"ACCESS_DENIED\",\"message\":\""
+				+ ErrorCode.ACCESS_DENIED.getMessage() + "\",\"details\":{}}}", JsonCompareMode.STRICT));
+	}
+
+	@Test
+	void bearerHeaderOutsideApiDoesNotAuthenticateAndUnknownAuthenticatedApiRemains404() throws Exception {
+		String token = jwtProvider.createAccessToken(UUID.randomUUID());
+		assertFailure(mvc.perform(get("/unknown").header(HttpHeaders.AUTHORIZATION, "Bearer " + token)),
+			"AUTH_REQUIRED", ErrorCode.AUTH_REQUIRED.getMessage());
+		Mockito.verifyNoInteractions(context.getBean(UserRepository.class));
+		mvc.perform(get("/api/v1/unknown").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+			.andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = {"/api/v1/auth/kakao", "/api/v1/auth/refresh", "/api/v1/auth/logout"})
+	void otherPublicEndpointMethodsAreProtected(String path) throws Exception {
+		for (String method : new String[] {"GET", "PUT", "PATCH", "DELETE", "OPTIONS"}) {
+			assertFailure(mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+				.request(org.springframework.http.HttpMethod.valueOf(method), path)), "AUTH_REQUIRED", ErrorCode.AUTH_REQUIRED.getMessage());
+		}
+	}
+
+	@Test
+	void errorDispatchPassesSecurityWithoutAuthentication() throws Exception {
+		mvc.perform(get("/api/v1/test/failure").with(request -> { request.setDispatcherType(jakarta.servlet.DispatcherType.ERROR); return request; })
+			.requestAttr("jakarta.servlet.error.request_uri", "/api/v1/test/failure"))
+			.andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("ROOM_FULL"));
+		Mockito.verifyNoInteractions(context.getBean(UserRepository.class));
+	}
+
 	private static void assertFailure(ResultActions result, String code, String message) throws Exception {
 		result.andExpect(status().isUnauthorized())
 			.andExpect(content().contentType(MediaType.APPLICATION_JSON))
