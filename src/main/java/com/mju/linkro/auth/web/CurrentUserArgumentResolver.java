@@ -6,7 +6,8 @@ import java.util.UUID;
 import org.springframework.core.MethodParameter;
 import org.springframework.web.bind.support.WebDataBinderFactory;
 import org.springframework.web.context.request.NativeWebRequest;
-import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
 
@@ -23,9 +24,9 @@ public class CurrentUserArgumentResolver implements HandlerMethodArgumentResolve
 		if (!UUID.class.equals(parameter.getParameterType())) {
 			throw new IllegalStateException("@CurrentUser must be used on a UUID parameter");
 		}
-		// Missing on paths the interceptor skips, e.g. public auth endpoints.
-		if (webRequest.getAttribute(JwtAuthInterceptor.USER_ID_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST)
-			instanceof UUID userId) {
+		Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+		if (authentication != null && authentication.isAuthenticated()
+			&& authentication.getPrincipal() instanceof UUID userId) {
 			return userId;
 		}
 		throw new BusinessException(ErrorCode.AUTH_REQUIRED);
