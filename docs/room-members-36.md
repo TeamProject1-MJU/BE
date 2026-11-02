@@ -25,7 +25,13 @@ API 명세 v1.12(2026-10-29) 7.2·7.7, ERD v1.13 및 기존 V5 스키마를 기�
 
 실제 SQLSTATE 23505이면서 uq_member_room_user 제약 위반인 경우만 ALREADY_JOINED로 변환한다. 외부 RoomJoinService는 NOT_SUPPORTED이며 내부 쓰기 트랜잭션이 종료·롤백된 뒤 변환한다. 실패한 트랜잭션에서 처리를 계속하지 않고 다른 무결성 오류를 숨기지 않는다.
 
+두 서비스는 이 트랜잭션 경계를 위해 분리한다. RoomMembershipService의 별도 Spring 프록시가 쓰기 트랜잭션을 끝낸 후 RoomJoinService가 예외를 해석해야 하므로 같은 빈의 자기 호출로 합치지 않는다. 정상 참여끼리는 같은 방 락으로 직렬화되고 INSERT 전에 중복·정원을 확인한다. UNIQUE 변환은 그 검사를 대체하는 정상 흐름이 아니라 DB 제약 위반에 대한 방어다.
+
 출발역 쓰기는 READ COMMITTED에서 RoomAccess.lockMember → 요청 ID 검증 → 기존 RoomReadRepository JDBC 역 조회 → 존재·is_supported 검사 → 본인 MeetingMember 변경 순서다. 락 안에서 OWNER/MEMBER 자격을 확인하고 실패 시 기존 값을 보존한다. 기존 읽기 경로의 REPEATABLE READ/REQUIRES_NEW 설정을 복사하지 않는다. persist/update/remove는 락 뒤에만 수행한다.
+
+동일 출발역으로 재설정해도 200/data:null로 성공하지만 저장된 출발역 값은 바뀌지 않는다. #43에서 DEPARTURE_UPDATED를 연결할 때는 변경 전 ID와 요청 ID를 비교하여 실제 값이 달라진 경우에만 커밋 성공 후 발행하도록 판단해야 한다. 단순히 이 메서드가 성공했다는 이유로 발행하지 않는다. 현재 이벤트 발행은 구현하지 않는다.
+
+현재 출발역 검증은 기존 배치 역 조회를 재사용하여 역·노선 LEFT JOIN까지 수행한다. 별도의 정식 역 존재·지원 여부 전용 조회는 없으며, 지하철 모듈의 경로 인터페이스와 mock은 DB의 stations 검증을 대체하지 못한다. 향후 역 조회 기능이 제공되면 RoomMembershipService.departure의 조회 부분을 존재·is_supported만 읽는 기능으로 교체할 수 있다. 이때 같은 쓰기 트랜잭션을 유지하고 미존재 404와 미지원 422를 구분하며, 노선이나 경로가 없다는 이유로 역 존재·지원 여부의 의미를 바꾸지 않아야 한다.
 
 ## 후속 연결과 제약
 
@@ -34,3 +40,11 @@ API 명세 v1.12(2026-10-29) 7.2·7.7, ERD v1.13 및 기존 V5 스키마를 기�
 #37 나가기·방장 승계는 같은 방 락 규약을 따라야 한다. #38 회원 탈퇴와 사용자 단위 직렬화는 후속 범위이며 현재 방 락만으로 다른 방에 걸친 사용자 생명주기를 직렬화하지 않는다. #43 MEMBER_JOINED·DEPARTURE_UPDATED 연결 위치를 성공한 서비스 변경 뒤에 주석으로 남겼다. 실제 발행과 SYSTEM 메시지는 구현하지 않으며 후속 구현은 커밋 성공에 연계해 롤백 시 외부 발행되지 않게 해야 한다.
 
 Swagger는 기존 bearerAuth/JWT를 사용하며 userId를 숨긴다. 요청/응답은 RoomJoinRequest·RoomDepartureUpdateRequest·RoomJoinedData·RoomJoinResponse 고유 스키마를 사용한다.
+
+실제 응답 데이터 Joined는 RoomResponses에, 문서 전용 JoinResponse envelope는 ApiDocumentation에 둔다. 클래스 위치와 별개로 RoomJoinedData·RoomJoinResponse 스키마 이름과 응답 필드는 유지한다. join·departure의 오류 스키마는 기존 ApiFailureResponse이며, 코드별 예시는 기존 OpenApiCustomizer 방식으로 ErrorCode의 상태·코드·메시지와 실제 ApiResponse.failure 형식에서 생성한다. 같은 HTTP 상태라도 ALREADY_JOINED·ROOM_FULL·ROOM_BUSY, ROOM_NOT_FOUND·STATION_NOT_FOUND의 개별 예시를 유지한다. 공통 400/401/500 응답은 Controller 선언을 재사용한다.
+
+## 후속 팀·명세 합의
+
+- ALREADY_JOINED(409)의 details에 roomId를 제공하면 프론트가 해당 방으로 이동하기 쉬울 수 있다. 오류 상세 계약을 확장할지는 팀·명세 합의가 필요하며 현재는 기존 details를 유지한다. 중복 참여를 200으로 처리하지 않는다.
+- 소문자·앞뒤 공백이 있는 코드는 현재 VALIDATION_ERROR(400)이며 자동 변환하지 않는다. 서버 정규화 또는 프론트 입력 처리의 책임과 사용자 안내는 별도 합의 대상이다. 현재 대문자 영문·숫자 6자 계약을 유지한다.
+- 사용자별·IP별 참여 시도 제한은 후속 보안 개선이다. 제한 기준·임계값·사용자/IP 식별·응답 계약을 합의한 뒤 연결하며 현재 새 제한 정책을 추가하지 않는다.

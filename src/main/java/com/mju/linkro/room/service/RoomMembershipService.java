@@ -3,12 +3,19 @@ package com.mju.linkro.room.service;
 import com.mju.linkro.common.exception.*;
 import com.mju.linkro.room.domain.*;
 import com.mju.linkro.room.dto.RoomMembershipRequests.*;
+import com.mju.linkro.room.dto.RoomResponses.Joined;
 import com.mju.linkro.room.repository.*;
 import java.util.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.*;
 
+/**
+ * Owns the READ COMMITTED write transactions and room locks for membership mutations.
+ * Join is called through this separate Spring proxy so RoomJoinService can translate a defensive
+ * member UNIQUE violation only after rollback. Normal joins serialize under lockByCode and check
+ * duplicate membership and capacity before saving.
+ */
 @Service
 @RequiredArgsConstructor
 public class RoomMembershipService {
@@ -35,6 +42,8 @@ public class RoomMembershipService {
         if (!station.isSupported()) throw new BusinessException(ErrorCode.STATION_UNSUPPORTED);
         members.findByRoomIdAndUserId(roomId, userId).orElseThrow(() -> new BusinessException(ErrorCode.NOT_ROOM_MEMBER))
                 .changeDepartureStation(stationId);
-        // #43: register DEPARTURE_UPDATED for delivery after successful commit here.
+        // Reapplying the same station succeeds without changing the stored value.
+        // #43: compare the previous station ID with stationId before mutation; register
+        // DEPARTURE_UPDATED after successful commit only when the actual value changed.
     }
 }

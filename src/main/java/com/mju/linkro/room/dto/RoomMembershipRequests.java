@@ -25,10 +25,6 @@ public final class RoomMembershipRequests {
             return departureStationId.longValue();
         }
     }
-    @Schema(name = "RoomJoinedData", requiredProperties = {"roomId"})
-    public record Joined(java.util.UUID roomId) {}
-    @Schema(name = "RoomJoinResponse", requiredProperties = {"success", "data"})
-    public record JoinResponse(@Schema(example = "true", description = "항상 true") boolean success, Joined data) {}
     private static BusinessException invalid(String field, String message) {
         return new BusinessException(ErrorCode.VALIDATION_ERROR, Map.of(field, message));
     }

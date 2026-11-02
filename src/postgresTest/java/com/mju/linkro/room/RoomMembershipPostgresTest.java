@@ -188,6 +188,17 @@ class RoomMembershipPostgresTest {
         } finally { jdbc.update("update stations set is_supported=true where id=?",ids.get(0)); }
     }
 
+    @Test void repeatingSameDepartureSucceedsWithoutChangingStoredMember() throws Exception {
+        UUID room = room(); addMember(room);
+        long station = station();
+        String body = "{\"departureStationId\":" + station + "}";
+        json(patch(departurePath(room)), member, body).andExpect(status().isOk());
+        var before = jdbc.queryForMap("select * from meeting_members where room_id=? and user_id=?", room, member);
+        json(patch(departurePath(room)), member, body).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").value(org.hamcrest.Matchers.nullValue()));
+        assertThat(jdbc.queryForMap("select * from meeting_members where room_id=? and user_id=?", room, member)).isEqualTo(before);
+    }
+
     @Test void malformedCodesAndUnauthenticatedRequests() throws Exception {
         UUID room=room();
         for (String body:List.of("{}","{\"roomCode\":null}","{\"roomCode\":123456}","{\"roomCode\":true}","{\"roomCode\":[]}","{\"roomCode\":{}}","{\"roomCode\":\"a00001\"}","{\"roomCode\":\" A00001\"}","{\"roomCode\":\"A0000\"}","{\"roomCode\":\"A000001\"}","{\"roomCode\":\"A0000!\"}"))

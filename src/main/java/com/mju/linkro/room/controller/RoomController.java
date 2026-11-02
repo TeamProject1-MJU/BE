@@ -84,21 +84,55 @@ public class RoomController {
     }
 
     @PostMapping("/join")
-    @Operation(summary = "초대 코드 방 참여", description = "대문자 영문·숫자 6자 필수. 소문자·공백을 변환하지 않습니다. OPEN·CONFIRMED 모두 정원 4명까지 참여 가능합니다.", requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(mediaType = "application/json", schema = @Schema(implementation = Join.class), examples = @ExampleObject(value = "{\"roomCode\":\"A3K9PZ\"}"))))
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Success", content = @Content(mediaType = "application/json", schema = @Schema(implementation = JoinResponse.class), examples = @ExampleObject(value = "{\"success\":true,\"data\":{\"roomId\":\"0192f3a4-8c2d-7d4f-8b21-6e3f9a7c2b02\"}}")))
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "ROOM_CODE_INVALID", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class), examples = {@ExampleObject(name = "ROOM_CODE_INVALID", value = "{\"success\":false,\"error\":{\"code\":\"ROOM_CODE_INVALID\",\"message\":\"방 코드가 올바르지 않습니다.\",\"details\":{}}}")}))
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "ALREADY_JOINED / ROOM_FULL / ROOM_BUSY", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class), examples = {@ExampleObject(name = "ALREADY_JOINED", value = "{\"success\":false,\"error\":{\"code\":\"ALREADY_JOINED\",\"message\":\"이미 참여한 방입니다.\",\"details\":{}}}"), @ExampleObject(name = "ROOM_FULL", value = "{\"success\":false,\"error\":{\"code\":\"ROOM_FULL\",\"message\":\"방 참여 인원이 가득 찼습니다.\",\"details\":{}}}"), @ExampleObject(name = "ROOM_BUSY", value = "{\"success\":false,\"error\":{\"code\":\"ROOM_BUSY\",\"message\":\"방에서 작업이 진행 중입니다.\",\"details\":{}}}")}))
+    @Operation(
+            summary = "초대 코드 방 참여",
+            description = "대문자 영문·숫자 6자 필수. 소문자·공백을 변환하지 않습니다. OPEN·CONFIRMED 모두 정원 4명까지 참여 가능합니다.",
+            requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+                    required = true,
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = Join.class),
+                            examples = @ExampleObject(value = "{\"roomCode\":\"A3K9PZ\"}"))))
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Success",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.JoinResponse.class),
+                            examples = @ExampleObject(value = "{\"success\":true,\"data\":{\"roomId\":\"0192f3a4-8c2d-7d4f-8b21-6e3f9a7c2b02\"}}"))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404", description = "ROOM_CODE_INVALID",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409", description = "ALREADY_JOINED / ROOM_FULL / ROOM_BUSY",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
+    })
     public ApiResponse<Joined> join(@CurrentUser UUID userId, @RequestBody Join request) {
         return ApiResponse.success(joining.join(userId, request));
     }
 
     @PatchMapping("/{roomId}/members/me")
-    @Operation(summary = "내 출발역 설정·변경", description = "OWNER·MEMBER 본인만 변경합니다. null·생략·문자열·소수는 VALIDATION_ERROR. 출발역 해제는 지원하지 않습니다. 기존 추천·후보·투표·확정역을 보존합니다.", requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(mediaType = "application/json", schema = @Schema(implementation = Departure.class), examples = @ExampleObject(value = "{\"departureStationId\":105}"))))
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Success", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.EmptySuccess.class), examples = @ExampleObject(value = "{\"success\":true,\"data\":null}")))
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "NOT_ROOM_MEMBER", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class), examples = {@ExampleObject(name = "NOT_ROOM_MEMBER", value = "{\"success\":false,\"error\":{\"code\":\"NOT_ROOM_MEMBER\",\"message\":\"방 참여자가 아닙니다.\",\"details\":{}}}")}))
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "ROOM_NOT_FOUND / STATION_NOT_FOUND", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class), examples = {@ExampleObject(name = "ROOM_NOT_FOUND", value = "{\"success\":false,\"error\":{\"code\":\"ROOM_NOT_FOUND\",\"message\":\"방을 찾을 수 없습니다.\",\"details\":{}}}"), @ExampleObject(name = "STATION_NOT_FOUND", value = "{\"success\":false,\"error\":{\"code\":\"STATION_NOT_FOUND\",\"message\":\"역을 찾을 수 없습니다.\",\"details\":{}}}")}))
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "ROOM_BUSY", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class), examples = {@ExampleObject(name = "ROOM_BUSY", value = "{\"success\":false,\"error\":{\"code\":\"ROOM_BUSY\",\"message\":\"방에서 작업이 진행 중입니다.\",\"details\":{}}}")}))
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "STATION_UNSUPPORTED", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class), examples = {@ExampleObject(name = "STATION_UNSUPPORTED", value = "{\"success\":false,\"error\":{\"code\":\"STATION_UNSUPPORTED\",\"message\":\"지원하지 않는 역입니다.\",\"details\":{}}}")}))
+    @Operation(
+            summary = "내 출발역 설정·변경",
+            description = "OWNER·MEMBER 본인만 변경합니다. null·생략·문자열·소수는 VALIDATION_ERROR. 출발역 해제는 지원하지 않습니다. 기존 추천·후보·투표·확정역을 보존합니다.",
+            requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+                    required = true,
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = Departure.class),
+                            examples = @ExampleObject(value = "{\"departureStationId\":105}"))))
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Success",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.EmptySuccess.class),
+                            examples = @ExampleObject(value = "{\"success\":true,\"data\":null}"))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403", description = "NOT_ROOM_MEMBER",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404", description = "ROOM_NOT_FOUND / STATION_NOT_FOUND",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409", description = "ROOM_BUSY",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "422", description = "STATION_UNSUPPORTED",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
+    })
     public ApiResponse<Void> departure(@CurrentUser UUID userId, @PathVariable UUID roomId, @RequestBody Departure request) {
         membership.departure(roomId, userId, request);
         return ApiResponse.success();
