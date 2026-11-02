@@ -277,6 +277,7 @@ class RoomSchemaMigrationPostgresTest {
         exec("insert into room_messages(id,room_id,sender_type,content) values (?,?,'AI','reply')", id(), otherRoom);
         var otherMembers = rows("select * from meeting_members where room_id=? order by id", otherRoom);
         var otherVotes = rows("select * from station_proposal_votes where room_id=? order by id", otherRoom);
+        long stations = count("stations");
         exec("delete from meeting_rooms where id=?", room);
         for (String table : List.of("meeting_members", "station_proposals", "station_proposal_votes", "recommendation_runs", "room_messages")) {
             assertThat(rows("select count(*) from " + table + " where room_id=?", room)).containsExactly(List.of(0L));
@@ -285,7 +286,7 @@ class RoomSchemaMigrationPostgresTest {
         assertThat(rows("select * from meeting_members where room_id=? order by id", otherRoom)).isEqualTo(otherMembers);
         assertThat(rows("select * from station_proposal_votes where room_id=? order by id", otherRoom)).isEqualTo(otherVotes);
         assertThat(count("users")).isEqualTo(3);
-        assertThat(count("stations")).isEqualTo(2);
+        assertThat(count("stations")).isEqualTo(stations);
     }
 
     @Test

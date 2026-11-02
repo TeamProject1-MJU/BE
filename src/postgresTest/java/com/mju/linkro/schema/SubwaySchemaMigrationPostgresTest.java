@@ -84,9 +84,10 @@ class SubwaySchemaMigrationPostgresTest {
         }
         var history = rows("select version, checksum from flyway_schema_history order by installed_rank");
 
-        var latest = flyway(null);
+        // Stops at V10: the V11 seed would add stations and is covered by SubwaySeedMigrationPostgresTest.
+        var latest = flyway("10");
         int pending = latest.info().pending().length;
-        assertThat(pending).isGreaterThanOrEqualTo(1);
+        assertThat(pending).isEqualTo(1);
         assertThat(latest.migrate().migrationsExecuted).isEqualTo(pending);
         assertThat(latest.info().pending()).isEmpty();
         assertThat(rows("select success from flyway_schema_history where version = '10'")).containsExactly(List.of(true));
@@ -329,7 +330,8 @@ class SubwaySchemaMigrationPostgresTest {
     }
 
     private void fixture() throws SQLException {
-        flyway(null).migrate();
+        // Schema-only fixture: V11 seed rows would collide with these lines and stations.
+        flyway("10").migrate();
         line1 = id("insert into subway_lines(line_code,name,color,sort_order) values ('1','1호선','#0052A4',1) returning id");
         line2 = id("insert into subway_lines(line_code,name,color,sort_order) values ('2','2호선','#00a84d',2) returning id");
         cityHallStation = station("시청");
