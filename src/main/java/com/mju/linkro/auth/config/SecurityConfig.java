@@ -5,7 +5,6 @@ import com.mju.linkro.auth.web.JwtAuthenticationFilter;
 import com.mju.linkro.auth.web.SecurityErrorHandler;
 import com.mju.linkro.user.repository.UserRepository;
 import jakarta.servlet.DispatcherType;
-import org.springframework.http.HttpMethod;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -36,11 +35,7 @@ public class SecurityConfig {
 				.dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
 				.requestMatchers(JwtAuthenticationFilter::isPublic).permitAll()
 				.requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs", "/v3/api-docs/**").permitAll()
-				.requestMatchers(HttpMethod.GET, "/api/v1/users/me", "/api/v1/rooms",
-					"/api/v1/rooms/{roomId}", "/api/v1/rooms/{roomId}/members", "/api/v1/rooms/{roomId}/invite-code").authenticated()
-				.requestMatchers(HttpMethod.POST, "/api/v1/rooms").authenticated()
-				.requestMatchers(HttpMethod.PATCH, "/api/v1/users/me", "/api/v1/rooms/{roomId}").authenticated()
-				.requestMatchers(HttpMethod.DELETE, "/api/v1/users/me").authenticated()
+				.requestMatchers("/api/v1/**").authenticated()
 				.anyRequest().denyAll())
 			// Constructed only here: never registered as a Servlet filter bean.
 			.addFilterBefore(new JwtAuthenticationFilter(jwtProvider, users, errors), UsernamePasswordAuthenticationFilter.class)

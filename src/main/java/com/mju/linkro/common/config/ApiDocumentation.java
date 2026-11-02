@@ -21,17 +21,28 @@ public final class ApiDocumentation {
             @Schema(description = "생략하면 유지. 명시적 null은 VALIDATION_ERROR. 앞뒤 U+0020 제거 후 유니코드 코드포인트 1~30자.", example = "토요일 점심") String name,
             @Schema(types = {"string", "null"}, format = "date-time", description = "생략하면 유지. 명시적 null은 약속 시각 해제. 시간대가 포함된 ISO 8601 시각.", example = "2026-11-07T12:00:00+09:00") String appointmentAt) {}
 
+    @Schema(name = "RoomCreateResponse", requiredProperties = {"success", "data"})
     public record RoomCreated(@Schema(description = "항상 true", example = "true") boolean success, RoomResponses.Created data) {}
+    @Schema(name = "RoomListResponse", requiredProperties = {"success", "data"})
     public record RoomList(@Schema(description = "항상 true", example = "true") boolean success, List<RoomResponses.Summary> data) {}
+    @Schema(name = "RoomDetailResponse", requiredProperties = {"success", "data"})
     public record RoomDetail(@Schema(description = "항상 true", example = "true") boolean success, RoomResponses.Detail data) {}
+    @Schema(name = "RoomMembersResponse", requiredProperties = {"success", "data"})
     public record RoomMembers(@Schema(description = "항상 true", example = "true") boolean success, List<RoomResponses.Member> data) {}
+    @Schema(name = "RoomInviteCodeResponse", requiredProperties = {"success", "data"})
     public record RoomInviteCode(@Schema(description = "항상 true", example = "true") boolean success, RoomResponses.InviteCode data) {}
+    @Schema(name = "AuthLoginResponse", requiredProperties = {"success", "data"})
     public record Login(@Schema(description = "항상 true", example = "true") boolean success, KakaoLoginResponse data) {}
+    @Schema(name = "AuthTokensResponse", requiredProperties = {"success", "data"})
     public record Tokens(@Schema(description = "항상 true", example = "true") boolean success, TokenResponse data) {}
+    @Schema(name = "UserProfileResponseEnvelope", requiredProperties = {"success", "data"})
     public record Profile(@Schema(description = "항상 true", example = "true") boolean success, UserProfileResponse data) {}
+    @Schema(name = "UserNicknameResponseEnvelope", requiredProperties = {"success", "data"})
     public record Nickname(@Schema(description = "항상 true", example = "true") boolean success, NicknameUpdateResponse data) {}
+    @Schema(name = "ApiEmptySuccessResponse", requiredProperties = {"success", "data"})
     public record EmptySuccess(@Schema(description = "항상 true", example = "true") boolean success,
                                @Schema(types = {"null"}, description = "성공 data는 항상 null입니다.") Object data) {}
+    @Schema(name = "ApiFailureResponse", requiredProperties = {"success", "error"})
     public record Failure(@Schema(description = "항상 false", example = "false") boolean success, ApiResponse.Error error) {}
 
 }

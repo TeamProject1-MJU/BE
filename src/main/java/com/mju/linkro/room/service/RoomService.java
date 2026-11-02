@@ -10,10 +10,12 @@ import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Propagation;
 
 @Service
 @RequiredArgsConstructor
-@Transactional(readOnly = true)
+@Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ, propagation = Propagation.REQUIRES_NEW)
 public class RoomService {
     private final RoomAccess access;
     private final MeetingRoomRepository rooms;
@@ -54,7 +56,7 @@ public class RoomService {
         return new InviteCode(access.requireOwner(roomId, userId).getRoomCode());
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void update(UUID roomId, UUID userId, RoomWriteRequest request) {
         MeetingRoom room = access.lockOwner(roomId, userId);
         String name = request.validatedName(false);

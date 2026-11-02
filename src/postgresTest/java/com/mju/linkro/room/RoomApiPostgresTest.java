@@ -39,10 +39,22 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @Testcontainers
 @SpringBootTest(properties = {
         "spring.config.import=", "spring.jpa.hibernate.ddl-auto=validate", "spring.jpa.open-in-view=false",
+        "spring.jpa.properties.hibernate.session_factory.statement_inspector=com.mju.linkro.room.RoomApiPostgresTest$RoleQueryPause",
         "spring.jpa.show-sql=false", "auth.kakao.app-id=1234", "auth.jwt.access-token-ttl=15m",
         "auth.jwt.secret=dGVzdC1vbmx5LXNlY3JldC0wMTIzNDU2Nzg5YWJjZGVmZ2hpams="})
 @Timeout(45)
 class RoomApiPostgresTest {
+    /** Pause immediately before the real scalar role SELECT, after the room SELECT has run. */
+    public static class RoleQueryPause implements org.hibernate.resource.jdbc.spi.StatementInspector {
+        static final ThreadLocal<Runnable> BEFORE_ROLE = new ThreadLocal<>();
+        @Override public String inspect(String sql) {
+            if (sql.matches("(?is)^select\\s+\\w+\\.role\\s+from meeting_members\\b.*")) {
+                Runnable pause = BEFORE_ROLE.get();
+                if (pause != null) pause.run();
+            }
+            return sql;
+        }
+    }
     @Container static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16");
     @DynamicPropertySource static void database(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
@@ -54,6 +66,7 @@ class RoomApiPostgresTest {
     @Autowired UserRepository users;
     @Autowired MeetingRoomRepository rooms;
     @Autowired MeetingMemberRepository members;
+    @MockitoSpyBean RoomReadRepository reads;
     @MockitoBean RoomCodeGenerator codes;
     @Autowired RoomCreationService creation;
     @Autowired RoomService service;
@@ -62,6 +75,8 @@ class RoomApiPostgresTest {
     private final JsonMapper mapper = JsonMapper.builder().build();
     MockMvc mvc;
     UUID owner, member, outsider;
+
+    @AfterEach void clearQueryPause() { RoleQueryPause.BEFORE_ROLE.remove(); }
 
     @BeforeEach void setup() {
         jdbc.update("delete from meeting_rooms");
@@ -246,20 +261,128 @@ class RoomApiPostgresTest {
         }
     }
 
-    @Test void authenticationAndDenyUnimplementedOperations() throws Exception {
+    @Test void authenticationAndExistingApiSecurityPolicy() throws Exception {
         UUID room = room();
         mvc.perform(post("/api/v1/rooms").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"a\"}")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/v1/rooms")).andExpect(status().isUnauthorized());
         mvc.perform(patch("/api/v1/rooms/" + room).contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isUnauthorized());
-        for (MockHttpServletRequestBuilder req : List.of(post("/api/v1/rooms/join"), delete("/api/v1/rooms/" + room),
-                patch("/api/v1/rooms/" + room + "/members/me/departure"), put("/api/v1/rooms/" + room + "/selected-station"))) {
-            mvc.perform(auth(req, owner)).andExpect(status().isForbidden());
+        for (MockHttpServletRequestBuilder req : List.of(post("/api/v1/rooms/join"), delete("/api/v1/rooms/" + room))) {
+            mvc.perform(auth(req, owner)).andExpect(status().isMethodNotAllowed()).andExpect(jsonPath("$.error.code").value("METHOD_NOT_ALLOWED"));
+        }
+        for (MockHttpServletRequestBuilder req : List.of(patch("/api/v1/rooms/" + room + "/members/me/departure"),
+                put("/api/v1/rooms/" + room + "/selected-station"))) {
+            mvc.perform(auth(req, owner)).andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
         }
         User deleted = users.findById(member).orElseThrow(); deleted.softDelete(); users.saveAndFlush(deleted);
         for (UUID user : List.of(member, UUID.randomUUID())) {
             mvc.perform(auth(get("/api/v1/rooms"), user)).andExpect(status().isUnauthorized()).andExpect(jsonPath("$.error.code").value("TOKEN_INVALID"));
             json(post("/api/v1/rooms"), user, "{\"name\":\"no\"}").andExpect(status().isUnauthorized());
         }
+    }
+
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void listUsesOneSnapshotWhileMemberLeavesOrRoomIsDeleted(boolean deleteRoom) throws Exception {
+        UUID room = room(); addMember(room);
+        pauseBeforeMemberBatch(() -> {
+            if (deleteRoom) jdbc.update("delete from meeting_rooms where id=?", room);
+            else jdbc.update("delete from meeting_members where room_id=? and user_id=?", room, member);
+        });
+        mvc.perform(auth(get("/api/v1/rooms"), member)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1)).andExpect(jsonPath("$.data[0].memberCount").value(2))
+                .andExpect(jsonPath("$.data[0].myRole").value("MEMBER"));
+        mvc.perform(auth(get("/api/v1/rooms"), member)).andExpect(status().isOk()).andExpect(jsonPath("$.data").isEmpty());
+    }
+
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void detailKeepsSnapshotAcrossOwnerSuccessionOrRoomDeletion(boolean deleteRoom) throws Exception {
+        UUID room = room(); addMember(room);
+        pauseBeforeMemberBatch(() -> {
+            if (deleteRoom) jdbc.update("delete from meeting_rooms where id=?", room);
+            else transferOwner(room);
+        });
+        mvc.perform(auth(get("/api/v1/rooms/" + room), member)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.ownerId").value(owner.toString())).andExpect(jsonPath("$.data.myRole").value("MEMBER"))
+                .andExpect(jsonPath("$.data.members.length()").value(2));
+        if (deleteRoom) mvc.perform(auth(get("/api/v1/rooms/" + room), member)).andExpect(status().isNotFound());
+        else mvc.perform(auth(get("/api/v1/rooms/" + room), member)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.ownerId").value(member.toString())).andExpect(jsonPath("$.data.myRole").value("OWNER"));
+    }
+
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void memberListKeepsSnapshotWhileCallerLeavesOrRoomIsDeleted(boolean deleteRoom) throws Exception {
+        UUID room = room(); addMember(room);
+        long station = jdbc.queryForObject("select min(id) from stations", Long.class);
+        jdbc.update("update meeting_members set departure_station_id=? where room_id=? and user_id=?", station, room, member);
+        pauseBeforeMemberBatch(() -> {
+            if (deleteRoom) jdbc.update("delete from meeting_rooms where id=?", room);
+            else jdbc.update("delete from meeting_members where room_id=? and user_id=?", room, member);
+        });
+        mvc.perform(auth(get("/api/v1/rooms/" + room + "/members"), member)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(2)).andExpect(jsonPath("$.data[1].departureStation.id").value(station));
+        mvc.perform(auth(get("/api/v1/rooms/" + room + "/members"), member))
+                .andExpect(deleteRoom ? status().isNotFound() : status().isForbidden());
+    }
+
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void invitePermissionAndRoomAreReadFromOneSnapshot(boolean deleteRoom) throws Exception {
+        UUID room = room(); addMember(room);
+        Runnable commit = concurrentCommit(() -> {
+            if (deleteRoom) jdbc.update("delete from meeting_rooms where id=?", room);
+            else transferOwner(room);
+        });
+        RoleQueryPause.BEFORE_ROLE.set(commit);
+        mvc.perform(auth(get("/api/v1/rooms/" + room + "/invite-code"), owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.roomCode").value("A00001"));
+        mvc.perform(auth(get("/api/v1/rooms/" + room + "/invite-code"), owner))
+                .andExpect(deleteRoom ? status().isNotFound() : status().isForbidden());
+        if (!deleteRoom) mvc.perform(auth(get("/api/v1/rooms/" + room + "/invite-code"), member)).andExpect(status().isOk());
+    }
+
+    @Test void promotionAfterSnapshotDoesNotRetroactivelyAuthorizeInviteRead() throws Exception {
+        UUID room = room(); addMember(room);
+        Runnable commit = concurrentCommit(() -> transferOwner(room));
+        RoleQueryPause.BEFORE_ROLE.set(commit);
+        mvc.perform(auth(get("/api/v1/rooms/" + room + "/invite-code"), member)).andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error.code").value("NOT_ROOM_OWNER"));
+        mvc.perform(auth(get("/api/v1/rooms/" + room + "/invite-code"), member)).andExpect(status().isOk());
+    }
+
+    @Test void committedOwnerInvariantViolationIsNotHiddenAsNotFound() throws Exception {
+        UUID room = room(); addMember(room);
+        jdbc.update("delete from meeting_members where room_id=? and user_id=?", room, owner);
+        mvc.perform(auth(get("/api/v1/rooms/" + room), member)).andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.error.code").value("INTERNAL_ERROR"));
+    }
+
+    private void transferOwner(UUID room) {
+        jdbc.update("delete from meeting_members where room_id=? and user_id=?", room, owner);
+        jdbc.update("update meeting_members set role='OWNER' where room_id=? and user_id=?", room, member);
+    }
+
+    private void pauseBeforeMemberBatch(Runnable mutation) {
+        Runnable commit = concurrentCommit(mutation);
+        doAnswer(invocation -> { commit.run(); return invocation.callRealMethod(); }).when(reads).members(anyCollection());
+    }
+
+    /** Called after the reader's first SQL; waits for a separate connection/transaction to commit. */
+    private Runnable concurrentCommit(Runnable mutation) {
+        var once = new java.util.concurrent.atomic.AtomicBoolean();
+        return () -> {
+            if (!once.compareAndSet(false, true)) return;
+            assertThat(jdbc.queryForObject("show transaction_isolation", String.class)).isEqualTo("repeatable read");
+            assertThat(org.springframework.transaction.support.TransactionSynchronizationManager.isCurrentTransactionReadOnly()).isTrue();
+            int readerPid = jdbc.queryForObject("select pg_backend_pid()", Integer.class);
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+            try {
+                executor.submit(() -> new TransactionTemplate(manager).execute(status -> {
+                    assertThat(jdbc.queryForObject("show transaction_isolation", String.class)).isEqualTo("read committed");
+                    assertThat(jdbc.queryForObject("select pg_backend_pid()", Integer.class)).isNotEqualTo(readerPid);
+                    mutation.run();
+                    return null;
+                })).get(10, TimeUnit.SECONDS);
+            } catch (Exception exception) { throw new AssertionError("Concurrent writer failed", exception); }
+            finally { executor.shutdownNow(); }
+        };
     }
 
     @Test void patchPreservesRecommendationsProposalsVotesAndConfirmation() throws Exception {

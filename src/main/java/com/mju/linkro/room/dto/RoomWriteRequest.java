@@ -1,6 +1,7 @@
 package com.mju.linkro.room.dto;
 
 import com.mju.linkro.common.exception.*;
+import com.mju.linkro.room.domain.RoomName;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.Map;
@@ -19,15 +20,8 @@ public final class RoomWriteRequest {
     public String validatedName(boolean required) {
         if (name == null && !required) return null;
         if (name == null || !name.isString()) throw invalid("name");
-        String value = name.asString();
-        // PostgreSQL btrim removes only U+0020, not tabs or Unicode whitespace.
-        int start = 0, end = value.length();
-        while (start < end && value.charAt(start) == ' ') start++;
-        while (end > start && value.charAt(end - 1) == ' ') end--;
-        value = value.substring(start, end);
-        int length = value.codePointCount(0, value.length());
-        if (length < 1 || length > 30 || value.indexOf('\0') >= 0) throw invalid("name");
-        return value;
+        try { return RoomName.normalize(name.asString()); }
+        catch (IllegalArgumentException exception) { throw invalid("name"); }
     }
 
     public Instant validatedAppointmentAt() {
