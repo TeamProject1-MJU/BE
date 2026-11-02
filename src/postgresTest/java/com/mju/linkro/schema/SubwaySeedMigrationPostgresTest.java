@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.FlywayException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Container;
@@ -14,6 +15,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** V11 subway seed data checked with SQL on disposable PostgreSQL, with no application .env or shared DB. */
 @Testcontainers
@@ -87,15 +89,15 @@ class SubwaySeedMigrationPostgresTest {
     @Test
     void line2MainIsLoopClosedAtCityHallAndEungamLoopClosesAtEungam() throws SQLException {
         seed();
-        assertThat(rows(cycle("2", "MAIN", "INNER", "시청"))).containsExactly(List.of(43L, "시청"));
-        assertThat(rows(cycle("2", "MAIN", "OUTER", "시청"))).containsExactly(List.of(43L, "시청"));
+        assertThat(cycle("2", "MAIN", "INNER", "시청")).containsExactly(List.of(43L, "시청"));
+        assertThat(cycle("2", "MAIN", "OUTER", "시청")).containsExactly(List.of(43L, "시청"));
         assertThat(rows("select count(*) from station_lines sl join subway_lines l on l.id = sl.line_id "
             + "where l.line_code = '2' and sl.branch_code = 'MAIN'")).containsExactly(List.of(43L));
-        assertThat(rows(edge("2", "충정로", "시청"))).containsExactly(List.of("INNER"));
-        assertThat(rows(edge("2", "시청", "충정로"))).containsExactly(List.of("OUTER"));
+        assertThat(edge("2", "충정로", "시청")).containsExactly(List.of("INNER"));
+        assertThat(edge("2", "시청", "충정로")).containsExactly(List.of("OUTER"));
 
         assertThat(count("select count(*) from station_connections where direction = 'LOOP'")).isEqualTo(6);
-        assertThat(rows(cycle("6", null, "LOOP", "응암"))).containsExactly(List.of(6L, "응암"));
+        assertThat(cycle("6", null, "LOOP", "응암")).containsExactly(List.of(6L, "응암"));
         assertThat(rows("select s.name, sl.branch_code, sl.seq from station_lines sl join stations s on s.id = sl.station_id "
             + "join subway_lines l on l.id = sl.line_id where l.line_code = '6' and (sl.branch_code = 'EUNGAM_LOOP' or s.name = '응암') "
             + "order by sl.branch_code, sl.seq"))
@@ -112,9 +114,9 @@ class SubwaySeedMigrationPostgresTest {
             + "where sl.branch_code <> 'MAIN' group by 1, 2 order by 1, 2"))
             .containsExactly(List.of("2", "SEONGSU", 4L), List.of("2", "SINJEONG", 4L), List.of("5", "MACHEON", 7L),
                 List.of("6", "EUNGAM_LOOP", 5L));
-        assertThat(rows(branch("2", "SEONGSU"))).containsExactly(List.of("용답"), List.of("신답"), List.of("용두"), List.of("신설동"));
-        assertThat(rows(branch("2", "SINJEONG"))).containsExactly(List.of("도림천"), List.of("양천구청"), List.of("신정네거리"), List.of("까치산"));
-        assertThat(rows(branch("5", "MACHEON"))).containsExactly(List.of("둔촌동"), List.of("올림픽공원"), List.of("방이"),
+        assertThat(branch("2", "SEONGSU")).containsExactly(List.of("용답"), List.of("신답"), List.of("용두"), List.of("신설동"));
+        assertThat(branch("2", "SINJEONG")).containsExactly(List.of("도림천"), List.of("양천구청"), List.of("신정네거리"), List.of("까치산"));
+        assertThat(branch("5", "MACHEON")).containsExactly(List.of("둔촌동"), List.of("올림픽공원"), List.of("방이"),
             List.of("오금"), List.of("개롱"), List.of("거여"), List.of("마천"));
         // Junction stations keep only their MAIN node.
         assertThat(rows("select s.name, l.line_code, sl.branch_code from station_lines sl join stations s on s.id = sl.station_id "
@@ -144,8 +146,8 @@ class SubwaySeedMigrationPostgresTest {
         assertThat(count("select count(*) from station_connections c join station_lines a on a.id = c.from_station_line_id "
             + "join station_lines b on b.id = c.to_station_line_id where c.connection_type = 'TRANSFER' "
             + "and (a.station_id <> b.station_id or a.line_id = b.line_id or c.direction is not null)")).isZero();
-        assertThat(rows(transfer("2", "5", "까치산"))).containsExactly(List.of(14, 17));
-        assertThat(rows(transfer("5", "2", "까치산"))).containsExactly(List.of(14, 17));
+        assertThat(transfer("2", "5", "까치산")).containsExactly(List.of(14, 17));
+        assertThat(transfer("5", "2", "까치산")).containsExactly(List.of(14, 17));
         assertThat(rows("select l.line_code, sl.station_code from station_lines sl join stations s on s.id = sl.station_id "
             + "join subway_lines l on l.id = sl.line_id where s.name = '총신대입구(이수)' order by 1"))
             .containsExactly(List.of("4", "432"), List.of("7", "2738"));
@@ -187,7 +189,7 @@ class SubwaySeedMigrationPostgresTest {
                 List.of("발산", "5", 37.55861, 126.83722), List.of("암사역사공원", "8", 37.55679, 127.13578));
         assertThat(rows("select sl.station_code, sl.seq, sl.branch_code from station_lines sl join stations s on s.id = sl.station_id "
             + "where s.name = '암사역사공원'")).containsExactly(List.of("2810", 1, "MAIN"));
-        assertThat(rows(edge("8", "암사역사공원", "암사"))).containsExactly(List.of("DOWN"));
+        assertThat(edge("8", "암사역사공원", "암사")).containsExactly(List.of("DOWN"));
     }
 
     @Test
@@ -198,43 +200,58 @@ class SubwaySeedMigrationPostgresTest {
         assertThat(rows("select distinct color = upper(color) from subway_lines")).containsExactly(List.of(true));
     }
 
+    @Test
+    void seedStopsWhenSubwayTablesAreNotEmpty() throws SQLException {
+        flyway("10").migrate();
+        try (var connection = connect(); var statement = connection.createStatement()) {
+            statement.execute("insert into stations(name, latitude, longitude) values ('시청', 37.5, 127.0)");
+        }
+
+        assertThatThrownBy(() -> flyway("11").migrate())
+            .isInstanceOf(FlywayException.class)
+            .hasMessageContaining("V11 seeds empty tables only");
+        assertThat(count("select count(*) from stations")).isEqualTo(1);
+        assertThat(count("select count(*) from subway_lines")).isZero();
+        assertThat(rows("select version from flyway_schema_history where version = '11' and success")).isEmpty();
+    }
+
     private void seed() throws SQLException {
         flyway("11").migrate();
     }
 
-    private static String cycle(String line, String branch, String direction, String start) {
-        String branchFilter = branch == null ? "" : " and sl.branch_code = '" + branch + "'";
-        return "with recursive edges as (select c.from_station_line_id f, c.to_station_line_id t from station_connections c "
+    private List<List<Object>> cycle(String line, String branch, String direction, String start) throws SQLException {
+        // A null branch follows the direction across all branches of the line.
+        return rows("with recursive edges as (select c.from_station_line_id f, c.to_station_line_id t from station_connections c "
             + "join station_lines sl on sl.id = c.from_station_line_id join subway_lines l on l.id = sl.line_id "
-            + "where l.line_code = '" + line + "' and c.direction = '" + direction + "'" + branchFilter + "), "
+            + "where l.line_code = ? and c.direction = ? and sl.branch_code = coalesce(cast(? as varchar), sl.branch_code)), "
             + "start as (select sl.id from station_lines sl join stations s on s.id = sl.station_id join subway_lines l on l.id = sl.line_id "
-            + "where l.line_code = '" + line + "' and s.name = '" + start + "'), "
+            + "where l.line_code = ? and s.name = ?), "
             + "walk(node, steps) as (select t, 1 from edges where f = (select id from start) "
             + "union all select e.t, w.steps + 1 from walk w join edges e on e.f = w.node "
             + "where w.node <> (select id from start) and w.steps < 100) "
             + "select w.steps::bigint, s.name from walk w join station_lines sl on sl.id = w.node join stations s on s.id = sl.station_id "
-            + "where w.node = (select id from start)";
+            + "where w.node = (select id from start)", line, direction, branch, line, start);
     }
 
-    private static String edge(String line, String from, String to) {
-        return "select c.direction from station_connections c "
+    private List<List<Object>> edge(String line, String from, String to) throws SQLException {
+        return rows("select c.direction from station_connections c "
             + "join station_lines a on a.id = c.from_station_line_id join stations sa on sa.id = a.station_id "
             + "join station_lines b on b.id = c.to_station_line_id join stations sb on sb.id = b.station_id "
-            + "join subway_lines l on l.id = a.line_id where c.connection_type = 'RIDE' and l.line_code = '" + line + "' "
-            + "and sa.name = '" + from + "' and sb.name = '" + to + "'";
+            + "join subway_lines l on l.id = a.line_id where c.connection_type = 'RIDE' and l.line_code = ? "
+            + "and sa.name = ? and sb.name = ?", line, from, to);
     }
 
-    private static String transfer(String fromLine, String toLine, String station) {
-        return "select c.travel_seconds, c.distance_m from station_connections c "
+    private List<List<Object>> transfer(String fromLine, String toLine, String station) throws SQLException {
+        return rows("select c.travel_seconds, c.distance_m from station_connections c "
             + "join station_lines a on a.id = c.from_station_line_id join subway_lines la on la.id = a.line_id "
             + "join station_lines b on b.id = c.to_station_line_id join subway_lines lb on lb.id = b.line_id "
             + "join stations s on s.id = a.station_id where c.connection_type = 'TRANSFER' "
-            + "and la.line_code = '" + fromLine + "' and lb.line_code = '" + toLine + "' and s.name = '" + station + "'";
+            + "and la.line_code = ? and lb.line_code = ? and s.name = ?", fromLine, toLine, station);
     }
 
-    private static String branch(String line, String branchCode) {
-        return "select s.name from station_lines sl join stations s on s.id = sl.station_id join subway_lines l on l.id = sl.line_id "
-            + "where l.line_code = '" + line + "' and sl.branch_code = '" + branchCode + "' order by sl.seq";
+    private List<List<Object>> branch(String line, String branchCode) throws SQLException {
+        return rows("select s.name from station_lines sl join stations s on s.id = sl.station_id join subway_lines l on l.id = sl.line_id "
+            + "where l.line_code = ? and sl.branch_code = ? order by sl.seq", line, branchCode);
     }
 
     private Flyway flyway(String target) {
