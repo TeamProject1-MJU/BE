@@ -30,11 +30,13 @@ public class MeetingRoom extends BaseUuidTimeEntity {
 
     public MeetingRoom(String roomCode, String name, UUID createdBy) {
         this.roomCode = Objects.requireNonNull(roomCode);
-        this.name = Objects.requireNonNull(name);
+        this.name = RoomName.normalize(name);
         this.createdBy = Objects.requireNonNull(createdBy);
     }
 
     public void schedule(Instant appointmentAt) { this.appointmentAt = appointmentAt; }
+
+    public void rename(String name) { this.name = RoomName.normalize(name); }
 
     public void confirmStation(Long stationId, Instant confirmedAt) {
         Objects.requireNonNull(stationId);

@@ -117,6 +117,16 @@ class JwtAuthenticationFilterTest {
 	}
 
 	@Test
+	void queryUserIdCannotOverrideAuthenticatedSubject() throws Exception {
+		UUID authenticated = UUID.randomUUID();
+		mvc.perform(get("/api/v1/test/me").param("userId", UUID.randomUUID().toString())
+			.header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(authenticated)))
+			.andExpect(status().isOk()).andExpect(jsonPath("$.data.userId").value(authenticated.toString()));
+		assertFailure(mvc.perform(get("/api/v1/test/me").param("userId", authenticated.toString())),
+			"AUTH_REQUIRED", ErrorCode.AUTH_REQUIRED.getMessage());
+	}
+
+	@Test
 	void bearerSchemeIsCaseInsensitive() throws Exception {
 		mvc.perform(get("/api/v1/test/me").header(HttpHeaders.AUTHORIZATION, "bearer " + jwtProvider.createAccessToken(UUID.randomUUID())))
 			.andExpect(status().isOk());
