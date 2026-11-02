@@ -36,6 +36,8 @@ public class MeetingRoom extends BaseUuidTimeEntity {
 
     public void schedule(Instant appointmentAt) { this.appointmentAt = appointmentAt; }
 
+    public void rename(String name) { this.name = Objects.requireNonNull(name); }
+
     public void confirmStation(Long stationId, Instant confirmedAt) {
         Objects.requireNonNull(stationId);
         Objects.requireNonNull(confirmedAt);

@@ -82,13 +82,13 @@ class JwtAuthenticationFilterTest {
 
 	@Test
 	void missingHeaderReturnsAuthRequired() throws Exception {
-		assertFailure(mvc.perform(get("/api/v1/test/me")), "AUTH_REQUIRED", "인증이 필요합니다.");
+		assertFailure(mvc.perform(get("/api/v1/users/me")), "AUTH_REQUIRED", "인증이 필요합니다.");
 	}
 
 	@ParameterizedTest
 	@ValueSource(strings = {"Bearer", "Bearer ", "Bearer    ", "Basic dXNlcjpwYXNz", "Token abc"})
 	void nonBearerOrEmptyTokenReturnsAuthRequired(String header) throws Exception {
-		assertFailure(mvc.perform(get("/api/v1/test/me").header(HttpHeaders.AUTHORIZATION, header)),
+		assertFailure(mvc.perform(get("/api/v1/users/me").header(HttpHeaders.AUTHORIZATION, header)),
 			"AUTH_REQUIRED", "인증이 필요합니다.");
 	}
 
@@ -96,7 +96,7 @@ class JwtAuthenticationFilterTest {
 	void expiredTokenReturnsTokenExpired() throws Exception {
 		String token = Jwts.builder().subject(UUID.randomUUID().toString())
 			.expiration(Date.from(Instant.now().minusSeconds(60))).signWith(Keys.hmacShaKeyFor(KEY), Jwts.SIG.HS256).compact();
-		assertFailure(mvc.perform(get("/api/v1/test/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + token)),
+		assertFailure(mvc.perform(get("/api/v1/users/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + token)),
 			"TOKEN_EXPIRED", "토큰이 만료되었습니다.");
 	}
 
@@ -104,21 +104,31 @@ class JwtAuthenticationFilterTest {
 	void tamperedTokenReturnsTokenInvalid() throws Exception {
 		String token = jwtProvider.createAccessToken(UUID.randomUUID());
 		String tampered = token.substring(0, token.length() - 2) + (token.endsWith("AA") ? "BB" : "AA");
-		assertFailure(mvc.perform(get("/api/v1/test/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + tampered)),
+		assertFailure(mvc.perform(get("/api/v1/users/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + tampered)),
 			"TOKEN_INVALID", "토큰이 올바르지 않습니다.");
 	}
 
 	@Test
 	void validTokenInjectsSubjectAsCurrentUser() throws Exception {
 		UUID userId = UUID.randomUUID();
-		mvc.perform(get("/api/v1/test/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(userId)))
+		mvc.perform(get("/api/v1/users/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(userId)))
 			.andExpect(status().isOk())
 			.andExpect(content().json("{\"success\":true,\"data\":{\"userId\":\"" + userId + "\"}}", JsonCompareMode.STRICT));
 	}
 
 	@Test
+	void queryUserIdCannotOverrideAuthenticatedSubject() throws Exception {
+		UUID authenticated = UUID.randomUUID();
+		mvc.perform(get("/api/v1/users/me").param("userId", UUID.randomUUID().toString())
+			.header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(authenticated)))
+			.andExpect(status().isOk()).andExpect(jsonPath("$.data.userId").value(authenticated.toString()));
+		assertFailure(mvc.perform(get("/api/v1/users/me").param("userId", authenticated.toString())),
+			"AUTH_REQUIRED", ErrorCode.AUTH_REQUIRED.getMessage());
+	}
+
+	@Test
 	void bearerSchemeIsCaseInsensitive() throws Exception {
-		mvc.perform(get("/api/v1/test/me").header(HttpHeaders.AUTHORIZATION, "bearer " + jwtProvider.createAccessToken(UUID.randomUUID())))
+		mvc.perform(get("/api/v1/users/me").header(HttpHeaders.AUTHORIZATION, "bearer " + jwtProvider.createAccessToken(UUID.randomUUID())))
 			.andExpect(status().isOk());
 	}
 
@@ -161,7 +171,7 @@ class JwtAuthenticationFilterTest {
 
 	@Test
 	void corsPreflightPassesWithoutHeader() throws Exception {
-		var result = mvc.perform(options("/api/v1/test/me")
+		var result = mvc.perform(options("/api/v1/users/me")
 				.header(HttpHeaders.ORIGIN, "http://localhost:3000")
 				.header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "GET"))
 			.andReturn();
@@ -192,31 +202,31 @@ class JwtAuthenticationFilterTest {
 		var users = context.getBean(UserRepository.class);
 		UUID id = UUID.randomUUID();
 		Mockito.when(users.findById(id)).thenReturn(Optional.empty());
-		assertFailure(mvc.perform(get("/api/v1/test/me").header(HttpHeaders.AUTHORIZATION,
+		assertFailure(mvc.perform(get("/api/v1/users/me").header(HttpHeaders.AUTHORIZATION,
 			"Bearer " + jwtProvider.createAccessToken(id))), "TOKEN_INVALID", ErrorCode.TOKEN_INVALID.getMessage());
 		var deleted = new User("456", "tester");
 		deleted.softDelete();
 		Mockito.when(users.findById(id)).thenReturn(Optional.of(deleted));
-		assertFailure(mvc.perform(get("/api/v1/test/me").header(HttpHeaders.AUTHORIZATION,
+		assertFailure(mvc.perform(get("/api/v1/users/me").header(HttpHeaders.AUTHORIZATION,
 			"Bearer " + jwtProvider.createAccessToken(id))), "TOKEN_INVALID", ErrorCode.TOKEN_INVALID.getMessage());
 	}
 
 	@Test
 	void authenticationRunsOnceAndDoesNotLeakToNextRequestOrCreateSession() throws Exception {
 		UUID id = UUID.randomUUID();
-		var result = mvc.perform(get("/api/v1/test/me").header(HttpHeaders.AUTHORIZATION,
+		var result = mvc.perform(get("/api/v1/users/me").header(HttpHeaders.AUTHORIZATION,
 			"Bearer " + jwtProvider.createAccessToken(id))).andExpect(status().isOk()).andReturn();
 		Mockito.verify(context.getBean(UserRepository.class)).findById(id);
 		assertThat(result.getRequest().getSession(false)).isNull();
 		assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
-		assertFailure(mvc.perform(get("/api/v1/test/me")), "AUTH_REQUIRED", ErrorCode.AUTH_REQUIRED.getMessage());
+		assertFailure(mvc.perform(get("/api/v1/users/me")), "AUTH_REQUIRED", ErrorCode.AUTH_REQUIRED.getMessage());
 		assertThat(context.getBeansOfType(JwtAuthenticationFilter.class)).isEmpty();
 	}
 
 	@Test
 	void downstreamBusinessFailureIsNotOverwrittenOrReauthenticated() throws Exception {
 		UUID id = UUID.randomUUID();
-		mvc.perform(get("/api/v1/test/failure").header(HttpHeaders.AUTHORIZATION,
+		mvc.perform(get("/api/v1/rooms/test/members").header(HttpHeaders.AUTHORIZATION,
 			"Bearer " + jwtProvider.createAccessToken(id)))
 			.andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("ROOM_FULL"));
 		Mockito.verify(context.getBean(UserRepository.class)).findById(id);
@@ -234,7 +244,7 @@ class JwtAuthenticationFilterTest {
 		UUID id = UUID.randomUUID();
 		Mockito.when(context.getBean(UserRepository.class).findById(id))
 			.thenThrow(new org.springframework.dao.DataAccessResourceFailureException("jdbc:secret password=hidden"));
-		var result = mvc.perform(get("/api/v1/test/me")
+		var result = mvc.perform(get("/api/v1/users/me")
 			.header(HttpHeaders.ORIGIN, "http://localhost:3000")
 			.header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(id)))
 			.andExpect(status().isInternalServerError())
@@ -247,9 +257,9 @@ class JwtAuthenticationFilterTest {
 		assertThat(result.getHandler()).isNull();
 		assertThat(result.getResponse().getContentAsString()).doesNotContain("jdbc", "password", "DataAccess", "stack");
 		assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
-		assertFailure(mvc.perform(get("/api/v1/test/me")), "AUTH_REQUIRED", ErrorCode.AUTH_REQUIRED.getMessage());
+		assertFailure(mvc.perform(get("/api/v1/users/me")), "AUTH_REQUIRED", ErrorCode.AUTH_REQUIRED.getMessage());
 		UUID nextId = UUID.randomUUID();
-		mvc.perform(get("/api/v1/test/me").header(HttpHeaders.AUTHORIZATION,
+		mvc.perform(get("/api/v1/users/me").header(HttpHeaders.AUTHORIZATION,
 			"Bearer " + jwtProvider.createAccessToken(nextId)))
 			.andExpect(status().isOk()).andExpect(jsonPath("$.data.userId").value(nextId.toString()));
 	}
@@ -270,13 +280,13 @@ class JwtAuthenticationFilterTest {
 	}
 
 	@Test
-	void bearerHeaderOutsideApiDoesNotAuthenticateAndUnknownAuthenticatedApiRemains404() throws Exception {
+	void bearerHeaderOutsideApiDoesNotAuthenticateAndUnlistedApiIsDenied() throws Exception {
 		String token = jwtProvider.createAccessToken(UUID.randomUUID());
 		assertFailure(mvc.perform(get("/unknown").header(HttpHeaders.AUTHORIZATION, "Bearer " + token)),
 			"AUTH_REQUIRED", ErrorCode.AUTH_REQUIRED.getMessage());
 		Mockito.verifyNoInteractions(context.getBean(UserRepository.class));
 		mvc.perform(get("/api/v1/unknown").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
-			.andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+			.andExpect(status().isForbidden()).andExpect(jsonPath("$.error.code").value("ACCESS_DENIED"));
 	}
 
 	@ParameterizedTest
@@ -290,8 +300,8 @@ class JwtAuthenticationFilterTest {
 
 	@Test
 	void errorDispatchPassesSecurityWithoutAuthentication() throws Exception {
-		mvc.perform(get("/api/v1/test/failure").with(request -> { request.setDispatcherType(jakarta.servlet.DispatcherType.ERROR); return request; })
-			.requestAttr("jakarta.servlet.error.request_uri", "/api/v1/test/failure"))
+		mvc.perform(get("/api/v1/rooms/test/members").with(request -> { request.setDispatcherType(jakarta.servlet.DispatcherType.ERROR); return request; })
+			.requestAttr("jakarta.servlet.error.request_uri", "/api/v1/rooms/test/members"))
 			.andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("ROOM_FULL"));
 		Mockito.verifyNoInteractions(context.getBean(UserRepository.class));
 	}
@@ -323,12 +333,12 @@ class JwtAuthenticationFilterTest {
 
 	@RestController
 	static class TestController {
-		@GetMapping("/api/v1/test/failure")
+		@GetMapping("/api/v1/rooms/test/members")
 		ApiResponse<Void> failure() {
 			throw new BusinessException(ErrorCode.ROOM_FULL);
 		}
 
-		@GetMapping("/api/v1/test/me")
+		@GetMapping("/api/v1/users/me")
 		ApiResponse<Map<String, UUID>> me(@CurrentUser UUID userId) { return ApiResponse.success(Map.of("userId", userId)); }
 
 		@PostMapping({"/api/v1/auth/kakao", "/api/v1/auth/refresh"})

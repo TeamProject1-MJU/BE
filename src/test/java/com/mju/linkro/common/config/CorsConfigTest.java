@@ -65,7 +65,7 @@ class CorsConfigTest {
 
     @Test
     void allowedOriginPreflightReturnsCorsHeaders() throws Exception {
-        mvc(ALLOWED + ",http://localhost:3000").perform(preflight("/api/v1/test/me", ALLOWED))
+        mvc(ALLOWED + ",http://localhost:3000").perform(preflight("/api/v1/users/me", ALLOWED))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, ALLOWED))
                 .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_METHODS, "GET,POST,PUT,PATCH,DELETE,OPTIONS"))
@@ -78,21 +78,21 @@ class CorsConfigTest {
     @Test
     @DisplayName("두 번째 허용 origin(http://localhost:3000)으로 preflight를 보내면 허용된다")
     void secondAllowedOriginPreflightIsAllowed() throws Exception {
-        mvc(ALLOWED + ",http://localhost:3000").perform(preflight("/api/v1/test/me", "http://localhost:3000"))
+        mvc(ALLOWED + ",http://localhost:3000").perform(preflight("/api/v1/users/me", "http://localhost:3000"))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "http://localhost:3000"));
     }
 
     @Test
     void disallowedOriginPreflightIsRejected() throws Exception {
-        mvc(ALLOWED).perform(preflight("/api/v1/test/me", DISALLOWED))
+        mvc(ALLOWED).perform(preflight("/api/v1/users/me", DISALLOWED))
                 .andExpect(status().isForbidden())
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN));
     }
 
     @Test
     void preflightWithUnlistedHeaderIsRejected() throws Exception {
-        mvc(ALLOWED).perform(options("/api/v1/test/me")
+        mvc(ALLOWED).perform(options("/api/v1/users/me")
                         .header(HttpHeaders.ORIGIN, ALLOWED)
                         .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
                         .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, "x-custom"))
@@ -105,7 +105,7 @@ class CorsConfigTest {
         MockMvc mvc = mvc(ALLOWED);
         UUID userId = UUID.randomUUID();
         String token = context.getBean(JwtProvider.class).createAccessToken(userId);
-        mvc.perform(get("/api/v1/test/me").header(HttpHeaders.ORIGIN, ALLOWED)
+        mvc.perform(get("/api/v1/users/me").header(HttpHeaders.ORIGIN, ALLOWED)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, ALLOWED))
@@ -114,7 +114,7 @@ class CorsConfigTest {
 
     @Test
     void allowedOriginWithoutTokenGetsCorsHeaderOnAuthFailure() throws Exception {
-        mvc(ALLOWED).perform(get("/api/v1/test/me").header(HttpHeaders.ORIGIN, ALLOWED))
+        mvc(ALLOWED).perform(get("/api/v1/users/me").header(HttpHeaders.ORIGIN, ALLOWED))
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, ALLOWED))
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
@@ -124,14 +124,14 @@ class CorsConfigTest {
 
     @Test
     void disallowedOriginActualRequestIsRejectedWithoutCorsHeader() throws Exception {
-        mvc(ALLOWED).perform(get("/api/v1/test/me").header(HttpHeaders.ORIGIN, DISALLOWED))
+        mvc(ALLOWED).perform(get("/api/v1/users/me").header(HttpHeaders.ORIGIN, DISALLOWED))
                 .andExpect(status().isForbidden())
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN));
     }
 
     @Test
     void requestWithoutOriginKeepsExistingBehavior() throws Exception {
-        mvc(ALLOWED).perform(get("/api/v1/test/me"))
+        mvc(ALLOWED).perform(get("/api/v1/users/me"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN))
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_METHODS))
@@ -159,7 +159,7 @@ class CorsConfigTest {
 
     @Test
     void normalizedOriginMatchesBrowserOrigin() throws Exception {
-        mvc(" " + ALLOWED + "/ ").perform(preflight("/api/v1/test/me", ALLOWED))
+        mvc(" " + ALLOWED + "/ ").perform(preflight("/api/v1/users/me", ALLOWED))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, ALLOWED));
     }
@@ -223,7 +223,7 @@ class CorsConfigTest {
 
     @RestController
     static class TestController {
-        @GetMapping("/api/v1/test/me")
+        @GetMapping("/api/v1/users/me")
         ApiResponse<UUID> me(@CurrentUser UUID userId) { return ApiResponse.success(userId); }
 
         @GetMapping("/swagger-ui/index.html")

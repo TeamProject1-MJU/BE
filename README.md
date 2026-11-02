@@ -257,9 +257,22 @@ chore: Spring Boot 프로젝트 초기 세팅 (#1)
 
 - JWT 검증·활성 사용자 조회·인증 정보 설정 중 예상 밖 RuntimeException은 SecurityContext를 정리하고 기존 SecurityErrorHandler로 `INTERNAL_ERROR`(500) 공통 JSON을 반환합니다. 다음 체인은 실행하지 않습니다. BusinessException의 기존 상태·메시지는 유지하며, 다음 필터·컨트롤러 실행은 인증 try/catch 밖에 있습니다.
 - 서버에는 예상 밖 오류의 예외 유형과 스택 위치를 기록합니다. 토큰·Authorization 헤더·비밀번호·SQL 등이 포함될 수 있는 예외 메시지와 원인 메시지는 기록하지 않으며, 응답에는 고정 공개 메시지만 반환합니다.
-- 공개 인증 POST 3개, `/swagger-ui.html`, `/swagger-ui/**`, `/v3/api-docs`, `/v3/api-docs/**`를 명시적으로 허용합니다. 나머지 `/api/v1/**`는 인증이 필요하고 그 외는 `denyAll`입니다. ERROR 디스패치는 계속 허용합니다. 일반 REQUEST의 `/error`는 공개하지 않습니다.
-- 미등록 외부 경로는 기존 MVC 404 대신 무인증이면 `AUTH_REQUIRED`(401), 이미 인증된 SecurityContext이면 `ACCESS_DENIED`(403) 공통 응답을 반환합니다. JWT 인증은 `/api/v1/**`에만 적용되므로 외부 경로에 Bearer 헤더만 보내면 인증되지 않아 401입니다. 인증된 미등록 API 경로는 MVC 404를 유지합니다.
+- 공개 인증 POST 3개, `/swagger-ui.html`, `/swagger-ui/**`, `/v3/api-docs`, `/v3/api-docs/**`를 명시적으로 허용합니다. #35부터 users/me의 기존 GET·PATCH·DELETE와 구현된 방 API 6개의 경로·메서드만 인증 사용자에게 허용하고 나머지는 `denyAll`입니다. ERROR 디스패치는 계속 허용합니다. 일반 REQUEST의 `/error`는 공개하지 않습니다.
+- 미등록 외부 경로는 기존 MVC 404 대신 무인증이면 `AUTH_REQUIRED`(401), 이미 인증된 SecurityContext이면 `ACCESS_DENIED`(403) 공통 응답을 반환합니다. JWT 인증은 `/api/v1/**`에만 적용되므로 외부 경로에 Bearer 헤더만 보내면 인증되지 않아 401입니다. #35부터 인증된 미등록 API 경로도 허용 목록에 없으면 `ACCESS_DENIED`(403)입니다.
 - 이번 작업(#32 / PR #44)에서 추가된 `ACCESS_DENIED`(403, `접근 권한이 없습니다.`)는 Security의 일반 인가 거부 코드입니다. 방 권한 오류 `NOT_ROOM_MEMBER` / `NOT_ROOM_OWNER` / `NOT_PROPOSAL_OWNER`를 대체하지 않습니다. API 명세 v1.10에 추가 반영이 필요하며, 이번에 명세 파일을 수정하지 않았습니다.
 - 개발·시연용 Swagger UI와 문서 API는 현재 인증 없이 공개합니다. `deploy.yml`이 `/v3/api-docs`를 배포 헬스체크로 사용하므로 이번 PR에서는 이 동작을 유지합니다. 운영 공개 문제는 **해결 완료가 아닌 후속 운영 작업으로 분리**합니다.
 - 후속 운영 작업: 운영 프로필에서 `springdoc.swagger-ui.enabled=false`, `springdoc.api-docs.enabled=false` 설정, 문서 API에 의존하지 않는 전용 헬스체크로 배포 확인 변경, 실제 배포 환경의 프로필 활성화 및 환경변수 전달 확인을 함께 수행해야 합니다. 이번 PR에서는 운영 프로필·배포 워크플로우·새 헬스체크 API를 추가하거나 변경하지 않습니다.
 - 현재 `/ws` 및 STOMP 구현은 없습니다. 미구현 경로를 미리 공개하지 않으며, 이슈 #42 구현 시 실제 핸드셰이크 경로에 필요한 명시적 허용 설정을 추가해야 합니다.
+
+### 약속방 기본 API (#35)
+
+- 생성·내 방 목록·상세·수정·멤버·OWNER 전용 초대 코드 조회를 제공합니다. 응답 계약, 코드 충돌의 독립 트랜잭션 재시도, PATCH 생략/null 판단, #38 탈퇴 경합 제한과 #43 이벤트 연결 지점은 [약속방 API 구현 문서](docs/room-api-35.md)를 참고합니다.
+
+### Swagger UI에서 JWT 등록
+
+- 서버를 재시작하고 `/swagger-ui/index.html`을 새로고침합니다.
+- `POST /api/v1/auth/kakao` 로그인 또는 `POST /api/v1/auth/refresh` 응답의 Access Token을 복사합니다.
+- 상단 **Authorize** → **bearerAuth**에 `Bearer ` 접두사 없이 토큰만 입력하고 **Authorize** → **Close**를 누릅니다.
+- 방 API나 users/me API의 **Try it out** → **Execute**를 실행하면 `Authorization: Bearer <token>` 헤더가 자동으로 전송됩니다. 만료되면 새 Access Token으로 다시 등록합니다.
+- 카카오 로그인·refresh·logout POST는 실제 보안 정책과 동일하게 공개 API로 표시됩니다. Swagger 보안 표시는 문서 설정이며 서버의 JWT 검증·방별 권한 정책은 그대로 적용됩니다.
+- `@CurrentUser userId`는 문서에서 숨기며 JWT에서 주입합니다. `roomId`는 필수 UUID 경로 파라미터로 유지합니다. 방 생성과 PATCH는 별도 문서 스키마를 사용하며, PATCH 예시에서 이름만 변경·시각 해제·빈 객체를 선택할 수 있습니다. PATCH 필드 생략은 유지, `name:null`은 오류, `appointmentAt:null`은 해제입니다.
