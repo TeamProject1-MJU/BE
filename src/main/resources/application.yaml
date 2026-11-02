@@ -32,3 +32,9 @@ auth:
 
 cors:
   allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
+
+# Subway route module (routes, fares, congestion). Unset means mock, which logs a WARN at startup.
+# Set to graph once the real graph implementation is added.
+# linkro:
+#   subway:
+#     module: mock
