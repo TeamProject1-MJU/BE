@@ -1,4 +1,4 @@
-# 지하철 기준 데이터 적재 (#50)
+# 지하철 기준 데이터 적재 (#51)
 
 V10 스키마(#48)에 1~8호선 노선·역·노드·간선을 넣는 시드 마이그레이션이다. `data/build_subway_seed.py`가 입력 파일에서 `V11__seed_subway_data.sql`을 생성한다. congestion_stats는 다루지 않는다.
 
