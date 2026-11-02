@@ -27,6 +27,10 @@ public class MeetingMember extends BaseUuidEntity {
     @Column(name = "joined_at", nullable = false, updatable = false)
     private Instant joinedAt;
 
+    public void changeDepartureStation(Long stationId) {
+        this.departureStationId = Objects.requireNonNull(stationId);
+    }
+
     protected MeetingMember() {}
 
     public MeetingMember(UUID roomId, UUID userId, RoomRole role) {
