@@ -8,6 +8,7 @@ import java.sql.SQLException;
 import java.util.UUID;
 import java.util.function.Supplier;
 import lombok.RequiredArgsConstructor;
+import org.hibernate.Session;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.*;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -68,19 +69,25 @@ public class RoomAccess {
                 || TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
             throw new IllegalStateException("Room locks require an existing read-write transaction");
         }
-        // READ COMMITTED is necessary to see commits made while waiting for the room lock.
-        String isolation = (String) em.createNativeQuery("show transaction_isolation").getSingleResult();
+        Session session = em.unwrap(Session.class);
+        // Query/refresh can otherwise flush or overwrite pre-lock edits. Never discard them silently.
+        // This deliberately rejects pending changes anywhere in this persistence context.
+        if (session.isDirty()) {
+            throw new IllegalStateException("Acquire room locks before making pending entity changes");
+        }
+        // Read the actual database setting, even when Spring isolation metadata is null.
+        String isolation = setting(session, "transaction_isolation");
         if (!"read committed".equals(isolation)) {
             throw new IllegalStateException("Room locks require READ COMMITTED isolation");
         }
-        String previous = (String) em.createNativeQuery("show lock_timeout").getSingleResult();
-        em.createNativeQuery("select set_config('lock_timeout', '3s', true)").getSingleResult();
+        String previous = setting(session, "lock_timeout");
+        lockTimeout(session, "3s");
         try {
             MeetingRoom room = query.get();
-            // Also refresh a room that the caller loaded before waiting. Do not flush stale state.
+            // Refresh clean preloaded state after waiting; pre-lock edits were rejected above.
+            // Hibernate 7.4/PostgreSQL retains the query's NO KEY UPDATE lock without upgrading it.
             em.refresh(room, LockModeType.PESSIMISTIC_WRITE);
-            em.createNativeQuery("select set_config('lock_timeout', :value, true)")
-                    .setParameter("value", previous).getSingleResult();
+            lockTimeout(session, previous);
             return room;
         } catch (RuntimeException exception) {
             for (Throwable cause = exception; cause != null; cause = cause.getCause()) {
@@ -90,6 +97,27 @@ public class RoomAccess {
             }
             throw exception;
         }
+    }
+
+    private static String setting(Session session, String name) {
+        return session.doReturningWork(connection -> {
+            try (var statement = connection.prepareStatement("select current_setting(?)")) {
+                statement.setString(1, name);
+                try (var result = statement.executeQuery()) {
+                    result.next();
+                    return result.getString(1);
+                }
+            }
+        });
+    }
+
+    private static void lockTimeout(Session session, String value) {
+        session.doWork(connection -> {
+            try (var statement = connection.prepareStatement("select set_config('lock_timeout', ?, true)")) {
+                statement.setString(1, value);
+                statement.execute();
+            }
+        });
     }
 
     private static BusinessException error(ErrorCode code) { return new BusinessException(code); }
