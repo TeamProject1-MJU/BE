@@ -237,7 +237,7 @@ chore: Spring Boot 프로젝트 초기 세팅 (#1)
 
 ### 공통 JPA 기반
 
-- 이슈 #33은 기존 V1·V2를 보존하고 V3 닉네임 CHECK와 V4~V8 스키마를 신규 추가합니다. 적용 순서, 제약·삭제 정책, V3 배포 전 점검과 후속 엔티티·API 확인사항은 [약속방 스키마 설계 문서](docs/room-schema-33.md)를 참고합니다. 방 API·서비스·락은 후속 구현 범위입니다.
+- 이슈 #33은 기존 V1·V2를 보존하고 V3 닉네임 CHECK와 V4~V8 스키마, V9 닉네임 제약 이름 변경을 신규 추가합니다. 공유·운영 DB 적용 여부가 불확실한 V3를 보존하며, V9에서 조건과 데이터 변경 없이 이름만 API 부록 A의 `ck_users_nickname`으로 맞춥니다. 적용 순서, 이력 확인 근거, 제약·삭제 정책, V3 배포 전 점검과 후속 엔티티·API 확인사항은 [약속방 스키마 설계 문서](docs/room-schema-33.md)를 참고합니다. 방 API·서비스·락은 후속 구현 범위입니다.
 
 - LinkRo 명세에 따라 UUIDv7을 애플리케이션 객체 생성 시점에 할당하기 위해 uuid-creator를 사용하며, persist 시점 생성 방식은 사용하지 않습니다.
 - 기존 운영 테이블에 `created_at` / `updated_at`의 `nullable=false` 설정을 적용할 때는 기존 데이터 처리와 컬럼 변경을 migration으로 관리해야 합니다. `users` 테이블은 Flyway `V1__create_users.sql`로 관리하며, 기존 DB는 baseline(V1)으로 처리되어 `default now()`가 적용되지 않습니다.

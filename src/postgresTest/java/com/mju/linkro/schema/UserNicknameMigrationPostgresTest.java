@@ -38,6 +38,32 @@ class UserNicknameMigrationPostgresTest {
     }
 
     @Test
+    void renamePreservesConstraintIdentityDefinitionValidationAndLegacyRows() throws SQLException {
+        flyway("8").migrate();
+        insertUser(" 가 ");
+        var users = rows("select * from users order by id");
+        var history = rows("select version, checksum, success from flyway_schema_history order by installed_rank");
+        String constraintDetails = "select oid, pg_get_constraintdef(oid), convalidated from pg_constraint "
+            + "where conrelid = 'users'::regclass and conname = '";
+        var before = rows(constraintDetails + "ck_users_nickname_trimmed_length'");
+        assertThat(before).hasSize(1);
+        assertThat(before.get(0).get(2)).isEqualTo(true);
+
+        var latest = flyway("9");
+        assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);
+        latest.validate();
+        assertThat(rows(constraintDetails + "ck_users_nickname'")).isEqualTo(before);
+        assertThat(rows(constraintDetails + "ck_users_nickname_trimmed_length'")).isEmpty();
+        assertThat(rows("select * from users order by id")).isEqualTo(users);
+        assertThat(rows("select version, checksum, success from flyway_schema_history where version::int <= 8 order by installed_rank"))
+            .isEqualTo(history);
+        var upgradedHistory = rows("select version, checksum, success from flyway_schema_history order by installed_rank");
+        assertThat(latest.migrate().migrationsExecuted).isZero();
+        assertThat(rows("select version, checksum, success from flyway_schema_history order by installed_rank"))
+            .isEqualTo(upgradedHistory);
+    }
+
+    @Test
     void emptyDatabaseMigratesValidatesAndRerunDoesNotChangeHistory() throws SQLException {
         var flyway = flyway(null);
         assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
@@ -105,7 +131,7 @@ class UserNicknameMigrationPostgresTest {
     @ParameterizedTest
     @ValueSource(strings = {"가", " 가 ", "가나다라마바사아자차카타파하가나다라마바", "🚇🚇🚇🚇🚇🚇🚇🚇🚇🚇🚇🚇🚇🚇🚇🚇🚇🚇🚇🚇"})
     void acceptsSignupBoundaryAndUnicodeCodePoints(String nickname) throws SQLException {
-        flyway(null).migrate();
+        flyway("9").migrate();
         insertUser(nickname);
         assertThat(rows("select nickname from users")).containsExactly(List.of(nickname));
     }
@@ -113,33 +139,33 @@ class UserNicknameMigrationPostgresTest {
     @ParameterizedTest
     @ValueSource(strings = {"", " ", "     "})
     void rejectsBlankNicknamesWithNamedCheck(String nickname) {
-        flyway(null).migrate();
-        assertSqlFailure(() -> insertUser(nickname), "23514", "ck_users_nickname_trimmed_length");
+        flyway("9").migrate();
+        assertSqlFailure(() -> insertUser(nickname), "23514", "ck_users_nickname\"");
     }
 
     @Test
     void preservesNotNullAndVarcharLimit() {
-        flyway(null).migrate();
+        flyway("9").migrate();
         assertSqlFailure(() -> insertUser(null), "23502", "nickname");
         assertSqlFailure(() -> insertUser("가".repeat(21)), "22001", "character varying(20)");
     }
 
     @Test
     void updateAlsoEnforcesCheckAndRejectedUpdatePreservesValue() throws SQLException {
-        flyway(null).migrate();
+        flyway("9").migrate();
         insertUser("정상");
         assertSqlFailure(() -> {
             try (var connection = connect(); var statement = connection.createStatement()) {
                 statement.executeUpdate("update users set nickname = '   '");
             }
-        }, "23514", "ck_users_nickname_trimmed_length");
+        }, "23514", "ck_users_nickname\"");
         assertThat(rows("select nickname from users")).containsExactly(List.of("정상"));
     }
 
     private Flyway flyway(String target) {
         var configuration = Flyway.configure().dataSource(url, POSTGRES.getUsername(), POSTGRES.getPassword())
             .locations("classpath:db/migration").cleanDisabled(true);
-        // Keep the V3 regression suite fixed; RoomSchemaMigrationPostgresTest covers latest.
+        // Default to historical V3 regressions; explicit targets also cover the V9 contract.
         configuration.target(target == null ? "3" : target);
         return configuration.load();
     }

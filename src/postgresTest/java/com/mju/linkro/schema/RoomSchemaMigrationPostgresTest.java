@@ -54,8 +54,10 @@ class RoomSchemaMigrationPostgresTest {
     @Test
     void freshDatabaseMigratesValidatesAndRerunsWithoutChanges() throws SQLException {
         var flyway = flyway(null);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(8);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(9);
         flyway.validate();
+        assertThat(rows("select conname from pg_constraint where conrelid = 'users'::regclass and contype = 'c'"))
+            .containsExactly(List.of("ck_users_nickname"));
         var history = rows("select version, checksum, success from flyway_schema_history order by installed_rank");
         assertThat(flyway.migrate().migrationsExecuted).isZero();
         assertThat(rows("select version, checksum, success from flyway_schema_history order by installed_rank")).isEqualTo(history);
@@ -73,7 +75,7 @@ class RoomSchemaMigrationPostgresTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"1", "2", "3"})
+    @ValueSource(strings = {"1", "2", "3", "8"})
     void upgradePreservesAllLegacyRowsAndAppliedChecksums(String version) throws SQLException {
         flyway(version).migrate();
         UUID user = user();
@@ -85,7 +87,7 @@ class RoomSchemaMigrationPostgresTest {
         var tokens = version.equals("1") ? List.of() : rows("select * from refresh_tokens order by id");
         var history = rows("select version, checksum from flyway_schema_history order by installed_rank");
         var latest = flyway(null);
-        assertThat(latest.migrate().migrationsExecuted).isEqualTo(8 - Integer.parseInt(version));
+        assertThat(latest.migrate().migrationsExecuted).isEqualTo(9 - Integer.parseInt(version));
         latest.validate();
         assertThat(rows("select * from users order by id")).isEqualTo(users);
         assertThat(rows("select * from refresh_tokens order by id")).isEqualTo(tokens);
