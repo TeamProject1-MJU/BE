@@ -54,7 +54,7 @@ class RoomSchemaMigrationPostgresTest {
     @Test
     void freshDatabaseMigratesValidatesAndRerunsWithoutChanges() throws SQLException {
         var flyway = flyway(null);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(9);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(10);
         flyway.validate();
         assertThat(rows("select conname from pg_constraint where conrelid = 'users'::regclass and contype = 'c'"))
             .containsExactly(List.of("ck_users_nickname"));
@@ -62,10 +62,10 @@ class RoomSchemaMigrationPostgresTest {
         assertThat(flyway.migrate().migrationsExecuted).isZero();
         assertThat(rows("select version, checksum, success from flyway_schema_history order by installed_rank")).isEqualTo(history);
         assertThat(rows("select tablename from pg_tables where schemaname = 'public' order by tablename"))
-            .containsExactly(List.of("flyway_schema_history"), List.of("meeting_members"), List.of("meeting_rooms"),
-                List.of("recommendation_results"), List.of("recommendation_runs"), List.of("refresh_tokens"),
-                List.of("room_messages"), List.of("station_proposal_votes"), List.of("station_proposals"),
-                List.of("stations"), List.of("users"));
+            .containsExactly(List.of("congestion_stats"), List.of("flyway_schema_history"), List.of("meeting_members"),
+                List.of("meeting_rooms"), List.of("recommendation_results"), List.of("recommendation_runs"), List.of("refresh_tokens"),
+                List.of("room_messages"), List.of("station_connections"), List.of("station_lines"), List.of("station_proposal_votes"),
+                List.of("station_proposals"), List.of("stations"), List.of("subway_lines"), List.of("users"));
         assertThat(rows("select column_name from information_schema.columns where table_name = 'meeting_rooms' and column_name = 'status'"))
             .isEmpty();
         assertThat(rows("select column_default from information_schema.columns where table_name in "
@@ -87,7 +87,7 @@ class RoomSchemaMigrationPostgresTest {
         var tokens = version.equals("1") ? List.of() : rows("select * from refresh_tokens order by id");
         var history = rows("select version, checksum from flyway_schema_history order by installed_rank");
         var latest = flyway(null);
-        assertThat(latest.migrate().migrationsExecuted).isEqualTo(9 - Integer.parseInt(version));
+        assertThat(latest.migrate().migrationsExecuted).isEqualTo(10 - Integer.parseInt(version));
         latest.validate();
         assertThat(rows("select * from users order by id")).isEqualTo(users);
         assertThat(rows("select * from refresh_tokens order by id")).isEqualTo(tokens);
