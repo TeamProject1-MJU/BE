@@ -7,3 +7,6 @@ build/
 ### Cursor / VS Code ###
 .vscode/
 .cursor/
+
+### Kakao probe raw responses (must not be committed) ###
+scripts/kakao_probe/scratch/
