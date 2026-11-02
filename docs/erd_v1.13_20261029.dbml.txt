@@ -1,0 +1,294 @@
+Enum room_member_role {
+  OWNER
+  MEMBER
+}
+
+Enum connection_type {
+  RIDE
+  TRANSFER
+}
+
+Enum direction_code {
+  UP
+  DOWN
+  INNER
+  OUTER
+  LOOP
+}
+
+Enum day_type {
+  WEEKDAY
+  SATURDAY
+  SUNDAY
+}
+
+Enum congestion_source {
+  PREDICTED
+  MOCK
+}
+
+Enum sender_type {
+  USER
+  AI
+  SYSTEM
+}
+
+Enum reason_source {
+  AI
+  TEMPLATE
+}
+
+Enum recommendation_criterion {
+  TIME
+  FARE
+  DISTANCE
+}
+
+// LinkRo ERD v1.13 (2026-10-29) - 개념설계서(concept_final) + 팀 최종 결정 반영
+// 플랫폼: iOS 앱, 카카오 로그인. 경로 API: 카카오맵 REST API(혼자 이동 6.1의 경로·요금, 대중교통 경로 조회). AI: OpenAI API
+// 다익스트라(우리 그래프)는 중간역 선정과, 6.1·약속역 경로에서 카카오 호출이 실패했을 때의 대체 경로에만 쓴다. 각자 그 역까지 실제 경로는 카카오맵 REST API(6.1)로 찾고 응답은 저장하지 않는다
+// 표지판 촬영·AI 이동 방향 안내: 개념설계서에 저장 요구 없음 -> 테이블 없음(요청 시 처리 후 폐기)
+// 혼잡도 5단계(쾌적/여유/보통/혼잡/매우 혼잡)와 라벨은 AI가 계산한 값을 그대로 congestion_level·congestion_level_label에 저장(MOCK은 적재 시 같은 기준으로 채움), 서버는 다시 계산하지 않음
+// 요금: 혼자 이동(6.1)은 카카오맵 REST API 응답 요금을 쓴다. 중간역 추천과 6.1 카카오 실패 시 대체 경로에서만 RIDE 간선 distance_m 합으로 서버가 자체 계산(예상 요금, 저장하지 않음)
+// enum 컬럼은 varchar + CHECK로 만든다. DBML로 표현할 수 없는 CHECK·부분 유니크 인덱스는 linkro_constraints.sql(DDL)에 둔다
+
+Table users {
+  id         uuid        [pk, note: 'UUIDv7']
+  kakao_id   varchar(64) [not null, unique]
+  nickname   varchar(20) [not null]
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  deleted_at timestamptz [note: '탈퇴 시각 (soft delete). 탈퇴 시 서버가 한 트랜잭션에서 참여 중인 모든 방에서 나가기 처리(방 락 -> 멤버 삭제 -> 방장이면 joined_at 순 승계 -> 멤버 0명이면 방 삭제)하고 리프레시 토큰을 전부 폐기. 같은 카카오 계정으로 재로그인하면 계정만 복구되고 방은 복구되지 않음']
+}
+
+Table refresh_tokens {
+  id         uuid        [pk, note: 'UUIDv7']
+  user_id    uuid        [not null]
+  family_id  uuid        [not null, note: '같은 로그인에서 회전된 토큰 묶음']
+  token_hash char(64)    [not null, unique, note: 'SHA-256 hex. 원문 토큰은 저장하지 않음']
+  expires_at timestamptz [not null]
+  revoked_at timestamptz
+  created_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    user_id
+    family_id
+  }
+
+  Note: '결정 7: 리프레시 토큰 채택, 사용 시마다 회전(rotation). 회전 시 기존 행 revoked_at 기록 후 같은 family_id로 새 행 발급'
+}
+
+Table subway_lines {
+  id         bigint      [pk, increment]
+  line_code  varchar(10) [not null, unique]
+  name       varchar(20) [not null]
+  color      char(7)     [not null, note: '#RRGGBB']
+  sort_order int         [not null]
+}
+
+Table stations {
+  id           bigint             [pk, increment]
+  name         varchar(40)        [not null]
+  latitude     "double precision" [not null]
+  longitude    "double precision" [not null]
+  is_supported boolean            [not null, default: true, note: 'false = 공사 데이터 없음 (미제공 표시). 혼자 이동(6.1)의 출발·도착역, 추천 출발지, 후보역에서 모두 제외 (서버 검증)']
+
+  indexes {
+    name
+    (latitude, longitude)
+  }
+}
+
+Table station_lines {
+  id           bigint      [pk, increment, note: '그래프 노드 = (역, 노선)']
+  station_id   bigint      [not null]
+  line_id      bigint      [not null]
+  station_code varchar(10) [not null]
+  seq          int         [not null]
+  branch_code  varchar(20) [not null, default: 'MAIN']
+
+  indexes {
+    (station_id, line_id) [unique]
+    (line_id, station_code) [unique]
+    (line_id, branch_code, seq) [unique]
+  }
+}
+
+Table station_connections {
+  id                   bigint          [pk, increment]
+  from_station_line_id bigint          [not null]
+  to_station_line_id   bigint          [not null]
+  connection_type      connection_type [not null]
+  direction            direction_code  [note: 'RIDE면 필수, TRANSFER면 null (CHECK)']
+  travel_seconds       int             [not null, note: 'RIDE: OA-12034 역간 소요시간. TRANSFER: 데이터셋 15044419 환승소요시간(mm:ss)을 초로 변환']
+  distance_m           int             [not null, note: 'RIDE: OA-12034 역간 거리(edges.csv, 코레일 구간 없음). 자체 요금 계산 거리 = 경로의 RIDE distance_m 합(기본 1,550원, 10km 초과 5km마다 +100원, 50km 초과 8km마다 +100원). 자체 계산은 중간역 추천과 6.1 카카오 실패 시 대체 경로에서만 쓰고, 6.1 정상 응답은 카카오맵 REST API 요금을 쓴다. TRANSFER: 데이터셋 15044419 환승거리(m), 요금 거리에서 제외']
+
+  indexes {
+    (from_station_line_id, to_station_line_id) [unique]
+    to_station_line_id
+  }
+
+  Note: '''
+  TRANSFER 행 출처: 서울교통공사_환승역거리 소요시간 정보_20260831 (공공데이터포털 15044419, 제공기관 서울교통공사).
+  방향별 데이터이므로 A->B와 B->A 값이 다를 수 있음. 적재는 data/build_transfers.py -> transfers.csv.
+  역명이 다른 환승역 매핑: 4호선 총신대입구 = 7호선 이수.
+  데이터에 없는 환승 쌍: 반대 방향 값 사용(현재 까치산 2->5호선 1건 = 5->2 값 14초, 17m). 반대 방향도 없으면 데이터 전체 중앙값(92초, 110m).
+  요금 계산 거리에는 RIDE 간선 distance_m만 합산하고 TRANSFER distance_m는 제외.
+  '''
+}
+
+Table congestion_stats {
+  id              bigint            [pk, increment]
+  station_line_id bigint            [not null]
+  direction       direction_code    [not null]
+  day_type        day_type          [not null]
+  slot_start      time              [not null, note: '30분 단위, 06:00~23:00 시작 슬롯만 (CHECK)']
+  congestion_pct  numeric(5,1)      [not null, note: '정원 대비 %. PREDICTED는 AI가 계산한 값, MOCK은 AI 파일 연동 전 임시 데이터']
+  congestion_level       varchar(12) [not null, note: 'COMFORTABLE/RELAXED/NORMAL/CROWDED/VERY_CROWDED. PREDICTED는 AI 파일 값 그대로, MOCK은 적재 시 같은 기준으로 채움. 쾌적 [0,35), 여유 [35,50), 보통 [50,100), 혼잡 [100,150), 매우 혼잡 [150,∞) (하한 포함·상한 미포함, pct와 일치 CHECK)']
+  congestion_level_label varchar(10) [not null, note: '쾌적/여유/보통/혼잡/매우 혼잡 (AI 파일 값 그대로)']
+  source          congestion_source [not null, note: '조회 우선순위 PREDICTED > MOCK']
+  model_version   varchar(20)       [note: 'PREDICTED일 때만 값 있음 (CHECK)']
+
+  indexes {
+    (station_line_id, direction, day_type, slot_start, source) [unique]
+  }
+
+  Note: 'PREDICTED = 팀 AI 모델 예측값(학습 자료: 서울교통공사 OA-12928, 30분 평균, 1~8호선). 공사 실측값(ACTUAL)은 적재하지 않는다'
+}
+
+Table meeting_rooms {
+  id                  uuid        [pk, note: 'UUIDv7']
+  room_code           varchar(6)  [not null, unique, note: 'CHECK ^[A-Z0-9]{6}$']
+  name                varchar(30) [not null]
+  created_by          uuid        [not null]
+  max_members         int         [not null, default: 4, note: '정원 4명 고정 (CHECK = 4). 현재 인원이 1명(방 생성자 혼자)인 방은 가능. 참여 시 서버가 방 락 안에서 현재 인원 < 4를 검사. 마지막 참여자가 나가면 서버가 meeting_rooms 행 삭제(하위 테이블 cascade)']
+  appointment_at      timestamptz
+  selected_station_id bigint      [note: '방장이 최종 확정한 약속역. null = 미확정 또는 해제. 투표 결과와 무관하게 방장이 결정하며, 확정 후 방장이 변경·해제 가능']
+  confirmed_at        timestamptz [note: '확정·변경 시 현재 시각으로 갱신, 해제 시 null. selected_station_id와 null 여부 일치 (CHECK)']
+  created_at          timestamptz [not null, default: `now()`]
+  updated_at          timestamptz [not null, default: `now()`]
+}
+
+Table meeting_members {
+  id                   uuid             [pk, note: 'UUIDv7. 방당 OWNER 1명 (room_id 부분 유니크 인덱스, role이 OWNER인 행만)']
+  room_id              uuid             [not null]
+  user_id              uuid             [not null]
+  role                 room_member_role [not null, default: 'MEMBER']
+  departure_station_id bigint           [note: 'is_supported = true인 역만 가능 (서버 검증)']
+  joined_at            timestamptz      [not null, default: `now()`]
+
+  indexes {
+    (room_id, user_id) [unique, note: '투표 테이블 복합 FK 대상']
+    user_id
+    (room_id, joined_at, id)
+  }
+
+  Note: '멤버 행이 삭제되면(나가기·회원 탈퇴) 그 멤버의 투표도 복합 FK cascade로 함께 삭제된다. 탈퇴한 사용자는 어떤 방에도 멤버로 남지 않는다'
+}
+
+Table station_proposals {
+  id               uuid        [pk, note: 'UUIDv7']
+  room_id          uuid        [not null]
+  station_id       bigint      [not null]
+  proposed_by      uuid        [not null]
+  source_result_id uuid        [note: '추천 결과에서 제안한 경우 그 결과 카드의 ID, 직접 제안이면 null']
+  created_at       timestamptz [not null, default: `now()`]
+
+  indexes {
+    (room_id, station_id) [unique]
+    (id, room_id) [unique, note: '투표 복합 FK 대상']
+    (room_id, created_at)
+    proposed_by
+    source_result_id
+  }
+
+  Note: '결정 2: 방당 후보역 최대 9개 (서버 검증)'
+}
+
+Table station_proposal_votes {
+  id          uuid        [pk, note: 'UUIDv7']
+  room_id     uuid        [not null, note: '방당 1인 1표 제약용']
+  proposal_id uuid        [not null]
+  user_id     uuid        [not null, note: '(room_id, user_id)가 meeting_members를 참조하므로 해당 방 참여자만 투표 가능 (DB 보장)']
+  created_at  timestamptz [not null, default: `now()`]
+
+  indexes {
+    (room_id, user_id) [unique]
+    proposal_id
+  }
+
+  Note: '결정 3: 참고용 투표. 방당 참여자 1인 1표. 최종 결정은 방장(meeting_rooms.selected_station_id). 투표는 변경·취소 불가: INSERT만 허용, UPDATE/DELETE 금지 (서버 규칙). 예외: 방·후보 삭제, 멤버 나가기·탈퇴에 따른 cascade 삭제'
+}
+
+Table recommendation_runs {
+  id           uuid        [pk, note: 'UUIDv7']
+  room_id      uuid        [not null]
+  requested_by uuid        [not null]
+  criteria     jsonb       [not null, note: 'jsonb 키: conditionText(사용자 자연어 원문, null 가능), filter(입력 필터, null 가능), appliedConstraints(서버·AI 해석 결과, API 응답값), conditionParseFailed(boolean, AI 조건 해석 실패 여부. 8.2·8.3 조회 때 안내 문구 재생성용), appointmentAt(실행 시점 방의 appointment_at, 없으면 null), participants(실행 시점 멤버 스냅샷 [{userId, departureStationId}]). filter가 conditionText보다 우선. 응답의 isStale·staleReasons(APPOINTMENT_CHANGED/MEMBERS_CHANGED)는 컬럼이 아니라 조회 때 현재 appointment_at·멤버(userId, departureStationId) 집합을 criteria.appointmentAt·participants와 비교해 계산하는 값(저장 안 함, null 둘 다면 같음, 시각은 Instant 비교. participants.departureStationId는 null·null이면 같고 null·값이면 다름. 방의 최근 실행이 아니면 isStale·staleReasons는 null(판정 안 함, false 아님). 최근 실행 = 같은 room_id에서 ORDER BY created_at DESC, id DESC LIMIT 1(id는 UUIDv7)). 약속 시각 변경 시 자동 재추천 없음']
+  created_at   timestamptz [not null, default: `now()`]
+
+  indexes {
+    (room_id, created_at)
+  }
+}
+
+Table recommendation_results {
+  id            uuid                     [pk, note: 'UUIDv7. API의 resultId']
+  run_id        uuid                     [not null]
+  criterion     recommendation_criterion [not null]
+  station_id    bigint                   [not null]
+  metric_value  numeric(10,2)            [not null, note: 'TIME=분, FARE=원, DISTANCE=m']
+  trips         jsonb                    [not null, note: '참여자별 이동 정보 배열(API participantTimes 스냅샷). 모든 값은 다익스트라 기준 추천용 추정치(예상 시간·예상 요금)이며 카카오 응답값이 아님. 원소 키: userId, nickname, departureStationId(필수), travelMinutes, transferCount, fareWon, distanceM, departureAt(출발 예정 시각 = appointment_at − travelMinutes, appointment_at이 없으면 요청 시각), congestion({pct, level, levelLabel}: 경로 정차역 혼잡도 최댓값), segments(API participantTimes[].segments 형식 그대로). 응답의 departureStation{id, name}은 departureStationId로 조회 시 채움']
+  nearby        jsonb                    [not null, note: '앞뒤 역 목록']
+  reason        text                     [not null]
+  reason_source reason_source            [not null, note: 'AI = OpenAI API 생성, TEMPLATE = 서버 템플릿']
+
+  indexes {
+    (run_id, criterion) [unique]
+  }
+}
+
+Table room_messages {
+  id          uuid        [pk, note: 'UUIDv7']
+  room_id     uuid        [not null]
+  sender_id   uuid        [note: 'USER일 때만 값 있음 (CHECK)']
+  sender_type sender_type [not null]
+  content     text        [not null]
+  meta        jsonb       [note: '확장 필드. 카카오 응답값 저장 금지']
+  created_at  timestamptz [not null, default: `now()`]
+
+  indexes {
+    (room_id, id)
+  }
+}
+
+Ref: station_lines.station_id > stations.id
+Ref: station_lines.line_id > subway_lines.id
+Ref: station_connections.from_station_line_id > station_lines.id
+Ref: station_connections.to_station_line_id > station_lines.id
+Ref: congestion_stats.station_line_id > station_lines.id
+
+Ref: meeting_rooms.created_by > users.id
+Ref: meeting_rooms.selected_station_id > stations.id
+
+Ref: meeting_members.room_id > meeting_rooms.id [delete: cascade]
+Ref: meeting_members.user_id > users.id
+Ref: meeting_members.departure_station_id > stations.id
+
+Ref: station_proposals.room_id > meeting_rooms.id [delete: cascade]
+Ref: station_proposals.station_id > stations.id
+Ref: station_proposals.proposed_by > users.id
+Ref: station_proposals.source_result_id > recommendation_results.id [delete: set null]
+
+Ref: station_proposal_votes.(proposal_id, room_id) > station_proposals.(id, room_id) [delete: cascade]
+Ref: station_proposal_votes.room_id > meeting_rooms.id [delete: cascade]
+Ref: station_proposal_votes.(room_id, user_id) > meeting_members.(room_id, user_id) [delete: cascade]
+
+Ref: recommendation_runs.room_id > meeting_rooms.id [delete: cascade]
+Ref: recommendation_runs.requested_by > users.id
+Ref: recommendation_results.run_id > recommendation_runs.id [delete: cascade]
+Ref: recommendation_results.station_id > stations.id
+
+Ref: room_messages.room_id > meeting_rooms.id [delete: cascade]
+Ref: room_messages.sender_id > users.id
+Ref: refresh_tokens.user_id > users.id

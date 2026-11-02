@@ -28,10 +28,19 @@ jobs:
       - name: Run tests
         run: ./gradlew test --no-daemon
 
+      # Testcontainers creates a disposable PostgreSQL 16 database, never the application DB.
+      # No disabledWithoutDocker/optional flag: a missing Docker daemon fails this required step.
+      - name: Run PostgreSQL migration tests
+        run: ./gradlew postgresTest --no-daemon
+
       - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: build/reports/tests/test
+          path: |
+            build/reports/tests/test
+            build/reports/tests/postgresTest
+            build/test-results/test
+            build/test-results/postgresTest
           retention-days: 7

@@ -44,3 +44,33 @@ dependencies {
 tasks.named('test') {
 	useJUnitPlatform()
 }
+
+sourceSets {
+	postgresTest {
+		compileClasspath += sourceSets.main.output
+		runtimeClasspath += sourceSets.main.output
+	}
+}
+
+configurations {
+	postgresTestImplementation.extendsFrom testImplementation
+	postgresTestRuntimeOnly.extendsFrom testRuntimeOnly
+}
+
+dependencies {
+	postgresTestImplementation 'org.testcontainers:testcontainers-postgresql'
+	postgresTestImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+}
+
+tasks.register('postgresTest', Test) {
+	description = 'Runs Flyway migration tests on an isolated PostgreSQL 16 container; Docker is required.'
+	group = 'verification'
+	testClassesDirs = sourceSets.postgresTest.output.classesDirs
+	classpath = sourceSets.postgresTest.runtimeClasspath
+	useJUnitPlatform()
+	shouldRunAfter tasks.named('test')
+}
+
+tasks.named('check') {
+	dependsOn tasks.named('postgresTest')
+}
