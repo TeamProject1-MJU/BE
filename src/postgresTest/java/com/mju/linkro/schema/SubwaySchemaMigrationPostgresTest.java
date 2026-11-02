@@ -56,10 +56,14 @@ class SubwaySchemaMigrationPostgresTest {
     @Test
     void freshDatabaseMigratesToV10ValidatesAndRerunsWithoutChanges() throws SQLException {
         var flyway = flyway(null);
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(10);
+        // Count from resources so later migrations do not break this test.
+        int pending = flyway.info().pending().length;
+        assertThat(pending).isGreaterThanOrEqualTo(10);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(pending);
+        assertThat(flyway.info().pending()).isEmpty();
         flyway.validate();
         var history = rows("select version, checksum, success from flyway_schema_history order by installed_rank");
-        assertThat(history.get(history.size() - 1).subList(0, 1)).containsExactly("10");
+        assertThat(rows("select success from flyway_schema_history where version = '10'")).containsExactly(List.of(true));
         assertThat(flyway.migrate().migrationsExecuted).isZero();
         assertThat(rows("select version, checksum, success from flyway_schema_history order by installed_rank")).isEqualTo(history);
         assertThat(rows("select count(*) from pg_type where typtype = 'e'")).containsExactly(List.of(0L));
@@ -81,7 +85,11 @@ class SubwaySchemaMigrationPostgresTest {
         var history = rows("select version, checksum from flyway_schema_history order by installed_rank");
 
         var latest = flyway(null);
-        assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);
+        int pending = latest.info().pending().length;
+        assertThat(pending).isGreaterThanOrEqualTo(1);
+        assertThat(latest.migrate().migrationsExecuted).isEqualTo(pending);
+        assertThat(latest.info().pending()).isEmpty();
+        assertThat(rows("select success from flyway_schema_history where version = '10'")).containsExactly(List.of(true));
         latest.validate();
 
         var after = new ArrayList<List<List<Object>>>();
@@ -325,8 +333,8 @@ class SubwaySchemaMigrationPostgresTest {
         line1 = id("insert into subway_lines(line_code,name,color,sort_order) values ('1','1호선','#0052A4',1) returning id");
         line2 = id("insert into subway_lines(line_code,name,color,sort_order) values ('2','2호선','#00a84d',2) returning id");
         cityHallStation = station("시청");
-        cityHall1 = id("insert into station_lines(station_id,line_id,station_code,seq) values (" + cityHallStation + "," + line1
-            + ",'132',1) returning id");
+        cityHall1 = id("insert into station_lines(station_id,line_id,station_code,seq) values (?,?,'132',1) returning id",
+            cityHallStation, line1);
         cityHall2 = stationLine(cityHallStation, line2, "201", 1, "MAIN");
         euljiro2 = stationLine(station("을지로입구"), line2, "202", 2, "MAIN");
         seongsu2 = stationLine(station("성수"), line2, "211", 11, "MAIN");
@@ -348,7 +356,7 @@ class SubwaySchemaMigrationPostgresTest {
         exec("insert into station_connections(from_station_line_id,to_station_line_id,connection_type,travel_seconds,distance_m) "
             + "values (?,?,'TRANSFER',90,110)", cityHall2, cityHall1);
         congestion = id("insert into congestion_stats(station_line_id,direction,day_type,slot_start,congestion_pct,congestion_level,"
-            + "congestion_level_label,source) values (" + cityHall2 + ",'INNER','WEEKDAY',time '06:00',12.5,'COMFORTABLE','쾌적','MOCK') returning id");
+            + "congestion_level_label,source) values (?,'INNER','WEEKDAY',time '06:00',12.5,'COMFORTABLE','쾌적','MOCK') returning id", cityHall2);
         exec("insert into congestion_stats(station_line_id,direction,day_type,slot_start,congestion_pct,congestion_level,congestion_level_label,source,model_version) "
             + "values (?,'INNER','WEEKDAY',time '06:00',20.0,'COMFORTABLE','쾌적','PREDICTED','v1.0')", cityHall2);
         exec("insert into congestion_stats(station_line_id,direction,day_type,slot_start,congestion_pct,congestion_level,congestion_level_label,source) "
@@ -356,12 +364,12 @@ class SubwaySchemaMigrationPostgresTest {
     }
 
     private long station(String name) throws SQLException {
-        return id("insert into stations(name,latitude,longitude) values ('" + name + "',37.5,127.0) returning id");
+        return id("insert into stations(name,latitude,longitude) values (?,37.5,127.0) returning id", name);
     }
 
     private long stationLine(long stationId, long lineId, String code, int seq, String branch) throws SQLException {
-        return id("insert into station_lines(station_id,line_id,station_code,seq,branch_code) values (" + stationId + "," + lineId
-            + ",'" + code + "'," + seq + ",'" + branch + "') returning id");
+        return id("insert into station_lines(station_id,line_id,station_code,seq,branch_code) values (?,?,?,?,?) returning id",
+            stationId, lineId, code, seq, branch);
     }
 
     private void ride(long from, long to, String direction) throws SQLException {
@@ -369,8 +377,8 @@ class SubwaySchemaMigrationPostgresTest {
             + "values (?,?,'RIDE',?,90,1000)", from, to, direction);
     }
 
-    private long id(String insertReturningId) throws SQLException {
-        return ((Number) rows(insertReturningId).get(0).get(0)).longValue();
+    private long id(String insertReturningId, Object... params) throws SQLException {
+        return ((Number) rows(insertReturningId, params).get(0).get(0)).longValue();
     }
 
     private static UUID id() { return UuidCreator.getTimeOrderedEpoch(); }
