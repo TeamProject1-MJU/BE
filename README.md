@@ -102,6 +102,21 @@ Copy-Item .env.example .env
 
 또는 IntelliJ에서 `LinkroApplication.java` 실행
 
+### 5. 테스트와 검증 실행 조건
+
+JDK 17과 Gradle Wrapper를 사용합니다. Windows에서는 `./gradlew` 대신 `.\gradlew.bat`을 사용합니다.
+
+| 명령 | 검증 범위 | Docker 필요 여부 |
+| --- | --- | --- |
+| `./gradlew test` | 기존 일반 테스트(H2 및 mock 기반) | 필요 없음 |
+| `./gradlew postgresTest` | 독립 PostgreSQL 16에서 Flyway 전체 마이그레이션·제약·삭제 관계 검증 | 필요 |
+| `./gradlew check` | 일반 테스트와 postgresTest | 필요 |
+| `./gradlew build` | 빌드·패키징과 check | 필요 |
+
+Docker가 필요한 명령은 데몬이 실행 중이고 현재 사용자에게 접근 권한이 있어야 합니다. Testcontainers가 임시 PostgreSQL 컨테이너를 생성하며, PostgreSQL 검증은 Docker가 없으면 스킵하지 않고 실패합니다. 애플리케이션의 개발·운영 DB나 기존 볼륨을 사용하지 않습니다.
+
+CI는 `dev` 대상 PR과 `dev` push에서 `test` 다음에 `postgresTest`를 필수 실행합니다. PostgreSQL 단계에 조건부 스킵이나 `continue-on-error`가 없으며 실패하면 CI도 실패합니다. 실행 조건과 배포 전 데이터 점검은 [약속방 스키마 설계 문서](docs/room-schema-33.md)를 참고합니다.
+
 ---
 
 ## 🌐 실행 확인
@@ -222,7 +237,7 @@ chore: Spring Boot 프로젝트 초기 세팅 (#1)
 
 ### 공통 JPA 기반
 
-- 이슈 #33의 방·멤버·후보·투표 및 정식 선행 스키마 적용 순서, 삭제 정책, 닉네임 CHECK 사전 점검과 실제 PostgreSQL 검증 결과는 [방 스키마 작업 문서](docs/room-schema-33.md)를 참고합니다. 방 API·서비스·락은 후속 구현 범위입니다.
+- 이슈 #33은 기존 V1·V2를 보존하고 V3 닉네임 CHECK와 V4~V8 스키마를 신규 추가합니다. 적용 순서, 제약·삭제 정책, V3 배포 전 점검과 후속 엔티티·API 확인사항은 [약속방 스키마 설계 문서](docs/room-schema-33.md)를 참고합니다. 방 API·서비스·락은 후속 구현 범위입니다.
 
 - LinkRo 명세에 따라 UUIDv7을 애플리케이션 객체 생성 시점에 할당하기 위해 uuid-creator를 사용하며, persist 시점 생성 방식은 사용하지 않습니다.
 - 기존 운영 테이블에 `created_at` / `updated_at`의 `nullable=false` 설정을 적용할 때는 기존 데이터 처리와 컬럼 변경을 migration으로 관리해야 합니다. `users` 테이블은 Flyway `V1__create_users.sql`로 관리하며, 기존 DB는 baseline(V1)으로 처리되어 `default now()`가 적용되지 않습니다.
