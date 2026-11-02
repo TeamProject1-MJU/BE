@@ -139,7 +139,8 @@ class UserNicknameMigrationPostgresTest {
     private Flyway flyway(String target) {
         var configuration = Flyway.configure().dataSource(url, POSTGRES.getUsername(), POSTGRES.getPassword())
             .locations("classpath:db/migration").cleanDisabled(true);
-        if (target != null) { configuration.target(target); }
+        // Keep the V3 regression suite fixed; RoomSchemaMigrationPostgresTest covers latest.
+        configuration.target(target == null ? "3" : target);
         return configuration.load();
     }
 
