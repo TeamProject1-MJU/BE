@@ -215,6 +215,54 @@ class SubwaySeedMigrationPostgresTest {
         assertThat(rows("select version from flyway_schema_history where version = '11' and success")).isEmpty();
     }
 
+    @Test
+    void v12RenamesDanggogaeToBulamsanWithoutTouchingTheGraph() throws SQLException {
+        seed();
+        var renamed = rows("select id, latitude, longitude, is_supported from stations where name = '당고개'");
+        assertThat(renamed).hasSize(1);
+        long id = ((Number) renamed.get(0).get(0)).longValue();
+        var otherStations = rows("select * from stations where id <> " + id + " order by id");
+        var stationLines = rows("select * from station_lines order by id");
+        var connections = rows("select * from station_connections order by id");
+
+        var latest = flyway("12");
+        assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);
+        latest.validate();
+
+        assertThat(rows("select id, latitude, longitude, is_supported from stations where name = '불암산'")).isEqualTo(renamed);
+        assertThat(count("select count(*) from stations where name = '당고개'")).isZero();
+        assertThat(count("select count(*) from stations")).isEqualTo(240);
+        assertThat(count("select count(*) from station_lines")).isEqualTo(277);
+        assertThat(count("select count(*) from station_connections")).isEqualTo(614);
+        assertThat(rows("select * from stations where id <> " + id + " order by id")).isEqualTo(otherStations);
+        assertThat(rows("select * from station_lines order by id")).isEqualTo(stationLines);
+        assertThat(rows("select * from station_connections order by id")).isEqualTo(connections);
+        assertThat(rows("select l.line_code, sl.station_code, sl.seq, sl.branch_code from station_lines sl "
+            + "join subway_lines l on l.id = sl.line_id where sl.station_id = " + id))
+            .containsExactly(List.of("4", "409", 1, "MAIN"));
+    }
+
+    @Test
+    void v12StopsWhenBulamsanAlreadyExistsOrDanggogaeIsMissing() throws SQLException {
+        seed();
+        try (var connection = connect(); var statement = connection.createStatement()) {
+            statement.execute("insert into stations(name, latitude, longitude) values ('불암산', 37.5, 127.0)");
+        }
+        assertThatThrownBy(() -> flyway("12").migrate())
+            .isInstanceOf(FlywayException.class)
+            .hasMessageContaining("V12 expects exactly one 당고개 and no 불암산 station, found 1 and 1");
+        assertThat(count("select count(*) from stations where name = '당고개'")).isEqualTo(1);
+        assertThat(rows("select version from flyway_schema_history where version = '12' and success")).isEmpty();
+
+        try (var connection = connect(); var statement = connection.createStatement()) {
+            statement.execute("delete from stations where name = '불암산'");
+            statement.execute("update stations set name = '당고개역' where name = '당고개'");
+        }
+        assertThatThrownBy(() -> flyway("12").migrate())
+            .isInstanceOf(FlywayException.class)
+            .hasMessageContaining("found 0 and 0");
+    }
+
     private void seed() throws SQLException {
         flyway("11").migrate();
     }
