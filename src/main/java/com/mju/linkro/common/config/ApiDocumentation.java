@@ -3,6 +3,7 @@ package com.mju.linkro.common.config;
 import com.mju.linkro.auth.dto.*;
 import com.mju.linkro.common.response.ApiResponse;
 import com.mju.linkro.room.dto.RoomResponses;
+import com.mju.linkro.subway.station.dto.StationResponses;
 import com.mju.linkro.user.dto.*;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.util.List;
@@ -31,6 +32,12 @@ public final class ApiDocumentation {
     public record RoomMembers(@Schema(description = "항상 true", example = "true") boolean success, List<RoomResponses.Member> data) {}
     @Schema(name = "RoomInviteCodeResponse", requiredProperties = {"success", "data"})
     public record RoomInviteCode(@Schema(description = "항상 true", example = "true") boolean success, RoomResponses.InviteCode data) {}
+    @Schema(name = "SubwayLineListResponse", requiredProperties = {"success", "data"})
+    public record LineList(@Schema(description = "항상 true", example = "true") boolean success, List<StationResponses.Line> data) {}
+    @Schema(name = "StationPageResponse", requiredProperties = {"success", "data"})
+    public record StationPageResponse(@Schema(description = "항상 true", example = "true") boolean success, StationResponses.StationPage data) {}
+    @Schema(name = "StationDetailResponse", requiredProperties = {"success", "data"})
+    public record StationDetail(@Schema(description = "항상 true", example = "true") boolean success, StationResponses.Station data) {}
     @Schema(name = "AuthLoginResponse", requiredProperties = {"success", "data"})
     public record Login(@Schema(description = "항상 true", example = "true") boolean success, KakaoLoginResponse data) {}
     @Schema(name = "AuthTokensResponse", requiredProperties = {"success", "data"})
