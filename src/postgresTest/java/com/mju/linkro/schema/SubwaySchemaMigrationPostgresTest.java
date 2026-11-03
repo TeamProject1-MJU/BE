@@ -107,7 +107,8 @@ class SubwaySchemaMigrationPostgresTest {
 
     @Test
     void columnsMatchErdTypesNullabilityAndDefaults() throws SQLException {
-        flyway(null).migrate();
+        // V10 as designed in ERD v1.13; V13 later drops the numeric(5,1) scale (CongestionLoadPostgresTest).
+        flyway("10").migrate();
         assertThat(rows("select table_name, column_name, data_type, coalesce(character_maximum_length, numeric_precision), "
             + "numeric_scale, is_nullable, is_identity, column_default from information_schema.columns "
             + "where table_name in ('subway_lines','station_lines','station_connections','congestion_stats') "

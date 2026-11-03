@@ -1,0 +1,91 @@
+package com.mju.linkro.subway.congestion.load;
+
+import java.math.BigDecimal;
+import java.time.LocalTime;
+import java.util.*;
+
+/**
+ * Turns AI rows into congestion_stats rows without touching the DB, and counts everything that is skipped.
+ * Values are kept as given: pct as BigDecimal from the string, level/label/day_type/direction unchanged.
+ */
+final class CongestionLoadPlan {
+    static final LocalTime EXCLUDED_SLOT = LocalTime.of(5, 30);
+    static final Set<LocalTime> ALLOWED_SLOTS = allowedSlots();
+
+    /** Graph node and the directions of the RIDE edges that touch it in the seed. */
+    record Node(long stationLineId, Set<String> directions) {}
+
+    record Row(long stationLineId, String direction, String dayType, LocalTime slotStart, BigDecimal pct,
+               String level, String label, String modelVersion) {}
+
+    record Key(long stationLineId, String direction, String dayType, LocalTime slotStart) {}
+
+    final List<Row> rows = new ArrayList<>();
+    int read;
+    int excludedSlot;
+    int otherSlot;
+    final Map<String, Integer> unmatched = new TreeMap<>();
+    final Map<String, Integer> directionMismatch = new TreeMap<>();
+
+    /**
+     * @param nodes      (line code, normalized station name) -> node, from {@link #key(String, String)}
+     * @param modelVersion every row must carry this model_version (from the manifest)
+     */
+    static CongestionLoadPlan of(List<Map<String, String>> csv, Map<String, Node> nodes, String modelVersion) {
+        CongestionLoadPlan plan = new CongestionLoadPlan();
+        Set<Key> seen = new HashSet<>();
+        for (Map<String, String> row : csv) {
+            plan.read++;
+            if (!"PREDICTED".equals(row.get("source"))) {
+                throw new IllegalArgumentException("Only source=PREDICTED rows can be loaded, found " + row.get("source"));
+            }
+            if (!modelVersion.equals(row.get("model_version"))) {
+                throw new IllegalArgumentException("model_version " + row.get("model_version") + " differs from manifest " + modelVersion);
+            }
+            LocalTime slot = LocalTime.parse(row.get("slot_start"));
+            if (slot.equals(EXCLUDED_SLOT)) {
+                plan.excludedSlot++;
+                continue;
+            }
+            if (!ALLOWED_SLOTS.contains(slot)) {
+                plan.otherSlot++;
+                continue;
+            }
+            String line = row.get("line_code").strip();
+            String name = row.get("station_name").strip();
+            Node node = nodes.get(key(line, StationNames.normalize(name)));
+            if (node == null) {
+                plan.unmatched.merge(line + "호선 " + name, 1, Integer::sum);
+                continue;
+            }
+            String direction = row.get("direction").strip();
+            if (!node.directions().contains(direction)) {
+                plan.directionMismatch.merge(line + "호선 " + direction, 1, Integer::sum);
+                continue;
+            }
+            Key unique = new Key(node.stationLineId(), direction, row.get("day_type"), slot);
+            if (!seen.add(unique)) {
+                throw new IllegalArgumentException("Two rows map to the same congestion key " + unique + " (" + line + "호선 " + name + ")");
+            }
+            plan.rows.add(new Row(node.stationLineId(), direction, row.get("day_type"), slot,
+                    new BigDecimal(row.get("congestion_pct").strip()), row.get("congestion_level"),
+                    row.get("congestion_level_label"), row.get("model_version")));
+        }
+        return plan;
+    }
+
+    static String key(String lineCode, String normalizedName) {
+        return lineCode + "|" + normalizedName;
+    }
+
+    private static Set<LocalTime> allowedSlots() {
+        Set<LocalTime> slots = new TreeSet<>();
+        // 06:00 .. 23:30 is 36 slots; counting avoids wrapping past midnight.
+        for (int i = 0; i < 36; i++) {
+            slots.add(LocalTime.of(6, 0).plusMinutes(30L * i));
+        }
+        slots.add(LocalTime.MIDNIGHT);
+        slots.add(LocalTime.of(0, 30));
+        return Collections.unmodifiableSet(slots);
+    }
+}

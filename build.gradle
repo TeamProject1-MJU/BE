@@ -74,3 +74,10 @@ tasks.register('postgresTest', Test) {
 tasks.named('check') {
 	dependsOn tasks.named('postgresTest')
 }
+
+tasks.register('loadCongestion', JavaExec) {
+	description = 'Loads AI congestion predictions into congestion_stats (PREDICTED). Needs DB_URL, DB_USERNAME, DB_PASSWORD and --args="--csv=... --manifest=...".'
+	group = 'application'
+	classpath = sourceSets.main.runtimeClasspath
+	mainClass = 'com.mju.linkro.subway.congestion.load.CongestionLoadTool'
+}
