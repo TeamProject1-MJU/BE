@@ -61,9 +61,12 @@ final class GraphFixture {
         return SubwayGraph.of(data());
     }
 
-    /** Defaults of subway-graph-defaults.properties: waits 0, default branch transfer 120 s, 15044419 rows. */
+    /** Raw costs set explicitly (dwell and waits 0) so tests do not depend on the default file; 15044419 rows. */
     static SubwayGraphProperties costs() {
         SubwayGraphProperties costs = new SubwayGraphProperties();
+        costs.setDwellSeconds(0);
+        costs.setTransferWaitSeconds(0);
+        costs.setBranchTransferWaitSeconds(0);
         costs.setDefaultBranchTransferSeconds(120);
         costs.setBranchTransfers(new ArrayList<>(List.of(
                 new SubwayGraphProperties.BranchTransfer("성수", "2", 19, 23),

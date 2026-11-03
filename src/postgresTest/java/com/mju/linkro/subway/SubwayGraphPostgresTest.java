@@ -66,6 +66,9 @@ class SubwayGraphPostgresTest {
      */
     @Test void allPairsMatchAnIndependentFloydWarshall() {
         SubwayGraphProperties zero = new SubwayGraphProperties();
+        zero.setDwellSeconds(0);
+        zero.setTransferWaitSeconds(0);
+        zero.setBranchTransferWaitSeconds(0);
         zero.setBranchTransfers(new ArrayList<>(List.of(
                 new SubwayGraphProperties.BranchTransfer("성수", "2", 0, 0),
                 new SubwayGraphProperties.BranchTransfer("신도림", "2", 0, 0),
@@ -111,9 +114,11 @@ class SubwayGraphPostgresTest {
         assertThat(compared).isEqualTo(240 * 240);
     }
 
-    @Test void representativeRoutes() {
+    /** Raw edge times (dwell 0, waits 0, branch wait 0) so these expectations do not depend on the defaults. */
+    @Test void representativeRoutesWithRawEdgeTimes() {
+        DijkstraSubwayRouteFinder raw = new DijkstraSubwayRouteFinder(graph, rawCosts());
         // 2호선 강남 -> 역삼 -> 선릉 -> 삼성: 60 + 90 + 90
-        RoutePath direct = route("강남", "삼성");
+        RoutePath direct = route(raw, "강남", "삼성");
         assertThat(direct.totalSeconds()).isEqualTo(240);
         assertThat(direct.transferCount()).isZero();
         assertThat(direct.steps()).singleElement().satisfies(step -> {
@@ -124,7 +129,7 @@ class SubwayGraphPostgresTest {
         assertThat(fares.fareOf(direct)).isEqualTo(1550);
 
         // 강남 -> 교대 (2호선 90) + 교대 2->3 transfer (63 s, 75 m) + 교대 -> 고속터미널 (3호선 120)
-        RoutePath oneTransfer = route("강남", "고속터미널");
+        RoutePath oneTransfer = route(raw, "강남", "고속터미널");
         assertThat(oneTransfer.totalSeconds()).isEqualTo(273);
         assertThat(oneTransfer.transferCount()).isEqualTo(1);
         assertThat(oneTransfer.steps()).extracting(PathStep::type).containsExactly(StepType.RIDE, StepType.TRANSFER, StepType.RIDE);
@@ -135,37 +140,75 @@ class SubwayGraphPostgresTest {
         });
 
         // 2호선 loop closure, one 90 s edge each way.
-        assertSingleRide(route("시청", "충정로"), DirectionCode.OUTER, 90);
-        assertSingleRide(route("충정로", "시청"), DirectionCode.INNER, 90);
+        assertSingleRide(route(raw, "시청", "충정로"), DirectionCode.OUTER, 90);
+        assertSingleRide(route(raw, "충정로", "시청"), DirectionCode.INNER, 90);
 
         // 6호선 one-way loop: 연신내 -> 구산 -> 응암 is 80 + 120; 응암 -> 구산 must go round 응암 -> 역촌 -> 불광 -> 독바위 -> 연신내 -> 구산.
-        assertSingleRide(route("연신내", "응암"), DirectionCode.LOOP, 200);
-        RoutePath round = route("응암", "구산");
+        assertSingleRide(route(raw, "연신내", "응암"), DirectionCode.LOOP, 200);
+        RoutePath round = route(raw, "응암", "구산");
         assertSingleRide(round, DirectionCode.LOOP, 470); // 100 + 80 + 80 + 130 + 80
         assertThat(round.stops()).extracting(PathStop::stationName).containsExactly("응암", "역촌", "불광", "독바위", "연신내", "구산");
 
         // Starting at the junction itself is boarding, not a branch transfer.
-        assertNoTransfer(route("성수", "용답"), 180);
-        assertNoTransfer(route("용답", "성수"), 180);
-        assertNoTransfer(route("신도림", "까치산"), 570); // 90 + 150 + 180 + 150
+        assertNoTransfer(route(raw, "성수", "용답"), 180);
+        assertNoTransfer(route(raw, "용답", "성수"), 180);
+        assertNoTransfer(route(raw, "신도림", "까치산"), 570); // 90 + 150 + 180 + 150
         // Through a junction onto the branch: 15044419 same-line rows 19 s / 68 s / 16 s.
-        assertBranchTransfer(route("건대입구", "용답"), 90 + 19 + 180, "성수", 19, 23);
-        assertBranchTransfer(route("대림", "도림천"), 150 + 68 + 90, "신도림", 68, 81);
+        assertBranchTransfer(route(raw, "건대입구", "용답"), 90 + 19 + 180, "성수", 19, 23);
+        assertBranchTransfer(route(raw, "대림", "도림천"), 150 + 68 + 90, "신도림", 68, 81);
         // 마천 -> 강동 (610: 90+80+70+80+80+100+110) + 16 + 강동 -> 하남검단산 (1060: 90+70+70+100+100+110+110+150+110+150)
-        assertBranchTransfer(route("마천", "하남검단산"), 610 + 16 + 1060, "강동", 16, 19);
-        assertBranchTransfer(route("둔촌동", "길동"), 110 + 16 + 90, "강동", 16, 19);
+        assertBranchTransfer(route(raw, "마천", "하남검단산"), 610 + 16 + 1060, "강동", 16, 19);
+        assertBranchTransfer(route(raw, "둔촌동", "길동"), 110 + 16 + 90, "강동", 16, 19);
         // 방화 side <-> 마천 runs through.
-        assertNoTransfer(route("천호", "마천"), 680); // 70 + 610
+        assertNoTransfer(route(raw, "천호", "마천"), 680); // 70 + 610
 
-        // Values quoted in docs/subway-graph-69.md.
+        // Raw-time values quoted in docs/subway-graph-69.md.
         // 응암 -> 역촌 -> 불광 (100 + 80) + 불광 6->3 transfer (83) + 불광 -> 연신내 (3호선 90) = 353 beats the loop only (100+80+80+130 = 390).
-        RoutePath eungam = route("응암", "연신내");
+        RoutePath eungam = route(raw, "응암", "연신내");
         assertThat(eungam.totalSeconds()).isEqualTo(353);
         assertThat(eungam.transferCount()).isEqualTo(1);
         // 강남 -> 홍대입구: via 3호선 (2 transfers) 1717 s beats 2호선 only (1740 s).
-        RoutePath gangnam = route("강남", "홍대입구");
+        RoutePath gangnam = route(raw, "강남", "홍대입구");
         assertThat(gangnam.totalSeconds()).isEqualTo(1717);
         assertThat(gangnam.transferCount()).isEqualTo(2);
+    }
+
+    /**
+     * Default costs (subway-graph-defaults.properties: dwell 30 s per RIDE edge, transfer wait 120 s, branch wait 120 s).
+     * Each expectation is raw edge time + 30 × RIDE edges + (transfer time + 120) per transfer.
+     */
+    @Test void representativeRoutesWithDefaults() {
+        assertThat(properties.getDwellSeconds()).isEqualTo(30);
+        assertThat(properties.getTransferWaitSeconds()).isEqualTo(120);
+        assertThat(properties.getBranchTransferWaitSeconds()).isEqualTo(120);
+        assertThat(properties.getDefaultBranchTransferSeconds()).isEqualTo(120);
+
+        assertNoTransfer(times(route(finder, "강남", "삼성")), 240 + 3 * 30);
+        // 강남 -> 교대 (90 + 30) + 교대 2->3 (63 + 120) + 교대 -> 고속터미널 (120 + 30)
+        RoutePath oneTransfer = times(route(finder, "강남", "고속터미널"));
+        assertThat(oneTransfer.totalSeconds()).isEqualTo(453);
+        assertThat(oneTransfer.transferCount()).isEqualTo(1);
+        assertThat(oneTransfer.steps().get(1).durationSec()).isEqualTo(63 + 120);
+        assertSingleRide(times(route(finder, "시청", "충정로")), DirectionCode.OUTER, 90 + 30);
+        assertSingleRide(times(route(finder, "충정로", "시청")), DirectionCode.INNER, 90 + 30);
+        assertSingleRide(times(route(finder, "연신내", "응암")), DirectionCode.LOOP, 200 + 2 * 30);
+        assertSingleRide(times(route(finder, "응암", "구산")), DirectionCode.LOOP, 470 + 5 * 30);
+        assertNoTransfer(times(route(finder, "성수", "용답")), 180 + 30);
+        assertNoTransfer(times(route(finder, "신도림", "까치산")), 570 + 4 * 30);
+        // Branch transfer = 15044419 walk + 120 s train wait.
+        assertBranchTransfer(times(route(finder, "건대입구", "용답")), (90 + 30) + (19 + 120) + (180 + 30), "성수", 19 + 120, 23);
+        assertBranchTransfer(times(route(finder, "대림", "도림천")), (150 + 30) + (68 + 120) + (90 + 30), "신도림", 68 + 120, 81);
+        assertBranchTransfer(times(route(finder, "마천", "하남검단산")), (610 + 7 * 30) + (16 + 120) + (1060 + 10 * 30), "강동", 16 + 120, 19);
+        // 둔촌동 -> 길동: (110 + 30) + (16 + 120) + (90 + 30) = 396; Kakao 450 s.
+        assertBranchTransfer(times(route(finder, "둔촌동", "길동")), 396, "강동", 16 + 120, 19);
+        assertNoTransfer(times(route(finder, "천호", "마천")), 680 + 8 * 30);
+        // With waits the 6호선 loop (390 + 4 × 30 = 510) beats the 불광 3호선 transfer ((180 + 60) + (83 + 120) + (90 + 30) = 563).
+        assertSingleRide(times(route(finder, "응암", "연신내")), DirectionCode.LOOP, 510);
+        // 강남 -> 홍대입구: 2호선 direct 1740 + 17 × 30 = 2250 (0 transfers; Kakao 2340 s) beats the 3호선 detour.
+        RoutePath gangnam = times(route(finder, "강남", "홍대입구"));
+        assertThat(gangnam.totalSeconds()).isEqualTo(2250);
+        assertThat(gangnam.transferCount()).isZero();
+        assertThat(gangnam.steps()).singleElement().extracting(PathStep::lineName).isEqualTo("2호선");
     }
 
     /** Reported, not asserted: graph load and one shortestPathsFrom per origin. */
@@ -188,8 +231,30 @@ class SubwayGraphPostgresTest {
         System.out.printf("SUBWAY_GRAPH_PERF load=%.1fms trees=%d avg=%.3fms max=%.3fms%n", loadMs, stations.size(), total / stations.size(), max);
     }
 
-    private RoutePath route(String from, String to) {
-        return finder.shortestPath(stationId(from), stationId(to));
+    private RoutePath route(SubwayRouteFinder routes, String from, String to) {
+        return routes.shortestPath(stationId(from), stationId(to));
+    }
+
+    private static SubwayGraphProperties rawCosts() {
+        SubwayGraphProperties raw = new SubwayGraphProperties();
+        raw.setDwellSeconds(0);
+        raw.setTransferWaitSeconds(0);
+        raw.setBranchTransferWaitSeconds(0);
+        raw.setDefaultBranchTransferSeconds(120);
+        raw.setBranchTransfers(new ArrayList<>(List.of(
+                new SubwayGraphProperties.BranchTransfer("성수", "2", 19, 23),
+                new SubwayGraphProperties.BranchTransfer("신도림", "2", 68, 81),
+                new SubwayGraphProperties.BranchTransfer("강동", "5", 16, 19))));
+        return raw;
+    }
+
+    /** Time invariants with dwell and waits included: step sum = total, offsets start at 0, rise, end at total. */
+    private static RoutePath times(RoutePath path) {
+        assertThat(path.steps().stream().mapToInt(PathStep::durationSec).sum()).isEqualTo(path.totalSeconds());
+        assertThat(path.stops().get(0).offsetSec()).isZero();
+        assertThat(path.stops()).extracting(PathStop::offsetSec).isSorted();
+        assertThat(path.stops().get(path.stops().size() - 1).offsetSec()).isEqualTo(path.totalSeconds());
+        return path;
     }
 
     private long stationId(String name) {

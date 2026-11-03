@@ -47,6 +47,7 @@
 ## 시간·요금·거리 정의
 
 - `totalSeconds`: 모든 step의 `durationSec` 합이다. **환승 시간(TRANSFER)을 포함**한다.
+- 정차 시간·환승 대기(graph 구현의 `dwell-seconds`, `transfer-wait-seconds`, `branch-transfer-wait-seconds`)는 각 step의 `durationSec`, `totalSeconds`, `offsetSec`에 모두 포함된다.
 - `rideDistanceM`: RIDE step의 `distanceM` 합이다. **TRANSFER 도보 거리는 제외**하고, 이 값이 요금 거리다.
 - `transferCount`: TRANSFER step 수다.
 - `fareOf`: `rideDistanceM` 기준 성인 교통카드 요금이다. 여러 호선을 타도 한 번의 이동으로 합산한다.
