@@ -19,7 +19,6 @@ import org.springframework.web.bind.annotation.*;
 @RequiredArgsConstructor
 @SecurityRequirement(name = OpenApiConfig.BEARER_AUTH)
 @ApiResponses({
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR: 요청 형식·값 오류", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class))),
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "AUTH_REQUIRED / TOKEN_INVALID / TOKEN_EXPIRED", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class))),
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "500", description = "INTERNAL_ERROR", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
 })
@@ -53,6 +52,9 @@ public class StationController {
     @GetMapping("/stations/{id}")
     @Operation(summary = "역 상세")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "역", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.StationDetail.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR: id가 숫자가 아님",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class),
+                    examples = @ExampleObject(value = "{\"success\":false,\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"요청 값이 올바르지 않습니다.\",\"details\":{}}}")))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "STATION_NOT_FOUND", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
     public ApiResponse<Station> station(@PathVariable long id) {
         return ApiResponse.success(stations.station(id));

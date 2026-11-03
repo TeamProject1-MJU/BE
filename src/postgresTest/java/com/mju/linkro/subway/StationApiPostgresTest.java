@@ -105,6 +105,14 @@ class StationApiPostgresTest {
                 .isEqualTo("강남");
     }
 
+    @Test void singleCharacterKeywordKeepsGroupsAndCodePointNameOrder() throws Exception {
+        // "역" has no stem, so it must not match every station. Prefix group first, then the rest, each by code point.
+        JsonNode page = ok(get("/api/v1/stations").param("keyword", "역").param("size", "50"));
+        assertThat(page.get("totalElements").asLong()).isEqualTo(5);
+        assertThat(values(page.get("items"), "name"))
+                .containsExactly("역삼", "역촌", "동대문역사문화공원", "서울역", "암사역사공원");
+    }
+
     @Test void likeWildcardsMatchLiterally() throws Exception {
         for (String keyword : List.of("%", "_", "\\", "강%")) {
             JsonNode page = ok(get("/api/v1/stations").param("keyword", keyword));
@@ -205,6 +213,19 @@ class StationApiPostgresTest {
             assertThat(operation.get("responses").has("401")).as(path).isTrue();
         }
         assertThat(root.get("paths").get("/api/v1/stations/{id}").get("get").get("responses").has("404")).isTrue();
+        assertThat(root.get("paths").get("/api/v1/lines").get("get").get("responses").has("400")).isFalse();
+        JsonNode searchBadRequest = root.get("paths").get("/api/v1/stations").get("get").get("responses").get("400");
+        assertThat(searchBadRequest.get("description").asString()).contains("keyword", "bbox", "size");
+        // springdoc publishes the JSON example as an object.
+        JsonNode example = searchBadRequest.get("content").get("application/json").get("example");
+        assertThat(example.get("success").asBoolean()).isFalse();
+        assertThat(example.get("error").get("code").asString()).isEqualTo(ErrorCode.VALIDATION_ERROR.getCode());
+        assertThat(example.get("error").get("message").asString()).isEqualTo(ErrorCode.VALIDATION_ERROR.getMessage());
+        assertThat(example.get("error").get("details").has("keyword")).isTrue();
+        JsonNode idBadRequest = root.get("paths").get("/api/v1/stations/{id}").get("get").get("responses").get("400");
+        assertThat(idBadRequest.get("description").asString()).contains("id");
+        JsonNode idExample = idBadRequest.get("content").get("application/json").get("example");
+        assertThat(idExample.get("error").get("code").asString()).isEqualTo(ErrorCode.VALIDATION_ERROR.getCode());
         assertThat(root.get("components").get("schemas").propertyNames())
                 .contains("SubwayLineData", "StationLineData", "StationData", "StationPageData",
                         "SubwayLineListResponse", "StationPageResponse", "StationDetailResponse");

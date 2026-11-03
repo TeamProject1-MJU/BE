@@ -35,9 +35,10 @@ public class StationReadRepository {
         MapSqlParameterSource params = new MapSqlParameterSource();
         String where = where(condition, params);
         long total = Objects.requireNonNull(jdbc.queryForObject("select count(*) from stations s" + where, params, Long.class));
+        // Name order uses "C" (code points, i.e. 가나다 for Hangul syllables) so it does not depend on the DB collation.
         String order = condition.keyword() == null ? " order by s.id"
                 : " order by case when lower(s.name) in (lower(:exact), lower(:exactStem)) then 0"
-                + " when s.name ilike :prefix escape '\\' or s.name ilike :prefixStem escape '\\' then 1 else 2 end, s.name, s.id";
+                + " when s.name ilike :prefix escape '\\' or s.name ilike :prefixStem escape '\\' then 1 else 2 end, s.name collate \"C\", s.id";
         params.addValue("limit", condition.size()).addValue("offset", condition.offset());
         List<Long> ids = jdbc.queryForList("select s.id from stations s" + where + order + " limit :limit offset :offset",
                 params, Long.class);
