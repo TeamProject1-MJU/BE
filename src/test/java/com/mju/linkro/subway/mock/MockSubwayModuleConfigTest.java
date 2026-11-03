@@ -13,32 +13,48 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @ExtendWith(OutputCaptureExtension.class)
 class MockSubwayModuleConfigTest {
+    private static final String ROUTE_WARN = "Subway route module is MOCK";
+    private static final String CONGESTION_WARN = "Subway congestion is MOCK";
+
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
-            .withUserConfiguration(MockSubwayModuleConfig.class);
+            .withUserConfiguration(MockSubwayModuleConfig.class, MockCongestionConfig.class);
 
     @Test
-    void mockIsTheDefaultAndWarnsOnce(CapturedOutput output) {
+    void allThreeMocksAreTheDefaultAndEachWarnsOnce(CapturedOutput output) {
         runner.run(context -> {
             assertThat(context).hasSingleBean(SubwayRouteFinder.class).hasSingleBean(FareCalculator.class)
                     .hasSingleBean(CongestionLookup.class);
             assertThat(context.getBean(SubwayRouteFinder.class)).isInstanceOf(MockSubwayRouteFinder.class);
+            assertThat(context.getBean(FareCalculator.class)).isInstanceOf(MockFareCalculator.class);
+            assertThat(context.getBean(CongestionLookup.class)).isInstanceOf(MockCongestionLookup.class);
         });
-        assertThat(output.getAll().lines().filter(line -> line.contains("Subway module is MOCK"))).hasSize(1);
-        assertThat(output.getAll()).contains("WARN");
+        assertThat(output.getAll().lines().filter(line -> line.contains(ROUTE_WARN))).hasSize(1);
+        assertThat(output.getAll().lines().filter(line -> line.contains(CONGESTION_WARN))).hasSize(1);
+        assertThat(output.getAll().lines().filter(line -> line.contains("MOCK")).allMatch(line -> line.contains("WARN"))).isTrue();
     }
 
     @Test
-    void mockPropertyRegistersMock() {
-        runner.withPropertyValues("linkro.subway.module=mock")
-                .run(context -> assertThat(context).hasSingleBean(SubwayRouteFinder.class));
+    void explicitMockValuesRegisterTheMocks() {
+        runner.withPropertyValues("linkro.subway.module=mock", "linkro.subway.congestion=mock")
+                .run(context -> assertThat(context).hasSingleBean(SubwayRouteFinder.class).hasSingleBean(CongestionLookup.class));
     }
 
     @Test
-    void graphPropertyLeavesMockOut(CapturedOutput output) {
+    void graphModuleLeavesOnlyTheCongestionMock(CapturedOutput output) {
         runner.withPropertyValues("linkro.subway.module=graph").run(context -> {
             assertThat(context).doesNotHaveBean(SubwayRouteFinder.class).doesNotHaveBean(FareCalculator.class)
-                    .doesNotHaveBean(CongestionLookup.class).doesNotHaveBean(MockSubwayModuleConfig.class);
+                    .doesNotHaveBean(MockSubwayModuleConfig.class).hasSingleBean(CongestionLookup.class);
         });
-        assertThat(output.getAll()).doesNotContain("Subway module is MOCK");
+        assertThat(output.getAll()).doesNotContain(ROUTE_WARN);
+        assertThat(output.getAll().lines().filter(line -> line.contains(CONGESTION_WARN))).hasSize(1);
+    }
+
+    @Test
+    void otherCongestionValueRemovesTheCongestionMock(CapturedOutput output) {
+        runner.withPropertyValues("linkro.subway.congestion=stats").run(context -> {
+            assertThat(context).doesNotHaveBean(CongestionLookup.class).doesNotHaveBean(MockCongestionConfig.class)
+                    .hasSingleBean(SubwayRouteFinder.class);
+        });
+        assertThat(output.getAll()).doesNotContain(CONGESTION_WARN);
     }
 }
