@@ -147,6 +147,45 @@ class AuthWebIntegrationTest {
 	}
 
 	@Test
+	void membershipExamplesUseErrorCodeAndKeepResponseSchemas() throws Exception {
+		var root = actualJson.readTree(mvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
+			.andReturn().getResponse().getContentAsByteArray());
+		assertLocalReferencesResolve(root, root);
+		var join = root.at("/paths/~1api~1v1~1rooms~1join/post");
+		var departure = root.at("/paths/~1api~1v1~1rooms~1{roomId}~1members~1me/patch");
+		assertErrorExamples(join, com.mju.linkro.common.exception.ErrorCode.ROOM_CODE_INVALID,
+			com.mju.linkro.common.exception.ErrorCode.ALREADY_JOINED, com.mju.linkro.common.exception.ErrorCode.ROOM_FULL,
+			com.mju.linkro.common.exception.ErrorCode.ROOM_BUSY);
+		assertErrorExamples(departure, com.mju.linkro.common.exception.ErrorCode.NOT_ROOM_MEMBER,
+			com.mju.linkro.common.exception.ErrorCode.ROOM_NOT_FOUND, com.mju.linkro.common.exception.ErrorCode.STATION_NOT_FOUND,
+			com.mju.linkro.common.exception.ErrorCode.ROOM_BUSY, com.mju.linkro.common.exception.ErrorCode.STATION_UNSUPPORTED);
+		org.assertj.core.api.Assertions.assertThat(join.at("/responses/200/content/application~1json/schema/$ref").asString())
+			.isEqualTo("#/components/schemas/RoomJoinResponse");
+		org.assertj.core.api.Assertions.assertThat(root.at("/components/schemas/RoomJoinResponse/properties/data/$ref").asString())
+			.isEqualTo("#/components/schemas/RoomJoinedData");
+		assertSchemaMatchesValue(root, root.at("/components/schemas/RoomJoinResponse"), actualJson.valueToTree(
+			com.mju.linkro.common.response.ApiResponse.success(new com.mju.linkro.room.dto.RoomResponses.Joined(java.util.UUID.randomUUID()))));
+		org.assertj.core.api.Assertions.assertThat(departure.at("/responses/200/content/application~1json/schema/$ref").asString())
+			.isEqualTo("#/components/schemas/ApiEmptySuccessResponse");
+	}
+
+	private void assertErrorExamples(tools.jackson.databind.JsonNode operation, com.mju.linkro.common.exception.ErrorCode... codes) {
+		var groups = java.util.Arrays.stream(codes).collect(java.util.stream.Collectors.groupingBy(code -> code.getStatus().value()));
+		groups.forEach((status, errors) -> {
+			var response = operation.get("responses").get(Integer.toString(status));
+			org.assertj.core.api.Assertions.assertThat(response.at("/content/application~1json/schema/$ref").asString())
+				.isEqualTo("#/components/schemas/ApiFailureResponse");
+			var examples = response.at("/content/application~1json/examples");
+			org.assertj.core.api.Assertions.assertThat(examples.size()).isEqualTo(errors.size());
+			for (var code : errors) {
+				var expected = actualJson.valueToTree(com.mju.linkro.common.response.ApiResponse.failure(
+					code.getCode(), code.getMessage(), java.util.Map.of()));
+				org.assertj.core.api.Assertions.assertThat(examples.get(code.getCode()).get("value")).isEqualTo(expected);
+			}
+		});
+	}
+
+	@Test
 	void roomSchemasMatchActualSerializedDtosIncludingRequiredAndNullFields() throws Exception {
 		var root = actualJson.readTree(mvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
 			.andReturn().getResponse().getContentAsByteArray());

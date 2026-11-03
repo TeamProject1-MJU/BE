@@ -8,6 +8,9 @@ import java.util.*;
 
 public final class RoomResponses {
     private RoomResponses() {}
+    @Schema(name = "RoomJoinedData", requiredProperties = {"roomId"})
+    public record Joined(UUID roomId) {}
+
     public static final String CREATED_SCHEMA = "RoomCreatedData";
     public static final String SUMMARY_SCHEMA = "RoomSummaryData";
     public static final String DETAIL_SCHEMA = "RoomDetailData";

@@ -10,6 +10,11 @@ import com.mju.linkro.room.dto.RoomResponses;
 import org.springdoc.core.customizers.OpenApiCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import com.mju.linkro.common.exception.ErrorCode;
+import com.mju.linkro.common.response.ApiResponse;
+import io.swagger.v3.oas.models.Operation;
+import io.swagger.v3.oas.models.examples.Example;
+import java.util.Map;
 
 /** Documentation only; authentication and authorization remain in SecurityConfig. */
 @Configuration(proxyBeanMethods = false)
@@ -39,5 +44,27 @@ public class OpenApiConfig {
                                 .addAnyOfItem(nullValue));
             }
         };
+    }
+
+    @Bean
+    OpenApiCustomizer roomMembershipErrorExamples() {
+        return document -> {
+            var join = document.getPaths().get("/api/v1/rooms/join");
+            if (join != null) addErrorExamples(join.getPost(), ErrorCode.ROOM_CODE_INVALID,
+                    ErrorCode.ALREADY_JOINED, ErrorCode.ROOM_FULL, ErrorCode.ROOM_BUSY);
+            var departure = document.getPaths().get("/api/v1/rooms/{roomId}/members/me");
+            if (departure != null) addErrorExamples(departure.getPatch(), ErrorCode.NOT_ROOM_MEMBER,
+                    ErrorCode.ROOM_NOT_FOUND, ErrorCode.STATION_NOT_FOUND, ErrorCode.ROOM_BUSY,
+                    ErrorCode.STATION_UNSUPPORTED);
+        };
+    }
+
+    private static void addErrorExamples(Operation operation, ErrorCode... codes) {
+        if (operation == null) return;
+        for (ErrorCode code : codes) {
+            var response = operation.getResponses().get(Integer.toString(code.getStatus().value()));
+            response.getContent().get("application/json").addExamples(code.getCode(),
+                    new Example().value(ApiResponse.failure(code.getCode(), code.getMessage(), Map.of())));
+        }
     }
 }

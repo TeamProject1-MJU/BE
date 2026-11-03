@@ -266,7 +266,9 @@ class RoomApiPostgresTest {
         mvc.perform(post("/api/v1/rooms").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"a\"}")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/v1/rooms")).andExpect(status().isUnauthorized());
         mvc.perform(patch("/api/v1/rooms/" + room).contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isUnauthorized());
-        for (MockHttpServletRequestBuilder req : List.of(post("/api/v1/rooms/join"), delete("/api/v1/rooms/" + room))) {
+        mvc.perform(auth(post("/api/v1/rooms/join"), owner)).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
+        for (MockHttpServletRequestBuilder req : List.of(delete("/api/v1/rooms/" + room))) {
             mvc.perform(auth(req, owner)).andExpect(status().isMethodNotAllowed()).andExpect(jsonPath("$.error.code").value("METHOD_NOT_ALLOWED"));
         }
         for (MockHttpServletRequestBuilder req : List.of(patch("/api/v1/rooms/" + room + "/members/me/departure"),

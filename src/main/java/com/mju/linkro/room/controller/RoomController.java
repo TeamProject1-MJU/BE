@@ -4,6 +4,7 @@ import com.mju.linkro.auth.web.CurrentUser;
 import com.mju.linkro.common.response.ApiResponse;
 import com.mju.linkro.room.dto.RoomResponses.*;
 import com.mju.linkro.room.dto.RoomWriteRequest;
+import com.mju.linkro.room.dto.RoomMembershipRequests.*;
 import com.mju.linkro.room.service.*;
 import com.mju.linkro.common.config.OpenApiConfig;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -28,6 +29,8 @@ import org.springframework.web.bind.annotation.*;
 public class RoomController {
     private final RoomCreationService creation;
     private final RoomService rooms;
+    private final RoomJoinService joining;
+    private final RoomMembershipService membership;
 
     @PostMapping
     @Operation(summary = "약속방 생성", requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true,
@@ -78,5 +81,60 @@ public class RoomController {
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "ROOM_NOT_FOUND", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
     public ApiResponse<InviteCode> inviteCode(@CurrentUser UUID userId, @PathVariable UUID roomId) {
         return ApiResponse.success(rooms.inviteCode(roomId, userId));
+    }
+
+    @PostMapping("/join")
+    @Operation(
+            summary = "초대 코드 방 참여",
+            description = "대문자 영문·숫자 6자 필수. 소문자·공백을 변환하지 않습니다. OPEN·CONFIRMED 모두 정원 4명까지 참여 가능합니다.",
+            requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+                    required = true,
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = Join.class),
+                            examples = @ExampleObject(value = "{\"roomCode\":\"A3K9PZ\"}"))))
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Success",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.JoinResponse.class),
+                            examples = @ExampleObject(value = "{\"success\":true,\"data\":{\"roomId\":\"0192f3a4-8c2d-7d4f-8b21-6e3f9a7c2b02\"}}"))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404", description = "ROOM_CODE_INVALID",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409", description = "ALREADY_JOINED / ROOM_FULL / ROOM_BUSY",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
+    })
+    public ApiResponse<Joined> join(@CurrentUser UUID userId, @RequestBody Join request) {
+        return ApiResponse.success(joining.join(userId, request));
+    }
+
+    @PatchMapping("/{roomId}/members/me")
+    @Operation(
+            summary = "내 출발역 설정·변경",
+            description = "OWNER·MEMBER 본인만 변경합니다. null·생략·문자열·소수는 VALIDATION_ERROR. 출발역 해제는 지원하지 않습니다. 기존 추천·후보·투표·확정역을 보존합니다.",
+            requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+                    required = true,
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = Departure.class),
+                            examples = @ExampleObject(value = "{\"departureStationId\":105}"))))
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Success",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.EmptySuccess.class),
+                            examples = @ExampleObject(value = "{\"success\":true,\"data\":null}"))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403", description = "NOT_ROOM_MEMBER",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404", description = "ROOM_NOT_FOUND / STATION_NOT_FOUND",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409", description = "ROOM_BUSY",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "422", description = "STATION_UNSUPPORTED",
+                    content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
+    })
+    public ApiResponse<Void> departure(@CurrentUser UUID userId, @PathVariable UUID roomId, @RequestBody Departure request) {
+        membership.departure(roomId, userId, request);
+        return ApiResponse.success();
     }
 }
