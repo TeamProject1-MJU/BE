@@ -60,45 +60,54 @@ class SubwayGraphPostgresTest {
         assertThat(missing).as("origins that cannot reach all 240 stations").isEmpty();
     }
 
-    /** Branch transfers and waits at 0, so route time is a pure edge-time shortest path, checked by Floyd–Warshall. */
+    /**
+     * Branch transfers and waits at 0, so route time is a pure edge-time shortest path. The Floyd–Warshall input is
+     * read here with plain SQL, independent of SubwayGraphLoader and SubwayGraph.
+     */
     @Test void allPairsMatchAnIndependentFloydWarshall() {
-        SubwayGraphData data = new SubwayGraphLoader(named).load();
         SubwayGraphProperties zero = new SubwayGraphProperties();
         zero.setBranchTransfers(new ArrayList<>(List.of(
                 new SubwayGraphProperties.BranchTransfer("성수", "2", 0, 0),
                 new SubwayGraphProperties.BranchTransfer("신도림", "2", 0, 0),
                 new SubwayGraphProperties.BranchTransfer("강동", "5", 0, 0))));
-        DijkstraSubwayRouteFinder plain = new DijkstraSubwayRouteFinder(SubwayGraph.of(data), zero);
+        DijkstraSubwayRouteFinder plain = new DijkstraSubwayRouteFinder(graph, zero);
 
+        // Nodes of supported stations only, as the graph model defines.
         Map<Long, Integer> index = new HashMap<>();
-        data.nodes().forEach(node -> index.put(node.id(), index.size()));
+        Map<Long, List<Integer>> nodesByStation = new HashMap<>();
+        jdbc.query("select sl.id, sl.station_id from station_lines sl join stations s on s.id = sl.station_id "
+                + "where s.is_supported order by sl.id", rs -> {
+            int i = index.size();
+            index.put(rs.getLong("id"), i);
+            nodesByStation.computeIfAbsent(rs.getLong("station_id"), id -> new ArrayList<>()).add(i);
+        });
         int n = index.size();
         long infinity = Long.MAX_VALUE / 4;
         long[][] dist = new long[n][n];
         for (long[] row : dist) Arrays.fill(row, infinity);
         for (int i = 0; i < n; i++) dist[i][i] = 0;
-        for (var edge : data.edges()) {
-            int a = index.get(edge.fromNodeId());
-            int b = index.get(edge.toNodeId());
-            dist[a][b] = Math.min(dist[a][b], edge.seconds());
-        }
+        jdbc.query("select from_station_line_id, to_station_line_id, travel_seconds from station_connections", rs -> {
+            Integer a = index.get(rs.getLong("from_station_line_id"));
+            Integer b = index.get(rs.getLong("to_station_line_id"));
+            if (a != null && b != null) dist[a][b] = Math.min(dist[a][b], rs.getInt("travel_seconds"));
+        });
         for (int k = 0; k < n; k++) for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) {
             if (dist[i][k] + dist[k][j] < dist[i][j]) dist[i][j] = dist[i][k] + dist[k][j];
         }
-        Map<Long, List<Integer>> nodesByStation = new HashMap<>();
-        data.nodes().forEach(node -> nodesByStation.computeIfAbsent(node.stationId(), id -> new ArrayList<>()).add(index.get(node.id())));
+        List<Long> stations = jdbc.queryForList("select id from stations where is_supported order by id", Long.class);
 
         int compared = 0;
-        for (var from : data.stations()) {
-            ShortestPathTree tree = plain.shortestPathsFrom(from.id());
-            for (var to : data.stations()) {
+        for (long from : stations) {
+            ShortestPathTree tree = plain.shortestPathsFrom(from);
+            for (long to : stations) {
                 long expected = infinity;
-                for (int a : nodesByStation.get(from.id())) for (int b : nodesByStation.get(to.id())) expected = Math.min(expected, dist[a][b]);
-                RoutePath path = tree.pathTo(to.id()).orElseThrow();
-                assertThat((long) path.totalSeconds()).as(from.name() + " -> " + to.name()).isEqualTo(expected);
+                for (int a : nodesByStation.get(from)) for (int b : nodesByStation.get(to)) expected = Math.min(expected, dist[a][b]);
+                RoutePath path = tree.pathTo(to).orElseThrow();
+                assertThat((long) path.totalSeconds()).as(from + " -> " + to).isEqualTo(expected);
                 compared++;
             }
         }
+        assertThat(n).isEqualTo(277);
         assertThat(compared).isEqualTo(240 * 240);
     }
 
