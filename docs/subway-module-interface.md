@@ -47,6 +47,7 @@
 ## 시간·요금·거리 정의
 
 - `totalSeconds`: 모든 step의 `durationSec` 합이다. **환승 시간(TRANSFER)을 포함**한다.
+- 정차 시간·환승 대기(graph 구현의 `dwell-seconds`, `transfer-wait-seconds`, `branch-transfer-wait-seconds`)는 각 step의 `durationSec`, `totalSeconds`, `offsetSec`에 모두 포함된다.
 - `rideDistanceM`: RIDE step의 `distanceM` 합이다. **TRANSFER 도보 거리는 제외**하고, 이 값이 요금 거리다.
 - `transferCount`: TRANSFER step 수다.
 - `fareOf`: `rideDistanceM` 기준 성인 교통카드 요금이다. 여러 호선을 타도 한 번의 이동으로 합산한다.
@@ -76,7 +77,14 @@
 
 ## mock 동작
 
-`linkro.subway.module`이 없거나 `mock`이면 `MockSubwayModuleConfig`가 mock 빈 3개를 등록한다. 시작할 때 WARN 로그 한 줄(`Subway module is MOCK ...`)을 남긴다. `graph` 등 다른 값이면 mock이 등록되지 않는다.
+mock은 두 설정 클래스로 나뉜다. 각 설정은 활성화될 때 WARN 로그를 한 줄씩 남긴다.
+
+| 설정 클래스 | 조건 | 등록하는 빈 | WARN |
+| --- | --- | --- | --- |
+| `MockSubwayModuleConfig` | `linkro.subway.module`이 없거나 `mock` | `SubwayRouteFinder`, `FareCalculator` mock | `Subway route module is MOCK ...` |
+| `MockCongestionConfig` | `linkro.subway.congestion`이 없거나 `mock` | `CongestionLookup` mock | `Subway congestion is MOCK ...` |
+
+프로퍼티가 없으면 mock 3개가 모두 등록된다. `module=graph`이면 경로·요금은 실제 구현(#69)이 쓰이고 혼잡도만 mock으로 남는다.
 
 | mock | 규칙 |
 | --- | --- |
@@ -87,11 +95,14 @@
 
 ## 실제 구현(⑥)으로 교체하는 방법
 
-1. `com.mju.linkro.subway` 아래(예: `graph` 패키지)에 세 인터페이스의 구현을 만든다.
-2. 구현 설정 클래스에 `@ConditionalOnProperty(name = "linkro.subway.module", havingValue = "graph")`를 붙인다.
-3. 운영·개발 설정에 `linkro.subway.module=graph`를 넣는다. mock은 `havingValue = "mock", matchIfMissing = true`라 자동으로 빠진다.
-4. 테스트에서 `SubwayRouteFinderContract`를 상속해 같은 계약 테스트를 실제 구현에도 돌린다. 출발·도착·없는 역·도달 불가 역 id만 구현마다 정해 주면 된다.
-5. 실제 혼잡도는 저장된 `congestion_level`·`congestion_level_label`을 그대로 쓰고, mock처럼 다시 계산하지 않는다(6.2).
+- **경로·요금(완료, #69)**: `com.mju.linkro.subway.graph`의 `SubwayGraphModuleConfig`가 `linkro.subway.module=graph`일 때 `DijkstraSubwayRouteFinder`와 `GraphFareCalculator`를 등록한다.
+  - 운영 전환은 환경변수 `LINKRO_SUBWAY_MODULE=graph`로 한다.
+  - 기본값은 여전히 mock이다. 그래프 모델과 설정은 `docs/subway-graph-69.md`에 있다.
+- **혼잡도(⑦)**:
+  1. 실제 `CongestionLookup` 구현을 만들고, 그 설정 클래스에 `@ConditionalOnProperty(name = "linkro.subway.congestion", havingValue = "<새 값>")`을 붙인다.
+  2. 운영 설정에서 `linkro.subway.congestion`을 그 값으로 바꾼다. `MockCongestionConfig`는 `havingValue = "mock", matchIfMissing = true`라 자동으로 빠진다.
+  3. 실제 혼잡도는 저장된 `congestion_level`·`congestion_level_label`을 그대로 쓰고, mock처럼 다시 계산하지 않는다(6.2).
+- **테스트**: `SubwayRouteFinderContract`를 상속하면 같은 계약 테스트를 구현마다 돌릴 수 있다. 출발·도착·없는 역·도달 불가 역 id만 정해 주면 된다(`DijkstraSubwayRouteFinderContractTest` 참고).
 
 ## 추천(8.1) 사용 예시
 

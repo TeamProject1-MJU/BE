@@ -33,8 +33,23 @@ auth:
 cors:
   allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
 
-# Subway route module (routes, fares, congestion). Unset means mock, which logs a WARN at startup.
-# Set to graph once the real graph implementation is added.
+# Subway module. Unset values mean mock, and each mock logs a WARN at startup.
+# - module: mock | graph. graph loads the subway graph at startup for real routes and fares
+#   (production: environment variable LINKRO_SUBWAY_MODULE=graph).
+# - congestion: mock until the real congestion lookup exists; any other value removes the mock.
+# - graph.* and fare.* apply only with module=graph; defaults are in subway-graph-defaults.properties
+#   (docs/subway-graph-69.md lists them).
 # linkro:
 #   subway:
 #     module: mock
+#     congestion: mock
+#     # 기본값은 subway-graph-defaults.properties 기준
+#     graph:
+#       dwell-seconds: 30
+#       transfer-wait-seconds: 120
+#       branch-transfer-wait-seconds: 120
+#       default-branch-transfer-seconds: 120
+#       branch-transfers:
+#         - { station: 성수, line: "2", seconds: 19, meters: 23 }
+#     fare:
+#       base-fare: 1550
