@@ -43,10 +43,11 @@ cors:
 #   subway:
 #     module: mock
 #     congestion: mock
+#     # 기본값은 subway-graph-defaults.properties 기준
 #     graph:
-#       dwell-seconds: 0
-#       transfer-wait-seconds: 0
-#       branch-transfer-wait-seconds: 0
+#       dwell-seconds: 30
+#       transfer-wait-seconds: 120
+#       branch-transfer-wait-seconds: 120
 #       default-branch-transfer-seconds: 120
 #       branch-transfers:
 #         - { station: 성수, line: "2", seconds: 19, meters: 23 }
