@@ -13,7 +13,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Loads AI congestion predictions into congestion_stats as PREDICTED rows, in one transaction.
+ * Loads AI congestion predictions into congestion_stats as PREDICTED rows, plus ESTIMATED rows from
+ * {@link Estimations}, in one transaction.
  * Upserts on uq_cong_slot_source, so running it again with the same file changes no row count.
  */
 public final class CongestionLoader {
@@ -25,7 +26,8 @@ public final class CongestionLoader {
 
     /** Result counts printed by the tool. */
     public record Report(int read, int otherSlot, Map<String, Integer> unmatched,
-                         Map<String, Integer> directionMismatch, Map<String, Integer> mapped, int loaded, int inserted, int updated, String modelVersion) {
+                         Map<String, Integer> directionMismatch, Map<String, Integer> mapped,
+                         int estimated, int estimationSkipped, int loaded, int inserted, int updated, String modelVersion) {
 
         public String format() {
             StringBuilder out = new StringBuilder();
@@ -38,6 +40,7 @@ public final class CongestionLoader {
             out.append("direction mismatches: ").append(directionMismatch.values().stream().mapToInt(Integer::intValue).sum()).append('\n');
             directionMismatch.forEach((key, count) -> out.append("  ").append(key).append(": ").append(count).append('\n'));
             mapped.forEach((report, count) -> out.append("mapped ").append(report).append(": ").append(count).append('\n'));
+            out.append("estimated rows: ").append(estimated).append(" (skipped ").append(estimationSkipped).append(")\n");
             out.append("loaded rows: ").append(loaded).append(" (new ").append(inserted).append(", updated ").append(updated).append(")\n");
             return out.toString();
         }
@@ -68,9 +71,11 @@ public final class CongestionLoader {
     public Report load(Path csv, Path manifest) throws IOException, SQLException {
         String modelVersion = verify(csv, manifest);
         CongestionLoadPlan plan = CongestionLoadPlan.of(CongestionCsv.read(csv), nodes(), modelVersion);
-        int[] counts = upsert(plan.rows);
+        List<CongestionLoadPlan.Row> rows = new ArrayList<>(plan.rows);
+        rows.addAll(plan.estimated);
+        int[] counts = upsert(rows);
         return new Report(plan.read, plan.otherSlot, plan.unmatched, plan.directionMismatch,
-                plan.mapped, plan.rows.size(), counts[0], counts[1], modelVersion);
+                plan.mapped, plan.estimated.size(), plan.estimationSkipped, rows.size(), counts[0], counts[1], modelVersion);
     }
 
     /** (line code, normalized name) -> node with its branch code and the directions of its RIDE edges. */
@@ -115,11 +120,11 @@ public final class CongestionLoader {
                         create temp table congestion_load (
                             station_line_id bigint, direction varchar(5), day_type varchar(8), slot_start time,
                             congestion_pct numeric, congestion_level varchar(12), congestion_level_label varchar(10),
-                            model_version varchar(20)) on commit drop
+                            source varchar(9), model_version varchar(20)) on commit drop
                         """);
             }
             try (PreparedStatement insert = connection.prepareStatement(
-                    "insert into congestion_load values (?, ?, ?, ?, ?, ?, ?, ?)")) {
+                    "insert into congestion_load values (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
                 int batch = 0;
                 for (var row : rows) {
                     insert.setLong(1, row.stationLineId());
@@ -129,7 +134,8 @@ public final class CongestionLoader {
                     insert.setBigDecimal(5, row.pct());
                     insert.setString(6, row.level());
                     insert.setString(7, row.label());
-                    insert.setString(8, row.modelVersion());
+                    insert.setString(8, row.source());
+                    insert.setString(9, row.modelVersion());
                     insert.addBatch();
                     if (++batch % 1000 == 0) insert.executeBatch();
                 }
@@ -142,7 +148,7 @@ public final class CongestionLoader {
                          insert into congestion_stats (station_line_id, direction, day_type, slot_start, congestion_pct,
                                                        congestion_level, congestion_level_label, source, model_version)
                          select station_line_id, direction, day_type, slot_start, congestion_pct,
-                                congestion_level, congestion_level_label, 'PREDICTED', model_version
+                                congestion_level, congestion_level_label, source, model_version
                          from congestion_load
                          on conflict on constraint uq_cong_slot_source do update set
                              congestion_pct = excluded.congestion_pct,

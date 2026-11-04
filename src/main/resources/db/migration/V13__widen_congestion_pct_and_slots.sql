@@ -7,3 +7,13 @@ alter table congestion_stats add constraint ck_cong_slot check (
     extract(minute from slot_start) in (0, 30)
     and (slot_start between time '05:30' and time '23:30' or slot_start in (time '00:00', time '00:30'))
 );
+
+-- ESTIMATED: values the loader derives where the AI file has none (neighbour average); like MOCK, no model_version.
+alter table congestion_stats drop constraint ck_cong_source;
+alter table congestion_stats add constraint ck_cong_source check (source in ('PREDICTED', 'MOCK', 'ESTIMATED'));
+-- Only PREDICTED carries a model_version; MOCK and ESTIMATED have none. Valid sources are ck_cong_source's job.
+alter table congestion_stats drop constraint ck_cong_model;
+alter table congestion_stats add constraint ck_cong_model check (
+    (source = 'PREDICTED' and model_version is not null)
+    or (source <> 'PREDICTED' and model_version is null)
+);

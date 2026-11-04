@@ -1,6 +1,6 @@
 # 혼잡도 PREDICTED 적재 (#71)
 
-AI 파트가 전달한 혼잡도 예측(모델 `HGB_20261103_39T`)을 `congestion_stats`에 `source = PREDICTED`로 넣는 도구와, 이를 받기 위한 V13 마이그레이션이다. 혼잡도 조회 API와 `congestionOf`는 ⑦에서 구현한다.
+AI 파트가 전달한 혼잡도 예측(모델 `HGB_20261103_39T`)을 `congestion_stats`에 `source = PREDICTED`로 넣는 도구와, 이를 받기 위한 V13 마이그레이션이다. 원본이 비어 있는 2호선 성수 외선은 앞뒤 역 평균으로 추정해 `source = ESTIMATED`로 함께 넣는다. 혼잡도 조회 API와 `congestionOf`는 ⑦에서 구현한다.
 
 ## V13 (`V13__widen_congestion_pct_and_slots.sql`)
 
@@ -8,8 +8,10 @@ AI 파트가 전달한 혼잡도 예측(모델 `HGB_20261103_39T`)을 `congestio
 | --- | --- | --- | --- |
 | `congestion_pct` | `numeric(5,1)` | `numeric` (자릿수 지정 없음) | AI 원값은 반올림하지 않은 값이다. 소수 1자리로 반올림하면 전체 60,914행 중 112행이 `ck_cong_level`(단계 경계)과 충돌한다. 원값 그대로면 0행이다 |
 | `ck_cong_slot` | 분 0/30, 06:00~23:00 (35칸) | 분 0/30, 05:30~23:30 또는 00:00, 00:30 (39칸) | AI 파일이 05:30, 23:30, 00:00, 00:30 슬롯을 준다 |
+| `ck_cong_source` | `PREDICTED`, `MOCK` | `PREDICTED`, `MOCK`, `ESTIMATED` | 성수 외선 추정값(아래 "추정 적재") |
+| `ck_cong_model` | `(source = 'PREDICTED') = (model_version is not null)` | PREDICTED는 `model_version` 필수, 그 밖(MOCK, ESTIMATED)은 null | 뜻은 V10과 같다. ESTIMATED를 명시적으로 드러내려고 다시 썼다. 허용 source 검사는 `ck_cong_source`가 맡는다 |
 
-- 제약 이름(`ck_cong_slot`, `ck_cong_level`, `ck_cong_pct`, `ck_cong_model`, `uq_cong_slot_source`)은 그대로다. `ck_cong_level`은 자릿수 없는 numeric에서도 그대로 동작한다(34.999999999999 → COMFORTABLE, 35 → RELAXED).
+- 제약 이름(`ck_cong_slot`, `ck_cong_level`, `ck_cong_pct`, `ck_cong_model`, `ck_cong_source`, `uq_cong_slot_source`)은 그대로다. `uq_cong_slot_source`에는 source가 들어 있어서 같은 슬롯에 PREDICTED와 ESTIMATED가 따로 있을 수 있다. `ck_cong_level`은 자릿수 없는 numeric에서도 그대로 동작한다(34.999999999999 → COMFORTABLE, 35 → RELAXED).
 - V1~V12는 바꾸지 않았다. ERD v1.13의 `numeric(5,1)`과 "06:00~23:00" 주석은 이제 V13과 다르다(아래 "⑦에서 고칠 목록").
 
 ## 실행 방법
@@ -65,6 +67,34 @@ DB_URL=jdbc:postgresql://localhost:5432/linkro DB_USERNAME=linkro DB_PASSWORD=..
    - 한 트랜잭션에서 임시 테이블에 모은 뒤 `uq_cong_slot_source` 기준으로 upsert한다(`on conflict ... do update`).
    - 같은 파일을 다시 실행해도 행 수는 그대로이고 모두 "갱신"으로 센다.
    - 어떤 행이든 DB 제약(예: `ck_cong_level`)에 걸리면 전체를 롤백한다.
+8. **추정**: 아래 "추정 적재" 규칙으로 만든 ESTIMATED 행을 같은 트랜잭션에서 함께 upsert한다.
+
+## 추정 적재 (ESTIMATED)
+
+- **대상**: 2호선 성수 외선(OUTER) 하나다.
+  - 원본 입력이 117칸(3개 요일 유형 × 39슬롯) 모두 0이다. AI 파일은 이 조합을 `unsupported_conditions.csv`에 `unverified_zero_input`으로 두고, `predictions_for_import.csv`에는 행을 넣지 않았다.
+  - 종점 방향(신설동 DOWN, 까치산 DOWN), 일부 슬롯만 0인 조합, 성수 외 역은 대상이 아니다.
+- **규칙 표**: `src/main/resources/congestion-load/estimations.csv` 한 곳에 있고, 코드에는 대상이 없다.
+  - 열: `line_code,station,direction,previous,next`. 지금은 `2,성수,OUTER,건대입구,뚝섬` 한 줄이다.
+  - 규칙을 추가하려면 이 표에 한 줄을 넣는다. 역 이름은 노드 매칭과 같은 방식으로 정규화한다.
+- **만드는 조건**: AI 파일에 그 (노드, 방향)의 행이 하나도 없을 때만 만든다. 나중에 AI가 값을 주면 추정은 만들지 않는다.
+  - 다만 이미 적재된 ESTIMATED 행은 남는다. 그때는 지우고 다시 적재한다.
+- **평균 방식**: (요일 유형, 슬롯)마다 앞 역과 뒤 역의 같은 방향 PREDICTED 행이 둘 다 있을 때만 `pct = (앞 + 뒤) / 2`로 만든다.
+  - `BigDecimal`로 계산해서 자릿수를 잃지 않는다(2로 나누면 항상 나누어떨어진다). double을 쓰지 않는다.
+  - 둘 중 하나라도 없으면 만들지 않고 `skipped`로 센다.
+  - 방향 매핑과 노드 매칭은 PREDICTED와 같은 방식을 쓴다.
+- **단계·라벨**: 원본 값이 없으므로 로더가 계산한다. `ck_cong_level`과 같은 경계(하한 포함, 상한 미포함)다.
+
+  | pct | level | label |
+  | --- | --- | --- |
+  | 0 이상 35 미만 | COMFORTABLE | 쾌적 |
+  | 35 이상 50 미만 | RELAXED | 여유 |
+  | 50 이상 100 미만 | NORMAL | 보통 |
+  | 100 이상 150 미만 | CROWDED | 혼잡 |
+  | 150 이상 | VERY_CROWDED | 매우 혼잡 |
+
+- **PREDICTED와 구분하는 이유**: 모델이 예측한 값이 아니라 우리가 만든 근삿값이라서 `source = ESTIMATED`, `model_version = null`로 저장한다. 모델 버전이 바뀌어도 이 값은 모델과 상관없고, 나중에 지우거나 바꿀 때도 따로 골라낼 수 있다.
+- **API에서 source가 ESTIMATED로 나갈 수 있다**: ⑦에서 조회 우선순위를 PREDICTED > ESTIMATED > MOCK으로 구현한다. `CongestionSource` enum, 프론트 표시, API 명세에 반영해야 한다(아래 "⑦에서 고칠 목록").
 
 ## 실제 파일 적재 결과 (임시 PostgreSQL 16, V1~V13)
 
@@ -78,16 +108,19 @@ node match failures: 0
 direction mismatches: 0
 mapped DOWN->LOOP: 565
 mapped INNER/OUTER->UP/DOWN: 1582
-loaded rows: 60914 (new 60914, updated 0)
+estimated rows: 113 (skipped 4)
+loaded rows: 61027 (new 61027, updated 0)
 ```
 
-- 60,914행이 모두 들어갔다.
+- PREDICTED 60,914행이 모두 들어갔고, ESTIMATED 113행을 더해 61,027행이다.
   - 응암순환 5개 역 × 113행 = 565행이 DOWN → LOOP로 들어갔다.
   - 2호선 지선 1,582행이 UP/DOWN으로 들어갔다(중간 역 6개 × 2방향 × 113행 + 종점 2개 × 113행).
 - 종점은 신설동 UP 113행(원본 INNER), 까치산 UP 113행(원본 OUTER)이다.
 - 서로 다른 `slot_start`는 39개다.
 - 277개 노드 모두에 데이터가 있다.
-- 다시 실행하면 `new 0, updated 60914`이고 행 수는 그대로였다. 실행 시간은 각 약 3~4초였다.
+- 성수 OUTER ESTIMATED는 113행이다. 빠진 4칸은 SATURDAY·SUNDAY의 00:00, 00:30이다. 건대입구·뚝섬 OUTER 모두 원본에 없는 슬롯이다.
+  - 113행 모두 `pct × 2 = 건대입구 + 뚝섬`이다. 예: 평일 08:00은 (70.24307940936374 + 54.14337117025006) / 2 = `62.19322528980690`, NORMAL.
+- 다시 실행하면 `new 0, updated 61027`이고 행 수는 그대로였다. 실행 시간은 각 약 3~4초였다.
 - 단계 경계와 어긋난 행은 0개다.
 - 값 왕복을 확인했다: 서울역 1호선 평일 UP 06:00 = `21.423461136679226`, 05:30 = `8.971155419936697`(파일 값과 같음).
 - SHA가 틀린 manifest로 실행하면 중단되고 행 수는 그대로다.
@@ -123,7 +156,8 @@ loaded rows: 60914 (new 60914, updated 0)
 - **미지원 행**: `unsupported_conditions.csv`의 행은 적재하지 않는다.
 - **`service_minute`, `service_day_offset`**: DB에 저장하지 않는다. 자정 이후 행은 `slot_start`(00:00/00:30)와 원래 `day_type`으로 구분한다.
 - **ck_cong_slot의 초 단위**: 분만 검사해서 초가 있는 값(예: 06:00:15)은 막지 못한다. 로더는 `HH:MM`만 넣는다.
-- **MOCK과 같은 슬롯**: 같은 슬롯에 MOCK 행이 있으면 조회 우선순위(PREDICTED > MOCK)로 처리한다(⑦).
+- **같은 슬롯의 여러 source**: 조회 우선순위 PREDICTED > ESTIMATED > MOCK으로 처리한다(⑦).
+- **성수 외선은 추정값이다**: 실제 예측이 아니라 앞뒤 역 평균이다. 원본이 고쳐지면 ESTIMATED 행을 지우고 다시 적재한다.
 
 ## ⑦에서 고칠 목록 (35칸·23:00, 05:30 제외·06:00 첫차 가정)
 
@@ -139,5 +173,16 @@ loaded rows: 60914 (new 60914, updated 0)
 | API 명세(docx) | 13장 congestion_stats | "slot_start는 06:00~23:00 시작 슬롯(35개)만" |
 | API 명세(docx) | 15장 확인 항목 | "06:00~23:00 시작 슬롯 35개가 모두 있는지 확인(첫차 처리 규칙은 이 범위 밖 값을 쓰지 않는다)" |
 | API 명세(docx) | 부록 A | `ck_cong_slot ... BETWEEN TIME '06:00' AND TIME '23:00'` |
+
+ESTIMATED 추가로 고칠 곳:
+
+| 파일 | 줄 | 내용 |
+| --- | --- | --- |
+| `src/main/java/com/mju/linkro/subway/api/CongestionSource.java` | 3, 4 | `PREDICTED, MOCK`과 "PREDICTED over MOCK": ESTIMATED와 우선순위 PREDICTED > ESTIMATED > MOCK |
+| `docs/subway-module-interface.md` | 27 | `CongestionSource`(PREDICTED, MOCK) |
+| `docs/erd_v1.13_20261029.dbml.txt` | 26~27, 149, 150 | `congestion_source` enum, "조회 우선순위 PREDICTED > MOCK", model_version 설명 |
+| API 명세(docx) | 6.2 | "source: PREDICTED / MOCK … PREDICTED > MOCK" |
+| API 명세(docx) | 13장 congestion_stats | "congestion_source enum = PREDICTED / MOCK" |
+| API 명세(docx) | 부록 A | `ck_cong_source CHECK (source IN ('PREDICTED','MOCK'))` |
 
 V10을 대상으로 한 기존 테스트(`SubwaySchemaMigrationPostgresTest` 240~241줄의 05:30·23:30 거부)는 V10까지만 적용해서 V10 제약을 검증하므로 그대로 둔다. `MockCongestionLookup`은 시각을 쓰지 않아 슬롯 가정이 없다.

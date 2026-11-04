@@ -20,7 +20,9 @@ class CongestionLoadPlanTest {
     private static final Map<String, Node> NODES = Map.ofEntries(
             Map.entry(CongestionLoadPlan.key("1", "서울"), new Node(1, "MAIN", Set.of("UP", "DOWN"))),
             Map.entry(CongestionLoadPlan.key("2", "시청"), new Node(11, "MAIN", Set.of("INNER", "OUTER"))),
+            Map.entry(CongestionLoadPlan.key("2", "뚝섬"), new Node(19, "MAIN", Set.of("INNER", "OUTER"))),
             Map.entry(CongestionLoadPlan.key("2", "성수"), new Node(20, "MAIN", Set.of("UP", "DOWN", "INNER", "OUTER"))),
+            Map.entry(CongestionLoadPlan.key("2", "건대입구"), new Node(21, "MAIN", Set.of("INNER", "OUTER"))),
             Map.entry(CongestionLoadPlan.key("2", "신도림"), new Node(36, "MAIN", Set.of("UP", "DOWN", "INNER", "OUTER"))),
             Map.entry(CongestionLoadPlan.key("2", "신촌"), new Node(50, "MAIN", Set.of("INNER", "OUTER"))),
             Map.entry(CongestionLoadPlan.key("2", "용답"), new Node(54, "SEONGSU", Set.of("UP", "DOWN"))),
@@ -43,13 +45,13 @@ class CongestionLoadPlanTest {
     void sampleIsCountedAndKeptAsGiven() throws Exception {
         CongestionLoadPlan plan = CongestionLoadPlan.of(CongestionCsv.read(CongestionLoadFixture.sampleCsv()), NODES, CongestionLoadFixture.MODEL);
 
-        assertThat(plan.read).isEqualTo(21);
+        assertThat(plan.read).isEqualTo(24);
         assertThat(plan.otherSlot).isZero();
         assertThat(plan.unmatched).containsExactly(Map.entry("3호선 없는역", 1));
         assertThat(plan.directionMismatch).containsExactly(Map.entry("1호선 INNER", 1), Map.entry("6호선 UP", 1));
         assertThat(plan.mapped).containsExactly(Map.entry("DOWN->LOOP", 1), Map.entry("INNER/OUTER->UP/DOWN", 6));
         // The 05:30 row (서울역 DOWN) is loaded like any other slot.
-        assertThat(plan.rows).hasSize(18);
+        assertThat(plan.rows).hasSize(21).allSatisfy(row -> assertThat(row.source()).isEqualTo("PREDICTED"));
         assertThat(plan.rows).anySatisfy(row -> assertThat(row.slotStart()).isEqualTo(LocalTime.of(5, 30)));
         var first = plan.rows.get(0);
         assertThat(first.pct()).isEqualTo(new BigDecimal("34.95326485813263"));
@@ -137,6 +139,107 @@ class CongestionLoadPlanTest {
         assertThat(none.mapped).isEmpty();
         assertThat(none.directionMismatch).containsExactly(Map.entry("1호선 INNER", 1), Map.entry("2호선 INNER", 3),
                 Map.entry("2호선 OUTER", 3), Map.entry("6호선 DOWN", 1), Map.entry("6호선 UP", 1));
+    }
+
+    // ---- ESTIMATED (성수 OUTER) ----
+
+    private static Map<String, String> aiRow(String station, String direction, String slot, String pct) throws Exception {
+        Map<String, String> row = new HashMap<>(CongestionCsv.read(CongestionLoadFixture.sampleCsv()).get(0));
+        row.putAll(Map.of("line_code", "2", "station_name", station, "direction", direction, "day_type", "WEEKDAY", "slot_start", slot,
+                "congestion_pct", pct, "congestion_level", CongestionLevels.of(new BigDecimal(pct)).code()));
+        return row;
+    }
+
+    private static CongestionLoadPlan plan(List<Map<String, String>> rows) {
+        return CongestionLoadPlan.of(rows, NODES, CongestionLoadFixture.MODEL);
+    }
+
+    @Test
+    void seongsuOuterIsTheMeanOfItsNeighbours() throws Exception {
+        CongestionLoadPlan plan = CongestionLoadPlan.of(CongestionCsv.read(CongestionLoadFixture.sampleCsv()), NODES, CongestionLoadFixture.MODEL);
+
+        // 건대입구 34.999999999998 and 뚝섬 34.999999999999 at WEEKDAY 08:00: just under 35, so COMFORTABLE.
+        assertThat(plan.estimated).singleElement().satisfies(row -> {
+            assertThat(row.stationLineId()).isEqualTo(20);
+            assertThat(row.direction()).isEqualTo("OUTER");
+            assertThat(row.dayType()).isEqualTo("WEEKDAY");
+            assertThat(row.slotStart()).isEqualTo(LocalTime.of(8, 0));
+            assertThat(row.pct().toPlainString()).isEqualTo("34.9999999999985");
+            assertThat(row.level()).isEqualTo("COMFORTABLE");
+            assertThat(row.label()).isEqualTo("쾌적");
+            assertThat(row.source()).isEqualTo("ESTIMATED");
+            assertThat(row.modelVersion()).isNull();
+        });
+        // 117 cells (3 day types x 39 slots); 건대입구 09:00 alone does not make a row.
+        assertThat(plan.estimationSkipped).isEqualTo(116);
+        assertThat(plan.rows).noneMatch(row -> row.stationLineId() == 20 && row.direction().equals("OUTER"));
+    }
+
+    @Test
+    void meansAreExactAtLevelBoundaries() throws Exception {
+        CongestionLoadPlan plan = plan(List.of(
+                aiRow("건대입구", "OUTER", "07:00", "34.99"), aiRow("뚝섬", "OUTER", "07:00", "35.01"),
+                aiRow("건대입구", "OUTER", "07:30", "49.999999999999"), aiRow("뚝섬", "OUTER", "07:30", "49.999999999998"),
+                aiRow("건대입구", "OUTER", "08:00", "99.999999999999"), aiRow("뚝섬", "OUTER", "08:00", "100.000000000001"),
+                aiRow("건대입구", "OUTER", "08:30", "0.1"), aiRow("뚝섬", "OUTER", "08:30", "0.2")));
+
+        assertThat(plan.estimated).extracting(row -> row.slotStart() + " " + row.pct().toPlainString() + " " + row.level())
+                .containsExactly("07:00 35.00 RELAXED", "07:30 49.9999999999985 RELAXED", "08:00 100.000000000000 CROWDED",
+                        "08:30 0.15 COMFORTABLE");
+        assertThat(plan.estimationSkipped).isEqualTo(117 - 4);
+    }
+
+    @Test
+    void oneMissingNeighbourMakesNoRow() throws Exception {
+        CongestionLoadPlan plan = plan(List.of(aiRow("건대입구", "OUTER", "08:00", "40"), aiRow("뚝섬", "OUTER", "09:00", "40"),
+                aiRow("뚝섬", "INNER", "08:00", "40")));
+        assertThat(plan.estimated).isEmpty();
+        assertThat(plan.estimationSkipped).isEqualTo(117);
+    }
+
+    @Test
+    void noEstimateWhenTheFileHasTheTarget() throws Exception {
+        CongestionLoadPlan plan = plan(List.of(aiRow("건대입구", "OUTER", "08:00", "40"), aiRow("뚝섬", "OUTER", "08:00", "42"),
+                aiRow("성수", "OUTER", "06:00", "30")));
+        assertThat(plan.estimated).isEmpty();
+        assertThat(plan.estimationSkipped).isZero();
+        assertThat(plan.rows).filteredOn(row -> row.stationLineId() == 20).singleElement()
+                .satisfies(row -> assertThat(row.source()).isEqualTo("PREDICTED"));
+    }
+
+    @Test
+    void theEstimationTableDecidesTheTargets() throws Exception {
+        assertThat(Estimations.load().rules()).containsExactly(new Estimations.Rule("2", "성수", "OUTER", "건대입구", "뚝섬"));
+        List<Map<String, String>> rows = List.of(aiRow("건대입구", "OUTER", "08:00", "40"), aiRow("뚝섬", "OUTER", "08:00", "42"));
+
+        CongestionLoadPlan none = CongestionLoadPlan.of(rows, NODES, CongestionLoadFixture.MODEL, DirectionMappings.load(),
+                Estimations.parse(List.of("line_code,station,direction,previous,next")));
+        assertThat(none.estimated).isEmpty();
+
+        // A rule for 성수 INNER (not in the real table) from the same neighbours.
+        CongestionLoadPlan inner = CongestionLoadPlan.of(List.of(aiRow("건대입구", "INNER", "08:00", "40"), aiRow("뚝섬", "INNER", "08:00", "42")),
+                NODES, CongestionLoadFixture.MODEL, DirectionMappings.load(),
+                Estimations.parse(List.of("line_code,station,direction,previous,next", "2,성수,INNER,뚝섬,건대입구")));
+        assertThat(inner.estimated).singleElement().satisfies(row -> {
+            assertThat(row.direction()).isEqualTo("INNER");
+            assertThat(row.pct()).isEqualByComparingTo("41");
+        });
+
+        assertThatThrownBy(() -> Estimations.parse(List.of("line_code,station,direction,previous,next", "2,성수,OUTER,a,b", "2,성수,OUTER,c,d")))
+                .hasMessageContaining("two rules");
+        assertThatThrownBy(() -> CongestionLoadPlan.of(rows, NODES, CongestionLoadFixture.MODEL, DirectionMappings.load(),
+                Estimations.parse(List.of("line_code,station,direction,previous,next", "2,없는역,OUTER,건대입구,뚝섬"))))
+                .hasMessageContaining("unknown station");
+    }
+
+    @Test
+    void computedLevelsFollowCkCongLevel() {
+        assertThat(List.of("0", "34.999999999999", "35", "49.999999999999", "50", "99.999999999999", "100", "149.999999999999", "150", "180"))
+                .extracting(pct -> CongestionLevels.of(new BigDecimal(pct)))
+                .extracting(CongestionLevels.Level::code)
+                .containsExactly("COMFORTABLE", "COMFORTABLE", "RELAXED", "RELAXED", "NORMAL", "NORMAL", "CROWDED", "CROWDED",
+                        "VERY_CROWDED", "VERY_CROWDED");
+        assertThat(CongestionLevels.of(new BigDecimal("150")).label()).isEqualTo("매우 혼잡");
     }
 
     @Test

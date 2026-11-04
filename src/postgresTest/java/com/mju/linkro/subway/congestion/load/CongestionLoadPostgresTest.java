@@ -18,7 +18,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** V13 (unscaled pct, 39 slots) and the PREDICTED loader on the real V1~V13 seed. */
+/** V13 (unscaled pct, 39 slots, ESTIMATED source) and the loader on the real V1~V13 seed. */
 @Testcontainers
 class CongestionLoadPostgresTest {
     @Container static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16");
@@ -74,6 +74,23 @@ class CongestionLoadPostgresTest {
     }
 
     @Test
+    void estimatedHasNoModelVersionAndPredictedNeedsOne() throws SQLException {
+        migrate(null);
+        long node = node("서울역", "1");
+        insertSource(node, "06:00", "ESTIMATED", null);
+        insertSource(node, "06:00", "MOCK", null);
+        insertSource(node, "06:00", "PREDICTED", MODEL);
+        assertThat(query("select source from congestion_stats order by source")).containsExactly("ESTIMATED", "MOCK", "PREDICTED");
+        assertViolation(() -> insertSource(node, "06:30", "ESTIMATED", MODEL), "ck_cong_model");
+        assertViolation(() -> insertSource(node, "06:30", "MOCK", MODEL), "ck_cong_model");
+        assertViolation(() -> insertSource(node, "06:30", "PREDICTED", null), "ck_cong_model");
+        assertViolation(() -> insertSource(node, "06:30", "ACTUAL", null), "ck_cong_source");
+        assertThat(query("select conname from pg_constraint where conrelid = 'congestion_stats'::regclass "
+                + "and conname in ('ck_cong_model', 'ck_cong_source', 'uq_cong_slot_source') order by conname"))
+                .containsExactly("ck_cong_model", "ck_cong_source", "uq_cong_slot_source");
+    }
+
+    @Test
     void v12DataSurvivesV13() throws SQLException {
         migrate("12");
         insert(node("서울역", "1"), "UP", "06:00", "12.5", "COMFORTABLE");
@@ -92,19 +109,26 @@ class CongestionLoadPostgresTest {
         migrate(null);
         CongestionLoader.Report report = load(SAMPLE, validManifest(dir, SAMPLE));
 
-        assertThat(report.read()).isEqualTo(21);
+        assertThat(report.read()).isEqualTo(24);
         assertThat(report.otherSlot()).isZero();
         assertThat(report.unmatched()).containsExactly(Map.entry("3호선 없는역", 1));
         assertThat(report.directionMismatch()).containsExactly(Map.entry("1호선 INNER", 1), Map.entry("6호선 UP", 1));
         assertThat(report.mapped()).containsExactly(Map.entry("DOWN->LOOP", 1), Map.entry("INNER/OUTER->UP/DOWN", 6));
-        assertThat(report.loaded()).isEqualTo(18);
-        assertThat(report.inserted()).isEqualTo(18);
+        assertThat(report.estimated()).isEqualTo(1);
+        assertThat(report.estimationSkipped()).isEqualTo(116);
+        assertThat(report.loaded()).isEqualTo(22);
+        assertThat(report.inserted()).isEqualTo(22);
         assertThat(report.updated()).isZero();
-        assertThat(report.format()).contains("excluded other slots: 0", "mapped DOWN->LOOP: 1", "mapped INNER/OUTER->UP/DOWN: 6", "loaded rows: 18 (new 18, updated 0)").doesNotContain("05:30");
+        assertThat(report.format()).contains("excluded other slots: 0", "mapped DOWN->LOOP: 1", "mapped INNER/OUTER->UP/DOWN: 6", "estimated rows: 1 (skipped 116)", "loaded rows: 22 (new 22, updated 0)").doesNotContain("05:30");
 
-        assertThat(query("select count(*) from congestion_stats where source = 'PREDICTED' and model_version = '" + MODEL + "'")).containsExactly(18L);
-        assertThat(query("select congestion_pct::text from congestion_stats where congestion_pct < 35 order by congestion_pct"))
-                .containsExactly("11.4550105331955", "34.95326485813263", "34.999999999999");
+        assertThat(query("select count(*) from congestion_stats where source = 'PREDICTED' and model_version = '" + MODEL + "'")).containsExactly(21L);
+        assertThat(query("select congestion_pct::text from congestion_stats where source = 'PREDICTED' and congestion_pct < 35 order by congestion_pct"))
+                .containsExactly("11.4550105331955", "34.95326485813263", "34.999999999998", "34.999999999999", "34.999999999999");
+        // 성수 OUTER: mean of 건대입구 and 뚝섬 OUTER at WEEKDAY 08:00, stored unrounded as ESTIMATED without a model version.
+        assertThat(query("select s.name, cs.direction, cs.day_type, cs.slot_start::text, cs.congestion_pct::text, cs.congestion_level, "
+                + "cs.congestion_level_label, coalesce(cs.model_version, '-') from congestion_stats cs join station_lines sl on sl.id = cs.station_line_id "
+                + "join stations s on s.id = sl.station_id where cs.source = 'ESTIMATED'"))
+                .containsExactly("성수", "OUTER", "WEEKDAY", "08:00:00", "34.9999999999985", "COMFORTABLE", "쾌적", "-");
         // 7호선 이수 00:00 SATURDAY is stored as given on the merged station's 7호선 node.
         assertThat(query("select cs.day_type, cs.congestion_level, cs.congestion_level_label from congestion_stats cs "
                 + "join station_lines sl on sl.id = cs.station_line_id join subway_lines l on l.id = sl.line_id "
@@ -118,7 +142,7 @@ class CongestionLoadPostgresTest {
         // 2호선 on the real seed: branch nodes get UP/DOWN by the table, the junctions keep INNER/OUTER.
         assertThat(query("select s.name || ':' || cs.direction from congestion_stats cs join station_lines sl on sl.id = cs.station_line_id "
                 + "join stations s on s.id = sl.station_id join subway_lines l on l.id = sl.line_id where l.line_code = '2' "
-                + "and s.name in ('용답', '신설동', '도림천', '까치산', '성수', '신도림') order by s.name collate \"C\", cs.direction"))
+                + "and cs.source = 'PREDICTED' and s.name in ('용답', '신설동', '도림천', '까치산', '성수', '신도림') order by s.name collate \"C\", cs.direction"))
                 .containsExactly("까치산:UP", "도림천:DOWN", "도림천:UP", "성수:INNER", "신도림:OUTER", "신설동:UP", "용답:DOWN", "용답:UP");
     }
 
@@ -127,16 +151,18 @@ class CongestionLoadPostgresTest {
         migrate(null);
         Path manifest = validManifest(dir, SAMPLE);
         load(SAMPLE, manifest);
-        var before = query("select station_line_id, direction, day_type, slot_start::text, congestion_pct::text, congestion_level "
-                + "from congestion_stats order by station_line_id, direction, day_type, slot_start");
+        var before = query("select station_line_id, direction, day_type, slot_start::text, source, congestion_pct::text, congestion_level "
+                + "from congestion_stats order by station_line_id, direction, day_type, slot_start, source");
 
         CongestionLoader.Report again = load(SAMPLE, manifest);
 
         assertThat(again.inserted()).isZero();
-        assertThat(again.updated()).isEqualTo(18);
-        assertThat(query("select count(*) from congestion_stats")).containsExactly(18L);
-        assertThat(query("select station_line_id, direction, day_type, slot_start::text, congestion_pct::text, congestion_level "
-                + "from congestion_stats order by station_line_id, direction, day_type, slot_start")).isEqualTo(before);
+        assertThat(again.updated()).isEqualTo(22);
+        assertThat(again.estimated()).isEqualTo(1);
+        assertThat(query("select count(*) from congestion_stats")).containsExactly(22L);
+        assertThat(query("select count(*) from congestion_stats where source = 'ESTIMATED'")).containsExactly(1L);
+        assertThat(query("select station_line_id, direction, day_type, slot_start::text, source, congestion_pct::text, congestion_level "
+                + "from congestion_stats order by station_line_id, direction, day_type, slot_start, source")).isEqualTo(before);
     }
 
     @Test
@@ -188,6 +214,20 @@ class CongestionLoadPostgresTest {
             statement.setBigDecimal(4, new BigDecimal(pct));
             statement.setString(5, level);
             statement.setString(6, MODEL);
+            statement.executeUpdate();
+        }
+    }
+
+    private void insertSource(long node, String slot, String source, String model) throws SQLException {
+        try (Connection connection = connect(); PreparedStatement statement = connection.prepareStatement("""
+                insert into congestion_stats(station_line_id, direction, day_type, slot_start, congestion_pct, congestion_level,
+                                             congestion_level_label, source, model_version)
+                values (?, 'UP', 'WEEKDAY', ?::time, 10, 'COMFORTABLE', '쾌적', ?, ?)
+                """)) {
+            statement.setLong(1, node);
+            statement.setString(2, slot);
+            statement.setString(3, source);
+            statement.setString(4, model);
             statement.executeUpdate();
         }
     }
