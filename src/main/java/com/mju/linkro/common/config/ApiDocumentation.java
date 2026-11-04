@@ -15,6 +15,9 @@ public final class ApiDocumentation {
     @Schema(name = "RoomJoinResponse", requiredProperties = {"success", "data"})
     public record JoinResponse(@Schema(example = "true", description = "항상 true") boolean success, RoomResponses.Joined data) {}
 
+    @Schema(name = "RoomLeaveResponse", requiredProperties = {"success", "data"})
+    public record LeaveResponse(@Schema(example = "true") boolean success, RoomResponses.Left data) {}
+
     @Schema(name = "RoomCreateRequest", description = "정원은 4명 고정. userId·ownerId는 받지 않고 인증된 사용자를 생성자로 사용합니다.")
     public record RoomCreateRequest(
             @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "필수이며 null 불가. 앞뒤 U+0020 제거 후 유니코드 코드포인트 1~30자. 탭·유니코드 공백은 정규화하지 않습니다.", example = "금요일 저녁") String name,
