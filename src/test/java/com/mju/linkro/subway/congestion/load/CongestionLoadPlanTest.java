@@ -22,18 +22,21 @@ class CongestionLoadPlanTest {
             CongestionLoadPlan.key("4", "총신대입구"), new Node(110, Set.of("UP", "DOWN")),
             CongestionLoadPlan.key("5", "강동"), new Node(160, Set.of("UP", "DOWN")),
             CongestionLoadPlan.key("6", "역촌"), new Node(212, Set.of("LOOP")),
+            CongestionLoadPlan.key("6", "구산"), new Node(216, Set.of("LOOP")),
+            CongestionLoadPlan.key("6", "응암"), new Node(178, Set.of("UP", "DOWN", "LOOP")),
             CongestionLoadPlan.key("7", "총신대입구"), new Node(240, Set.of("UP", "DOWN")));
 
     @Test
     void sampleIsCountedAndKeptAsGiven() throws Exception {
         CongestionLoadPlan plan = CongestionLoadPlan.of(CongestionCsv.read(CongestionLoadFixture.sampleCsv()), NODES, CongestionLoadFixture.MODEL);
 
-        assertThat(plan.read).isEqualTo(11);
+        assertThat(plan.read).isEqualTo(13);
         assertThat(plan.otherSlot).isZero();
         assertThat(plan.unmatched).containsExactly(Map.entry("3호선 없는역", 1));
-        assertThat(plan.directionMismatch).containsExactly(Map.entry("2호선 INNER", 1), Map.entry("6호선 DOWN", 1));
+        assertThat(plan.directionMismatch).containsExactly(Map.entry("2호선 INNER", 1), Map.entry("6호선 UP", 1));
+        assertThat(plan.mappedDownToLoop).isEqualTo(1);
         // The 05:30 row (서울역 DOWN) is loaded like any other slot.
-        assertThat(plan.rows).hasSize(8);
+        assertThat(plan.rows).hasSize(10);
         assertThat(plan.rows).anySatisfy(row -> assertThat(row.slotStart()).isEqualTo(LocalTime.of(5, 30)));
         var first = plan.rows.get(0);
         assertThat(first.pct()).isEqualTo(new BigDecimal("34.95326485813263"));
@@ -59,6 +62,24 @@ class CongestionLoadPlanTest {
         assertThat(plan.rows).filteredOn(row -> row.stationLineId() == 160).extracting(CongestionLoadPlan.Row::direction)
                 .containsExactlyInAnyOrder("UP", "DOWN");
         assertThat(plan.rows).anySatisfy(row -> assertThat(row.slotStart()).isEqualTo(LocalTime.of(0, 30)));
+    }
+
+    @Test
+    void loopOnlyNodesReadDownAsLoopAndRejectUp() throws Exception {
+        CongestionLoadPlan plan = CongestionLoadPlan.of(CongestionCsv.read(CongestionLoadFixture.sampleCsv()), NODES, CongestionLoadFixture.MODEL);
+
+        // 역촌 (loop only): AI DOWN is stored as LOOP.
+        assertThat(plan.rows).filteredOn(row -> row.stationLineId() == 212).singleElement()
+                .satisfies(row -> assertThat(row.direction()).isEqualTo("LOOP"));
+        // 응암 is a main-line node (UP/DOWN/LOOP edges), so its DOWN stays DOWN and is not counted as mapped.
+        assertThat(plan.rows).filteredOn(row -> row.stationLineId() == 178).singleElement()
+                .satisfies(row -> assertThat(row.direction()).isEqualTo("DOWN"));
+        // 구산 (loop only): AI UP is not mapped and counts as a mismatch.
+        assertThat(plan.rows).noneMatch(row -> row.stationLineId() == 216);
+        assertThat(plan.directionMismatch).containsEntry("6호선 UP", 1);
+        assertThat(plan.mappedDownToLoop).isEqualTo(1);
+        // 2호선 branch INNER/OUTER is still not mapped.
+        assertThat(plan.rows).noneMatch(row -> row.stationLineId() == 54);
     }
 
     @Test

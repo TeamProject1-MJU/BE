@@ -25,7 +25,7 @@ public final class CongestionLoader {
 
     /** Result counts printed by the tool. */
     public record Report(int read, int otherSlot, Map<String, Integer> unmatched,
-                         Map<String, Integer> directionMismatch, int loaded, int inserted, int updated, String modelVersion) {
+                         Map<String, Integer> directionMismatch, int mappedDownToLoop, int loaded, int inserted, int updated, String modelVersion) {
 
         public String format() {
             StringBuilder out = new StringBuilder();
@@ -37,13 +37,17 @@ public final class CongestionLoader {
                     .limit(20).forEach(entry -> out.append("  ").append(entry.getKey()).append(": ").append(entry.getValue()).append('\n'));
             out.append("direction mismatches: ").append(directionMismatch.values().stream().mapToInt(Integer::intValue).sum()).append('\n');
             directionMismatch.forEach((key, count) -> out.append("  ").append(key).append(": ").append(count).append('\n'));
+            out.append("mapped DOWN->LOOP: ").append(mappedDownToLoop).append('\n');
             out.append("loaded rows: ").append(loaded).append(" (new ").append(inserted).append(", updated ").append(updated).append(")\n");
             return out.toString();
         }
     }
 
-    /** Verifies the CSV against the manifest SHA-256 before reading anything else. */
-    public Report load(Path csv, Path manifest) throws IOException, SQLException {
+    /**
+     * Checks the CSV against the manifest SHA-256 and returns the manifest model_version. Needs no database, so the
+     * tool runs it before reading connection settings or connecting.
+     */
+    public static String verify(Path csv, Path manifest) throws IOException {
         JsonNode root = JsonMapper.builder().build().readTree(Files.readString(manifest));
         String expected = root.path("output_sha256").path(csv.getFileName().toString()).asString(null);
         if (expected == null) {
@@ -57,10 +61,16 @@ public final class CongestionLoader {
         if (modelVersion == null || modelVersion.isBlank()) {
             throw new IllegalArgumentException("manifest has no model_version");
         }
+        return modelVersion;
+    }
+
+    /** Verifies again (the file must not change between check and load), then loads in one transaction. */
+    public Report load(Path csv, Path manifest) throws IOException, SQLException {
+        String modelVersion = verify(csv, manifest);
         CongestionLoadPlan plan = CongestionLoadPlan.of(CongestionCsv.read(csv), nodes(), modelVersion);
         int[] counts = upsert(plan.rows);
         return new Report(plan.read, plan.otherSlot, plan.unmatched, plan.directionMismatch,
-                plan.rows.size(), counts[0], counts[1], modelVersion);
+                plan.mappedDownToLoop, plan.rows.size(), counts[0], counts[1], modelVersion);
     }
 
     /** (line code, normalized name) -> node with the directions of its RIDE edges. */

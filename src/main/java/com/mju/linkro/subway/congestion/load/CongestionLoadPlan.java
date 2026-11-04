@@ -24,6 +24,11 @@ final class CongestionLoadPlan {
     int otherSlot;
     final Map<String, Integer> unmatched = new TreeMap<>();
     final Map<String, Integer> directionMismatch = new TreeMap<>();
+    /** Rows loaded with AI DOWN mapped to LOOP on loop-only nodes (6호선 응암순환). */
+    int mappedDownToLoop;
+
+    /** Nodes whose seed directions are exactly {LOOP}: the one-way 6호선 Eungam loop stations. */
+    private static final Set<String> LOOP_ONLY = Set.of("LOOP");
 
     /**
      * @param nodes      (line code, normalized station name) -> node, from {@link #key(String, String)}
@@ -53,6 +58,12 @@ final class CongestionLoadPlan {
                 continue;
             }
             String direction = row.get("direction").strip();
+            boolean mapped = false;
+            // The AI file has only DOWN for the loop stations; pending AI confirmation, read it as the loop direction.
+            if (node.directions().equals(LOOP_ONLY) && "DOWN".equals(direction)) {
+                direction = "LOOP";
+                mapped = true;
+            }
             if (!node.directions().contains(direction)) {
                 plan.directionMismatch.merge(line + "호선 " + direction, 1, Integer::sum);
                 continue;
@@ -60,6 +71,9 @@ final class CongestionLoadPlan {
             Key unique = new Key(node.stationLineId(), direction, row.get("day_type"), slot);
             if (!seen.add(unique)) {
                 throw new IllegalArgumentException("Two rows map to the same congestion key " + unique + " (" + line + "호선 " + name + ")");
+            }
+            if (mapped) {
+                plan.mappedDownToLoop++;
             }
             plan.rows.add(new Row(node.stationLineId(), direction, row.get("day_type"), slot,
                     new BigDecimal(row.get("congestion_pct").strip()), row.get("congestion_level"),
