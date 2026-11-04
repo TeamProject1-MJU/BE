@@ -1,0 +1,12 @@
+# Congestion loader direction mappings: AI direction -> seed direction, applied before the seed direction check.
+# match: branch=<station_lines.branch_code>, or directions=<the node's seed RIDE directions, exactly, '+'-joined>
+# report: the report line that counts the rows a rule mapped ("mapped <report>: N")
+# Changing a row and loading again overwrites the same keys; rows stored under the old direction stay until deleted.
+match,from,to,report
+# 6호선 응암순환 (LOOP-only nodes): the source data has DOWN only for these stations.
+directions=LOOP,DOWN,LOOP,DOWN->LOOP
+# 2호선 지선: source 내선/외선 -> seed UP (towards the junction) / DOWN. See docs/congestion-load-71.md.
+branch=SEONGSU,INNER,UP,INNER/OUTER->UP/DOWN
+branch=SEONGSU,OUTER,DOWN,INNER/OUTER->UP/DOWN
+branch=SINJEONG,INNER,DOWN,INNER/OUTER->UP/DOWN
+branch=SINJEONG,OUTER,UP,INNER/OUTER->UP/DOWN

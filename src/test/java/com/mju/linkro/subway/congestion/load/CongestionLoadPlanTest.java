@@ -13,30 +13,43 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CongestionLoadPlanTest {
-    /** Nodes shaped like the seed: 2호선 용답 is a SEONGSU node (UP/DOWN only), 6호선 역촌 is on the one-way loop (LOOP only). */
-    private static final Map<String, Node> NODES = Map.of(
-            CongestionLoadPlan.key("1", "서울"), new Node(1, Set.of("UP", "DOWN")),
-            CongestionLoadPlan.key("2", "시청"), new Node(11, Set.of("INNER", "OUTER")),
-            CongestionLoadPlan.key("2", "신촌"), new Node(50, Set.of("INNER", "OUTER")),
-            CongestionLoadPlan.key("2", "용답"), new Node(54, Set.of("UP", "DOWN")),
-            CongestionLoadPlan.key("4", "총신대입구"), new Node(110, Set.of("UP", "DOWN")),
-            CongestionLoadPlan.key("5", "강동"), new Node(160, Set.of("UP", "DOWN")),
-            CongestionLoadPlan.key("6", "역촌"), new Node(212, Set.of("LOOP")),
-            CongestionLoadPlan.key("6", "구산"), new Node(216, Set.of("LOOP")),
-            CongestionLoadPlan.key("6", "응암"), new Node(178, Set.of("UP", "DOWN", "LOOP")),
-            CongestionLoadPlan.key("7", "총신대입구"), new Node(240, Set.of("UP", "DOWN")));
+    /**
+     * Nodes shaped like the seed: 2호선 용답/신설동 are SEONGSU and 도림천/까치산 SINJEONG nodes (UP/DOWN only), the junctions
+     * 성수/신도림 are MAIN with UP/DOWN/INNER/OUTER, 6호선 역촌/구산 are on the one-way loop (LOOP only).
+     */
+    private static final Map<String, Node> NODES = Map.ofEntries(
+            Map.entry(CongestionLoadPlan.key("1", "서울"), new Node(1, "MAIN", Set.of("UP", "DOWN"))),
+            Map.entry(CongestionLoadPlan.key("2", "시청"), new Node(11, "MAIN", Set.of("INNER", "OUTER"))),
+            Map.entry(CongestionLoadPlan.key("2", "성수"), new Node(20, "MAIN", Set.of("UP", "DOWN", "INNER", "OUTER"))),
+            Map.entry(CongestionLoadPlan.key("2", "신도림"), new Node(36, "MAIN", Set.of("UP", "DOWN", "INNER", "OUTER"))),
+            Map.entry(CongestionLoadPlan.key("2", "신촌"), new Node(50, "MAIN", Set.of("INNER", "OUTER"))),
+            Map.entry(CongestionLoadPlan.key("2", "용답"), new Node(54, "SEONGSU", Set.of("UP", "DOWN"))),
+            Map.entry(CongestionLoadPlan.key("2", "신설동"), new Node(57, "SEONGSU", Set.of("UP", "DOWN"))),
+            Map.entry(CongestionLoadPlan.key("2", "도림천"), new Node(58, "SINJEONG", Set.of("UP", "DOWN"))),
+            Map.entry(CongestionLoadPlan.key("2", "까치산"), new Node(61, "SINJEONG", Set.of("UP", "DOWN"))),
+            Map.entry(CongestionLoadPlan.key("4", "총신대입구"), new Node(110, "MAIN", Set.of("UP", "DOWN"))),
+            Map.entry(CongestionLoadPlan.key("5", "강동"), new Node(160, "MAIN", Set.of("UP", "DOWN"))),
+            Map.entry(CongestionLoadPlan.key("6", "역촌"), new Node(212, "EUNGAM_LOOP", Set.of("LOOP"))),
+            Map.entry(CongestionLoadPlan.key("6", "구산"), new Node(216, "EUNGAM_LOOP", Set.of("LOOP"))),
+            Map.entry(CongestionLoadPlan.key("6", "응암"), new Node(178, "MAIN", Set.of("UP", "DOWN", "LOOP"))),
+            Map.entry(CongestionLoadPlan.key("7", "총신대입구"), new Node(240, "MAIN", Set.of("UP", "DOWN"))));
+
+    private static String direction(CongestionLoadPlan plan, long node, String dayType) {
+        return plan.rows.stream().filter(row -> row.stationLineId() == node && row.dayType().equals(dayType))
+                .map(CongestionLoadPlan.Row::direction).sorted().reduce((a, b) -> a + "," + b).orElse("-");
+    }
 
     @Test
     void sampleIsCountedAndKeptAsGiven() throws Exception {
         CongestionLoadPlan plan = CongestionLoadPlan.of(CongestionCsv.read(CongestionLoadFixture.sampleCsv()), NODES, CongestionLoadFixture.MODEL);
 
-        assertThat(plan.read).isEqualTo(13);
+        assertThat(plan.read).isEqualTo(21);
         assertThat(plan.otherSlot).isZero();
         assertThat(plan.unmatched).containsExactly(Map.entry("3호선 없는역", 1));
-        assertThat(plan.directionMismatch).containsExactly(Map.entry("2호선 INNER", 1), Map.entry("6호선 UP", 1));
-        assertThat(plan.mappedDownToLoop).isEqualTo(1);
+        assertThat(plan.directionMismatch).containsExactly(Map.entry("1호선 INNER", 1), Map.entry("6호선 UP", 1));
+        assertThat(plan.mapped).containsExactly(Map.entry("DOWN->LOOP", 1), Map.entry("INNER/OUTER->UP/DOWN", 6));
         // The 05:30 row (서울역 DOWN) is loaded like any other slot.
-        assertThat(plan.rows).hasSize(10);
+        assertThat(plan.rows).hasSize(18);
         assertThat(plan.rows).anySatisfy(row -> assertThat(row.slotStart()).isEqualTo(LocalTime.of(5, 30)));
         var first = plan.rows.get(0);
         assertThat(first.pct()).isEqualTo(new BigDecimal("34.95326485813263"));
@@ -77,9 +90,61 @@ class CongestionLoadPlanTest {
         // 구산 (loop only): AI UP is not mapped and counts as a mismatch.
         assertThat(plan.rows).noneMatch(row -> row.stationLineId() == 216);
         assertThat(plan.directionMismatch).containsEntry("6호선 UP", 1);
-        assertThat(plan.mappedDownToLoop).isEqualTo(1);
-        // 2호선 branch INNER/OUTER is still not mapped.
-        assertThat(plan.rows).noneMatch(row -> row.stationLineId() == 54);
+        assertThat(plan.mapped).containsEntry("DOWN->LOOP", 1);
+    }
+
+    @Test
+    void branchNodesMapInnerOuterByTheTable() throws Exception {
+        CongestionLoadPlan plan = CongestionLoadPlan.of(CongestionCsv.read(CongestionLoadFixture.sampleCsv()), NODES, CongestionLoadFixture.MODEL);
+
+        // SEONGSU: INNER -> UP, OUTER -> DOWN. The terminus 신설동 has INNER only, which goes towards 성수 (UP).
+        assertThat(direction(plan, 54, "WEEKDAY")).isEqualTo("DOWN,UP");
+        assertThat(direction(plan, 57, "WEEKDAY")).isEqualTo("UP");
+        // SINJEONG: INNER -> DOWN, OUTER -> UP. The terminus 까치산 has OUTER only, which goes towards 신도림 (UP).
+        assertThat(direction(plan, 58, "WEEKDAY")).isEqualTo("DOWN,UP");
+        assertThat(direction(plan, 61, "WEEKDAY")).isEqualTo("UP");
+        // The junctions are MAIN nodes: INNER/OUTER stay as given.
+        assertThat(direction(plan, 20, "WEEKDAY")).isEqualTo("INNER");
+        assertThat(direction(plan, 36, "WEEKDAY")).isEqualTo("OUTER");
+        // INNER on a non-branch UP/DOWN node is not converted and counts as a mismatch.
+        assertThat(direction(plan, 1, "WEEKDAY")).isEqualTo("DOWN,UP");
+        assertThat(plan.directionMismatch).containsEntry("1호선 INNER", 1);
+        assertThat(plan.mapped).containsEntry("INNER/OUTER->UP/DOWN", 6);
+    }
+
+    @Test
+    void theTableDecidesTheMappingNotTheCode() throws Exception {
+        assertThat(DirectionMappings.load().reports()).containsExactly("DOWN->LOOP", "INNER/OUTER->UP/DOWN");
+        // Same file shape with every branch direction flipped.
+        DirectionMappings flipped = DirectionMappings.parse(List.of(
+                "match,from,to,report",
+                "directions=LOOP,DOWN,LOOP,DOWN->LOOP",
+                "branch=SEONGSU,INNER,DOWN,INNER/OUTER->UP/DOWN",
+                "branch=SEONGSU,OUTER,UP,INNER/OUTER->UP/DOWN",
+                "branch=SINJEONG,INNER,UP,INNER/OUTER->UP/DOWN",
+                "branch=SINJEONG,OUTER,DOWN,INNER/OUTER->UP/DOWN"));
+        CongestionLoadPlan plan = CongestionLoadPlan.of(CongestionCsv.read(CongestionLoadFixture.sampleCsv()), NODES,
+                CongestionLoadFixture.MODEL, flipped);
+
+        assertThat(direction(plan, 57, "WEEKDAY")).isEqualTo("DOWN");
+        assertThat(direction(plan, 61, "WEEKDAY")).isEqualTo("DOWN");
+        assertThat(plan.rows).filteredOn(row -> row.stationLineId() == 54 && row.pct().equals(new BigDecimal("40")))
+                .singleElement().satisfies(row -> assertThat(row.direction()).isEqualTo("DOWN"));
+
+        // Without rules nothing is converted: branch INNER/OUTER and loop DOWN become mismatches.
+        CongestionLoadPlan none = CongestionLoadPlan.of(CongestionCsv.read(CongestionLoadFixture.sampleCsv()), NODES,
+                CongestionLoadFixture.MODEL, DirectionMappings.parse(List.of("match,from,to,report")));
+        assertThat(none.mapped).isEmpty();
+        assertThat(none.directionMismatch).containsExactly(Map.entry("1호선 INNER", 1), Map.entry("2호선 INNER", 3),
+                Map.entry("2호선 OUTER", 3), Map.entry("6호선 DOWN", 1), Map.entry("6호선 UP", 1));
+    }
+
+    @Test
+    void badMappingFilesAreRejected() {
+        assertThatThrownBy(() -> DirectionMappings.parse(List.of("match,from,to,report", "line=2,INNER,UP,x")))
+                .hasMessageContaining("branch=... or directions=...");
+        assertThatThrownBy(() -> DirectionMappings.parse(List.of("match,from,to,report",
+                "branch=SEONGSU,INNER,UP,x", "branch=SEONGSU,INNER,DOWN,x"))).hasMessageContaining("two rules");
     }
 
     @Test

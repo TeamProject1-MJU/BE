@@ -92,17 +92,17 @@ class CongestionLoadPostgresTest {
         migrate(null);
         CongestionLoader.Report report = load(SAMPLE, validManifest(dir, SAMPLE));
 
-        assertThat(report.read()).isEqualTo(13);
+        assertThat(report.read()).isEqualTo(21);
         assertThat(report.otherSlot()).isZero();
         assertThat(report.unmatched()).containsExactly(Map.entry("3호선 없는역", 1));
-        assertThat(report.directionMismatch()).containsExactly(Map.entry("2호선 INNER", 1), Map.entry("6호선 UP", 1));
-        assertThat(report.mappedDownToLoop()).isEqualTo(1);
-        assertThat(report.loaded()).isEqualTo(10);
-        assertThat(report.inserted()).isEqualTo(10);
+        assertThat(report.directionMismatch()).containsExactly(Map.entry("1호선 INNER", 1), Map.entry("6호선 UP", 1));
+        assertThat(report.mapped()).containsExactly(Map.entry("DOWN->LOOP", 1), Map.entry("INNER/OUTER->UP/DOWN", 6));
+        assertThat(report.loaded()).isEqualTo(18);
+        assertThat(report.inserted()).isEqualTo(18);
         assertThat(report.updated()).isZero();
-        assertThat(report.format()).contains("excluded other slots: 0", "mapped DOWN->LOOP: 1", "loaded rows: 10 (new 10, updated 0)").doesNotContain("05:30");
+        assertThat(report.format()).contains("excluded other slots: 0", "mapped DOWN->LOOP: 1", "mapped INNER/OUTER->UP/DOWN: 6", "loaded rows: 18 (new 18, updated 0)").doesNotContain("05:30");
 
-        assertThat(query("select count(*) from congestion_stats where source = 'PREDICTED' and model_version = '" + MODEL + "'")).containsExactly(10L);
+        assertThat(query("select count(*) from congestion_stats where source = 'PREDICTED' and model_version = '" + MODEL + "'")).containsExactly(18L);
         assertThat(query("select congestion_pct::text from congestion_stats where congestion_pct < 35 order by congestion_pct"))
                 .containsExactly("11.4550105331955", "34.95326485813263", "34.999999999999");
         // 7호선 이수 00:00 SATURDAY is stored as given on the merged station's 7호선 node.
@@ -115,6 +115,11 @@ class CongestionLoadPostgresTest {
         assertThat(query("select s.name || ':' || cs.direction from congestion_stats cs join station_lines sl on sl.id = cs.station_line_id "
                 + "join stations s on s.id = sl.station_id join subway_lines l on l.id = sl.line_id where l.line_code = '6' order by s.name"))
                 .containsExactly("역촌:LOOP", "응암:DOWN");
+        // 2호선 on the real seed: branch nodes get UP/DOWN by the table, the junctions keep INNER/OUTER.
+        assertThat(query("select s.name || ':' || cs.direction from congestion_stats cs join station_lines sl on sl.id = cs.station_line_id "
+                + "join stations s on s.id = sl.station_id join subway_lines l on l.id = sl.line_id where l.line_code = '2' "
+                + "and s.name in ('용답', '신설동', '도림천', '까치산', '성수', '신도림') order by s.name collate \"C\", cs.direction"))
+                .containsExactly("까치산:UP", "도림천:DOWN", "도림천:UP", "성수:INNER", "신도림:OUTER", "신설동:UP", "용답:DOWN", "용답:UP");
     }
 
     @Test
@@ -128,8 +133,8 @@ class CongestionLoadPostgresTest {
         CongestionLoader.Report again = load(SAMPLE, manifest);
 
         assertThat(again.inserted()).isZero();
-        assertThat(again.updated()).isEqualTo(10);
-        assertThat(query("select count(*) from congestion_stats")).containsExactly(10L);
+        assertThat(again.updated()).isEqualTo(18);
+        assertThat(query("select count(*) from congestion_stats")).containsExactly(18L);
         assertThat(query("select station_line_id, direction, day_type, slot_start::text, congestion_pct::text, congestion_level "
                 + "from congestion_stats order by station_line_id, direction, day_type, slot_start")).isEqualTo(before);
     }

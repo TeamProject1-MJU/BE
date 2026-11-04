@@ -25,7 +25,7 @@ public final class CongestionLoader {
 
     /** Result counts printed by the tool. */
     public record Report(int read, int otherSlot, Map<String, Integer> unmatched,
-                         Map<String, Integer> directionMismatch, int mappedDownToLoop, int loaded, int inserted, int updated, String modelVersion) {
+                         Map<String, Integer> directionMismatch, Map<String, Integer> mapped, int loaded, int inserted, int updated, String modelVersion) {
 
         public String format() {
             StringBuilder out = new StringBuilder();
@@ -37,7 +37,7 @@ public final class CongestionLoader {
                     .limit(20).forEach(entry -> out.append("  ").append(entry.getKey()).append(": ").append(entry.getValue()).append('\n'));
             out.append("direction mismatches: ").append(directionMismatch.values().stream().mapToInt(Integer::intValue).sum()).append('\n');
             directionMismatch.forEach((key, count) -> out.append("  ").append(key).append(": ").append(count).append('\n'));
-            out.append("mapped DOWN->LOOP: ").append(mappedDownToLoop).append('\n');
+            mapped.forEach((report, count) -> out.append("mapped ").append(report).append(": ").append(count).append('\n'));
             out.append("loaded rows: ").append(loaded).append(" (new ").append(inserted).append(", updated ").append(updated).append(")\n");
             return out.toString();
         }
@@ -70,16 +70,17 @@ public final class CongestionLoader {
         CongestionLoadPlan plan = CongestionLoadPlan.of(CongestionCsv.read(csv), nodes(), modelVersion);
         int[] counts = upsert(plan.rows);
         return new Report(plan.read, plan.otherSlot, plan.unmatched, plan.directionMismatch,
-                plan.mappedDownToLoop, plan.rows.size(), counts[0], counts[1], modelVersion);
+                plan.mapped, plan.rows.size(), counts[0], counts[1], modelVersion);
     }
 
-    /** (line code, normalized name) -> node with the directions of its RIDE edges. */
+    /** (line code, normalized name) -> node with its branch code and the directions of its RIDE edges. */
     Map<String, Node> nodes() throws SQLException {
         Map<String, Long> ids = new HashMap<>();
         Map<Long, Set<String>> directions = new HashMap<>();
+        Map<Long, String> branches = new HashMap<>();
         try (Statement statement = connection.createStatement();
              ResultSet rs = statement.executeQuery("""
-                     select sl.id, l.line_code, s.name, c.direction
+                     select sl.id, sl.branch_code, l.line_code, s.name, c.direction
                      from station_lines sl
                      join stations s on s.id = sl.station_id
                      join subway_lines l on l.id = sl.line_id
@@ -94,12 +95,13 @@ public final class CongestionLoader {
                 if (previous != null && previous != id) {
                     throw new IllegalStateException("Two nodes normalize to " + key);
                 }
+                branches.put(id, rs.getString("branch_code"));
                 Set<String> set = directions.computeIfAbsent(id, k -> new TreeSet<>());
                 if (rs.getString("direction") != null) set.add(rs.getString("direction"));
             }
         }
         Map<String, Node> nodes = new HashMap<>();
-        ids.forEach((key, id) -> nodes.put(key, new Node(id, Set.copyOf(directions.get(id)))));
+        ids.forEach((key, id) -> nodes.put(key, new Node(id, branches.get(id), Set.copyOf(directions.get(id)))));
         return nodes;
     }
 

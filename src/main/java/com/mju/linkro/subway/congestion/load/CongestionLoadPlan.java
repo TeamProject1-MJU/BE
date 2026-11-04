@@ -6,13 +6,14 @@ import java.util.*;
 
 /**
  * Turns AI rows into congestion_stats rows without touching the DB, and counts everything that is skipped.
- * Values are kept as given: pct as BigDecimal from the string, level/label/day_type/direction unchanged.
+ * Values are kept as given: pct as BigDecimal from the string, level/label/day_type unchanged; direction only through
+ * {@link DirectionMappings}.
  */
 final class CongestionLoadPlan {
     static final Set<LocalTime> ALLOWED_SLOTS = allowedSlots();
 
-    /** Graph node and the directions of the RIDE edges that touch it in the seed. */
-    record Node(long stationLineId, Set<String> directions) {}
+    /** Graph node, its station_lines.branch_code and the directions of the RIDE edges that touch it in the seed. */
+    record Node(long stationLineId, String branchCode, Set<String> directions) {}
 
     record Row(long stationLineId, String direction, String dayType, LocalTime slotStart, BigDecimal pct,
                String level, String label, String modelVersion) {}
@@ -24,18 +25,21 @@ final class CongestionLoadPlan {
     int otherSlot;
     final Map<String, Integer> unmatched = new TreeMap<>();
     final Map<String, Integer> directionMismatch = new TreeMap<>();
-    /** Rows loaded with AI DOWN mapped to LOOP on loop-only nodes (6호선 응암순환). */
-    int mappedDownToLoop;
+    /** Loaded rows whose direction a mapping rule changed, per rule report label (every label listed, 0 if unused). */
+    final Map<String, Integer> mapped = new LinkedHashMap<>();
 
-    /** Nodes whose seed directions are exactly {LOOP}: the one-way 6호선 Eungam loop stations. */
-    private static final Set<String> LOOP_ONLY = Set.of("LOOP");
+    static CongestionLoadPlan of(List<Map<String, String>> csv, Map<String, Node> nodes, String modelVersion) {
+        return of(csv, nodes, modelVersion, DirectionMappings.load());
+    }
 
     /**
      * @param nodes      (line code, normalized station name) -> node, from {@link #key(String, String)}
      * @param modelVersion every row must carry this model_version (from the manifest)
      */
-    static CongestionLoadPlan of(List<Map<String, String>> csv, Map<String, Node> nodes, String modelVersion) {
+    static CongestionLoadPlan of(List<Map<String, String>> csv, Map<String, Node> nodes, String modelVersion,
+                                 DirectionMappings mappings) {
         CongestionLoadPlan plan = new CongestionLoadPlan();
+        mappings.reports().forEach(report -> plan.mapped.put(report, 0));
         Set<Key> seen = new HashSet<>();
         for (Map<String, String> row : csv) {
             plan.read++;
@@ -58,11 +62,9 @@ final class CongestionLoadPlan {
                 continue;
             }
             String direction = row.get("direction").strip();
-            boolean mapped = false;
-            // The AI file has only DOWN for the loop stations; pending AI confirmation, read it as the loop direction.
-            if (node.directions().equals(LOOP_ONLY) && "DOWN".equals(direction)) {
-                direction = "LOOP";
-                mapped = true;
+            Optional<DirectionMappings.Rule> rule = mappings.find(node, direction);
+            if (rule.isPresent()) {
+                direction = rule.get().to();
             }
             if (!node.directions().contains(direction)) {
                 plan.directionMismatch.merge(line + "호선 " + direction, 1, Integer::sum);
@@ -72,9 +74,7 @@ final class CongestionLoadPlan {
             if (!seen.add(unique)) {
                 throw new IllegalArgumentException("Two rows map to the same congestion key " + unique + " (" + line + "호선 " + name + ")");
             }
-            if (mapped) {
-                plan.mappedDownToLoop++;
-            }
+            rule.ifPresent(applied -> plan.mapped.merge(applied.report(), 1, Integer::sum));
             plan.rows.add(new Row(node.stationLineId(), direction, row.get("day_type"), slot,
                     new BigDecimal(row.get("congestion_pct").strip()), row.get("congestion_level"),
                     row.get("congestion_level_label"), row.get("model_version")));
