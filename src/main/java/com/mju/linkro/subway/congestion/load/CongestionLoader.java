@@ -24,14 +24,13 @@ public final class CongestionLoader {
     }
 
     /** Result counts printed by the tool. */
-    public record Report(int read, int excludedSlot, int otherSlot, Map<String, Integer> unmatched,
+    public record Report(int read, int otherSlot, Map<String, Integer> unmatched,
                          Map<String, Integer> directionMismatch, int loaded, int inserted, int updated, String modelVersion) {
 
         public String format() {
             StringBuilder out = new StringBuilder();
             out.append("model_version: ").append(modelVersion).append('\n');
             out.append("read rows: ").append(read).append('\n');
-            out.append("excluded 05:30 slot: ").append(excludedSlot).append('\n');
             out.append("excluded other slots: ").append(otherSlot).append('\n');
             out.append("node match failures: ").append(unmatched.values().stream().mapToInt(Integer::intValue).sum()).append('\n');
             unmatched.entrySet().stream().sorted(Map.Entry.<String, Integer>comparingByValue().reversed().thenComparing(Map.Entry.comparingByKey()))
@@ -60,7 +59,7 @@ public final class CongestionLoader {
         }
         CongestionLoadPlan plan = CongestionLoadPlan.of(CongestionCsv.read(csv), nodes(), modelVersion);
         int[] counts = upsert(plan.rows);
-        return new Report(plan.read, plan.excludedSlot, plan.otherSlot, plan.unmatched, plan.directionMismatch,
+        return new Report(plan.read, plan.otherSlot, plan.unmatched, plan.directionMismatch,
                 plan.rows.size(), counts[0], counts[1], modelVersion);
     }
 

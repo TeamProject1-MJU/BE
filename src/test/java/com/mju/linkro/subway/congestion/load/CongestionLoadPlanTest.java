@@ -29,11 +29,12 @@ class CongestionLoadPlanTest {
         CongestionLoadPlan plan = CongestionLoadPlan.of(CongestionCsv.read(CongestionLoadFixture.sampleCsv()), NODES, CongestionLoadFixture.MODEL);
 
         assertThat(plan.read).isEqualTo(11);
-        assertThat(plan.excludedSlot).isEqualTo(1);
         assertThat(plan.otherSlot).isZero();
         assertThat(plan.unmatched).containsExactly(Map.entry("3호선 없는역", 1));
         assertThat(plan.directionMismatch).containsExactly(Map.entry("2호선 INNER", 1), Map.entry("6호선 DOWN", 1));
-        assertThat(plan.rows).hasSize(7);
+        // The 05:30 row (서울역 DOWN) is loaded like any other slot.
+        assertThat(plan.rows).hasSize(8);
+        assertThat(plan.rows).anySatisfy(row -> assertThat(row.slotStart()).isEqualTo(LocalTime.of(5, 30)));
         var first = plan.rows.get(0);
         assertThat(first.pct()).isEqualTo(new BigDecimal("34.95326485813263"));
         assertThat(first.pct().toPlainString()).isEqualTo("34.95326485813263");
@@ -72,20 +73,19 @@ class CongestionLoadPlanTest {
     }
 
     @Test
-    void allowedSlotsAre38() {
-        assertThat(CongestionLoadPlan.ALLOWED_SLOTS).hasSize(38)
-                .contains(LocalTime.of(6, 0), LocalTime.of(23, 30), LocalTime.MIDNIGHT, LocalTime.of(0, 30))
-                .doesNotContain(LocalTime.of(5, 30), LocalTime.of(1, 0), LocalTime.of(23, 45));
+    void allowedSlotsAre39() {
+        assertThat(CongestionLoadPlan.ALLOWED_SLOTS).hasSize(39)
+                .contains(LocalTime.of(5, 30), LocalTime.of(6, 0), LocalTime.of(23, 30), LocalTime.MIDNIGHT, LocalTime.of(0, 30))
+                .doesNotContain(LocalTime.of(5, 0), LocalTime.of(5, 15), LocalTime.of(1, 0), LocalTime.of(23, 45), LocalTime.of(6, 15));
     }
 
     @Test
-    void otherSlotsAreCountedApartFromTheExcluded0530(@TempDir Path dir) throws Exception {
+    void slotsOutsideThe39AreExcludedAndCounted(@TempDir Path dir) throws Exception {
         Path csv = dir.resolve("predictions_for_import.csv");
         List<String> lines = Files.readAllLines(CongestionLoadFixture.sampleCsv());
         Files.write(csv, List.of(lines.get(0), lines.get(1).replace(",06:00,", ",01:00,")));
         CongestionLoadPlan plan = CongestionLoadPlan.of(CongestionCsv.read(csv), NODES, CongestionLoadFixture.MODEL);
         assertThat(plan.otherSlot).isEqualTo(1);
-        assertThat(plan.excludedSlot).isZero();
         assertThat(plan.rows).isEmpty();
     }
 

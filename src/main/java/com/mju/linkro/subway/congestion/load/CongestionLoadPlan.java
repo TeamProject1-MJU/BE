@@ -9,7 +9,6 @@ import java.util.*;
  * Values are kept as given: pct as BigDecimal from the string, level/label/day_type/direction unchanged.
  */
 final class CongestionLoadPlan {
-    static final LocalTime EXCLUDED_SLOT = LocalTime.of(5, 30);
     static final Set<LocalTime> ALLOWED_SLOTS = allowedSlots();
 
     /** Graph node and the directions of the RIDE edges that touch it in the seed. */
@@ -22,7 +21,6 @@ final class CongestionLoadPlan {
 
     final List<Row> rows = new ArrayList<>();
     int read;
-    int excludedSlot;
     int otherSlot;
     final Map<String, Integer> unmatched = new TreeMap<>();
     final Map<String, Integer> directionMismatch = new TreeMap<>();
@@ -43,10 +41,6 @@ final class CongestionLoadPlan {
                 throw new IllegalArgumentException("model_version " + row.get("model_version") + " differs from manifest " + modelVersion);
             }
             LocalTime slot = LocalTime.parse(row.get("slot_start"));
-            if (slot.equals(EXCLUDED_SLOT)) {
-                plan.excludedSlot++;
-                continue;
-            }
             if (!ALLOWED_SLOTS.contains(slot)) {
                 plan.otherSlot++;
                 continue;
@@ -80,9 +74,9 @@ final class CongestionLoadPlan {
 
     private static Set<LocalTime> allowedSlots() {
         Set<LocalTime> slots = new TreeSet<>();
-        // 06:00 .. 23:30 is 36 slots; counting avoids wrapping past midnight.
-        for (int i = 0; i < 36; i++) {
-            slots.add(LocalTime.of(6, 0).plusMinutes(30L * i));
+        // 05:30 .. 23:30 is 37 slots; counting avoids wrapping past midnight.
+        for (int i = 0; i < 37; i++) {
+            slots.add(LocalTime.of(5, 30).plusMinutes(30L * i));
         }
         slots.add(LocalTime.MIDNIGHT);
         slots.add(LocalTime.of(0, 30));

@@ -18,7 +18,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** V13 (unscaled pct, 38 slots) and the PREDICTED loader on the real V1~V13 seed. */
+/** V13 (unscaled pct, 39 slots) and the PREDICTED loader on the real V1~V13 seed. */
 @Testcontainers
 class CongestionLoadPostgresTest {
     @Container static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16");
@@ -58,7 +58,7 @@ class CongestionLoadPostgresTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"06:00", "23:30", "00:00", "00:30"})
+    @ValueSource(strings = {"05:30", "06:00", "23:30", "00:00", "00:30"})
     void allowedSlotsInsert(String slot) throws SQLException {
         migrate(null);
         insert(node("서울역", "1"), "UP", slot, "10", "COMFORTABLE");
@@ -66,7 +66,7 @@ class CongestionLoadPostgresTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"05:30", "23:45", "01:00", "05:59", "06:15"})
+    @ValueSource(strings = {"05:15", "05:00", "01:00", "23:45", "06:15"})
     void otherSlotsViolateCkCongSlot(String slot) throws SQLException {
         migrate(null);
         long node = node("서울역", "1");
@@ -93,23 +93,23 @@ class CongestionLoadPostgresTest {
         CongestionLoader.Report report = load(SAMPLE, validManifest(dir, SAMPLE));
 
         assertThat(report.read()).isEqualTo(11);
-        assertThat(report.excludedSlot()).isEqualTo(1);
+        assertThat(report.otherSlot()).isZero();
         assertThat(report.unmatched()).containsExactly(Map.entry("3호선 없는역", 1));
         assertThat(report.directionMismatch()).containsExactly(Map.entry("2호선 INNER", 1), Map.entry("6호선 DOWN", 1));
-        assertThat(report.loaded()).isEqualTo(7);
-        assertThat(report.inserted()).isEqualTo(7);
+        assertThat(report.loaded()).isEqualTo(8);
+        assertThat(report.inserted()).isEqualTo(8);
         assertThat(report.updated()).isZero();
-        assertThat(report.format()).contains("excluded 05:30 slot: 1", "loaded rows: 7 (new 7, updated 0)");
+        assertThat(report.format()).contains("excluded other slots: 0", "loaded rows: 8 (new 8, updated 0)").doesNotContain("05:30");
 
-        assertThat(query("select count(*) from congestion_stats where source = 'PREDICTED' and model_version = '" + MODEL + "'")).containsExactly(7L);
+        assertThat(query("select count(*) from congestion_stats where source = 'PREDICTED' and model_version = '" + MODEL + "'")).containsExactly(8L);
         assertThat(query("select congestion_pct::text from congestion_stats where congestion_pct < 35 order by congestion_pct"))
-                .containsExactly("34.95326485813263", "34.999999999999");
+                .containsExactly("11.4550105331955", "34.95326485813263", "34.999999999999");
         // 7호선 이수 00:00 SATURDAY is stored as given on the merged station's 7호선 node.
         assertThat(query("select cs.day_type, cs.congestion_level, cs.congestion_level_label from congestion_stats cs "
                 + "join station_lines sl on sl.id = cs.station_line_id join subway_lines l on l.id = sl.line_id "
                 + "join stations s on s.id = sl.station_id where s.name = '총신대입구(이수)' and l.line_code = '7' and cs.slot_start = time '00:00'"))
                 .containsExactly("SATURDAY", "RELAXED", "여유");
-        assertThat(query("select count(*) from congestion_stats where slot_start = time '05:30'")).containsExactly(0L);
+        assertThat(query("select count(*) from congestion_stats where slot_start = time '05:30'")).containsExactly(1L);
     }
 
     @Test
@@ -123,8 +123,8 @@ class CongestionLoadPostgresTest {
         CongestionLoader.Report again = load(SAMPLE, manifest);
 
         assertThat(again.inserted()).isZero();
-        assertThat(again.updated()).isEqualTo(7);
-        assertThat(query("select count(*) from congestion_stats")).containsExactly(7L);
+        assertThat(again.updated()).isEqualTo(8);
+        assertThat(query("select count(*) from congestion_stats")).containsExactly(8L);
         assertThat(query("select station_line_id, direction, day_type, slot_start::text, congestion_pct::text, congestion_level "
                 + "from congestion_stats order by station_line_id, direction, day_type, slot_start")).isEqualTo(before);
     }
