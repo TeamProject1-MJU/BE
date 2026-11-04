@@ -1,12 +1,8 @@
 # 방 나가기·자동 승계 (#37)
 
-## 기준과 사전 확인
+## 기준
 
-- 기준: 첨부 API 명세 v1.12(2026-10-29) 7.8·7.12, ERD v1.13 및 실제 V1~V12 마이그레이션과 방 코드. 원본 DOCX·ERD·마이그레이션은 수정하지 않는다.
-- 실제 이슈: https://github.com/TeamProject1-MJU/BE/issues/37 . 오래된 v1.7 표기보다 첨부 최신 자료를 우선한다.
-- 시작 브랜치 `feat/37-room-leave`, HEAD `5c3b2ef`. fetch 후 origin/dev와 차이 0/0. 시작 시 미커밋 변경 없음. 저장소·상위 디렉터리에서 AGENTS.md는 발견되지 않았다.
-- #36의 PR #64 병합 `ea8f8bf`, 구현 `e4c252f`, 응답·문서 보완 `630cb0c`가 현재 HEAD의 조상이다. JWT 주입·고유 스키마·오류 예시 관례를 재사용한다.
-- 실제 PR #64 리뷰 댓글도 확인했다. 병합된 응답·문서 정리는 포함되었지만, 리뷰의 비차단 제안 중 OpenAPI null 방어와 검증 순서의 이유 명시는 시작 코드에 없었다. 이번 DELETE 오류 예시가 공유하는 커스터마이저에는 null 방어를 추가했다. 출발역 검증은 권한 확인을 우선하여 비참여자의 잘못된 값도 403이 되는 기존 순서를 유지한다. 이미 제공된 StationLookup으로의 교체는 출발역 기능 후속 개선으로 남긴다.
+API 명세 v1.12(2026-10-29) 7.8·7.12, ERD v1.13 및 V1~V12 마이그레이션을 기준으로 한다. JWT 사용자 식별·고유 응답 스키마·오류 예시는 기존 방 API 계약을 재사용한다.
 
 ## API 계약과 명세 판단
 
@@ -26,7 +22,7 @@
 
 RoomLeaveService.leave는 READ COMMITTED 쓰기 트랜잭션을 시작하거나 기존 트랜잭션에 참여한다. RoomAccess.lockMember → 현재 role scalar 조회 → 본인 멤버 삭제 → members.flush → 남은 인원 조회 → 방 삭제 또는 findSuccessor → promoteToOwner 순서다. 엔티티를 조회한 뒤라도 역할 판단은 scalar DB 조회로 한다. DB 승계 조회를 Java UUID 정렬로 대체하지 않는다.
 
-RoomAccess의 FOR NO KEY UPDATE·약 3초 lock_timeout·실제 격리 수준 및 Session.isDirty 검사를 유지한다. 명세의 FOR UPDATE 예시보다 기존 검증된 잠금 구현을 재사용하라는 이번 요구를 따른다. #35 읽기용 REPEATABLE READ/REQUIRES_NEW는 적용하지 않는다. 잠금 전 persist·update·remove를 하지 않으며 dirty 검사를 flush/clear 등으로 우회하지 않는다.
+RoomAccess의 FOR NO KEY UPDATE·약 3초 lock_timeout·실제 격리 수준 및 Session.isDirty 검사를 유지한다. FOR NO KEY UPDATE는 같은 방의 멤버 변경을 직렬화하면서 일반 채팅 INSERT의 FK 검사에 필요한 KEY SHARE 잠금과는 충돌하지 않으므로 사용한다. #35 읽기용 REPEATABLE READ/REQUIRES_NEW는 적용하지 않는다. 잠금 전 persist·update·remove를 하지 않으며 dirty 검사를 flush/clear 등으로 우회하지 않는다.
 
 부분 유니크 인덱스는 OWNER 최대 1명만 보장한다. 삭제 SQL을 명시적으로 flush한 후 승격하여 Hibernate의 UPDATE 우선 실행으로 인한 충돌을 방지한다. 승격 및 방 삭제는 같은 트랜잭션에서 커밋되고 실패하면 멤버·투표 cascade까지 전부 롤백한다.
 
@@ -67,19 +63,10 @@ Java UUID 정렬은 PostgreSQL 순서와 다르므로 사용하지 않는다. �
 - 방 삭제 분기에는 SYSTEM 메시지를 저장하지 않는다. 커밋 후 삭제된 방에 새 메시지를 INSERT하지 않는다.
 - 퇴장자의 기존 구독에서 이후 수신을 막는 작업은 WS 세션 관리 후속 연동이다. 이번 HTTP 권한 검증만으로 기존 구독 차단이 완료되지는 않는다.
 
-## 검증과 수동 확인
+## FE 연동 주의사항
 
-일반 서비스 테스트는 잠금·삭제·flush·승격의 호출 순서를 검증한다. PostgreSQL 테스트는 실제 마이그레이션·JWT/MockMvc 웹 경로·DB cascade와 실패 롤백·별도 연결 경합을 검증한다. 경합은 latch/pg_stat_activity의 실제 Lock 대기와 timeout을 사용하고 최종 DB 상태를 검사한다. UUID 동률 테스트는 Java와 PostgreSQL 순서가 갈리는 7fff…/8000…를 사용한다. 다중 방 선잠금 후 변경과 외부 롤백도 검증한다.
+퇴장 성공 응답이 유실되면 같은 DELETE를 재시도할 수 있다. 방이 남아 있고 이미 비참여자이면 NOT_ROOM_MEMBER(403), 방이 없으면 ROOM_NOT_FOUND(404)라는 서버 계약을 유지한다. 이 응답만으로 이전 요청의 성공을 증명할 수는 없다. FE는 해당 DELETE의 응답 유실·재시도 맥락과 error.code를 구분하여 화면 이동·상태 정리 방식을 합의해야 한다. 모든 API의 403·404를 성공으로 처리하지 않는다. 자동 재시도와 FE 동작 변경은 별도 연동 범위다.
 
-OpenAPI는 `/v3/api-docs`를 자동 호출하여 bearerAuth, 숨겨진 userId, 필수 UUID roomId, 고유 RoomLeaveResponse/RoomLeftData 및 오류 응답 참조·nullable 필드를 검사한다.
+## OpenAPI 계약
 
-Swagger UI 브라우저 수동 확인은 수행하지 않았다. 확인 순서:
-
-1. Swagger UI에서 Authorize에 사용자 A의 Access Token을 입력하고 방을 생성한다.
-2. 사용자 B·C로 코드 참여 후 A로 DELETE를 호출하여 newOwnerId가 B의 사용자 UUID인지 확인한다.
-3. B로 상세·초대 코드 조회 성공, A로 접근 거절을 확인한다.
-4. 일반 멤버 C 퇴장 시 false/null, 마지막 B 퇴장 시 true/null, 재호출 404를 확인한다.
-5. 남은 방에서 중복 퇴장 403, 비참여자 403, 잘못된 UUID 400, 토큰 제거 후 401을 확인한다.
-6. DELETE 문서에서 userId 입력 없음, roomId 필수 UUID, 200의 세 예시 및 400/401/403/404/409/500 응답을 확인한다.
-
-최종 실행: `.\gradlew.bat test postgresTest --no-daemon` BUILD SUCCESSFUL. 일반 443개·PostgreSQL 230개 통과, 실패·오류·스킵 각각 0개. 이번 추가 테스트는 서비스 1개·PostgreSQL 14개다. `git diff --check`도 통과했다. 초기 실행에서는 같은 트랜잭션 내 pg_stat_activity 통계 스냅샷으로 경합 관찰 테스트 2개가 실패했다. 관찰 루프에 pg_stat_clear_snapshot()을 추가한 뒤 전체 재실행으로 통과를 확인했다. 실제 WS·이벤트 발행과 회원 탈퇴 전체는 후속 범위이며 이번 수동 확인 완료로 간주하지 않는다.
+OpenAPI 오류 예시 커스터마이저는 operation·응답·JSON content가 없는 경우를 건너뛰어 문서 생성을 유지한다. 필수 응답의 누락을 허용한다는 의미는 아니며, 방 참여·내 멤버 변경 API의 필수 상태와 스키마·오류별 예시는 생성 문서 계약 테스트에서 검증한다. 정상적으로 본문이 없는 응답에는 JSON content나 오류 예시를 강제로 추가하지 않는다.
