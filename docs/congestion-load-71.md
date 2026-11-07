@@ -161,6 +161,8 @@ loaded rows: 61027 (new 61027, updated 0)
 
 ## ⑦에서 고칠 목록 (35칸·23:00, 05:30 제외·06:00 첫차 가정)
 
+> #79에서 레포 안의 항목(`CongestionLookup.java`, `CongestionSource.java`, `docs/subway-module-interface.md`, `docs/subway-schema-48.md`, ERD)은 고쳤다. API 명세(docx) 항목은 아직이다. 조회 규칙은 `docs/congestion-api-79.md`가 기준이다.
+
 | 파일 | 줄 | 내용 |
 | --- | --- | --- |
 | `src/main/java/com/mju/linkro/subway/api/CongestionLookup.java` | 13 | Javadoc "Times outside 06:00~23:00 use the next first-train 06:00 slot (6.2)": 범위와 첫차 슬롯(05:30)이 바뀜 |
