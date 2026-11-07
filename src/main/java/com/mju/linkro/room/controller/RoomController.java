@@ -31,6 +31,20 @@ public class RoomController {
     private final RoomService rooms;
     private final RoomJoinService joining;
     private final RoomMembershipService membership;
+    private final RoomLeaveService leaving;
+
+    @DeleteMapping("/{roomId}/members/me")
+    @Operation(summary = "방 나가기", description = "OWNER 퇴장 시 입장 순서로 자동 승계. 마지막 멤버이면 방 삭제. 승계 없으면 newOwnerId:null. 재요청은 남은 방에서 403, 삭제된 방에서 404.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "퇴장 성공. newOwnerId는 멤버 ID가 아닌 사용자 UUID.", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.LeaveResponse.class), examples = {
+            @ExampleObject(name = "일반 멤버", value = "{\"success\":true,\"data\":{\"roomDeleted\":false,\"newOwnerId\":null}}"),
+            @ExampleObject(name = "방장 승계", value = "{\"success\":true,\"data\":{\"roomDeleted\":false,\"newOwnerId\":\"0192f3a4-9d3e-7e5a-9c43-8f5b1c9e4d03\"}}"),
+            @ExampleObject(name = "마지막 멤버", value = "{\"success\":true,\"data\":{\"roomDeleted\":true,\"newOwnerId\":null}}") }))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "NOT_ROOM_MEMBER", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "ROOM_NOT_FOUND", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "ROOM_BUSY", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
+    public ApiResponse<Left> leave(@CurrentUser UUID userId, @PathVariable UUID roomId) {
+        return ApiResponse.success(leaving.leave(roomId, userId));
+    }
 
     @PostMapping
     @Operation(summary = "약속방 생성", requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true,
