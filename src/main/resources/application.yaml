@@ -39,6 +39,10 @@ cors:
 # - congestion: mock | db. db reads congestion_stats for route congestion; turn it on after the production DB is
 #   loaded (environment variable LINKRO_SUBWAY_CONGESTION=db). GET /congestion reads the DB either way.
 # - holidays: comma-separated yyyy-MM-dd used as SUNDAY; defaults are in subway-holidays.properties.
+# Route search (POST /routes/search): the Kakao REST API key comes only from the environment variable
+# KAKAO_REST_API_KEY (production: ~/BE/.env, passed by docker-compose). Empty means INTERNAL routes only.
+# Optional overrides (defaults shown): linkro.route.kakao.base-url=https://dapi.kakao.com,
+#   call-timeout=3s, total-timeout=5s, retry-delay=200ms. See docs/route-search-81.md.
 # - graph.* and fare.* apply only with module=graph; defaults are in subway-graph-defaults.properties
 #   (docs/subway-graph-69.md lists them).
 # linkro:

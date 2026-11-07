@@ -29,6 +29,8 @@ services:
       # Subway switches (optional). Unset or empty in ~/BE/.env means mock, as before.
       LINKRO_SUBWAY_MODULE: ${LINKRO_SUBWAY_MODULE:-mock}
       LINKRO_SUBWAY_CONGESTION: ${LINKRO_SUBWAY_CONGESTION:-mock}
+      # Kakao REST API key for POST /routes/search (optional). Empty means INTERNAL routes only.
+      KAKAO_REST_API_KEY: ${KAKAO_REST_API_KEY:-}
     ports:
       - "8080:8080"
 
