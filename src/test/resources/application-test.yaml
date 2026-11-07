@@ -15,3 +15,8 @@ auth:
   jwt:
     secret: dGVzdC1vbmx5LXNlY3JldC0wMTIzNDU2Nzg5YWJjZGVmZ2hpams=
     access-token-ttl: 15m
+linkro:
+  holiday:
+    kasi:
+      # Tests never call the real KASI API, even when .env or the shell has KASI_SPECIAL_DAY_KEY.
+      service-key: ""
