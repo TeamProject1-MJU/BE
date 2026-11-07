@@ -31,4 +31,13 @@ class SubwayGraphModuleConfigTest {
         runner.withPropertyValues("linkro.subway.module=mock").run(context -> assertThat(context).hasNotFailed()
                 .doesNotHaveBean(SubwayGraph.class));
     }
+
+    @Test
+    void emptyModuleIsMockNotGraph() {
+        runner.withUserConfiguration(com.mju.linkro.subway.mock.MockSubwayModuleConfig.class)
+                .withPropertyValues("linkro.subway.module=").run(context -> {
+                    assertThat(context).hasNotFailed().doesNotHaveBean(SubwayGraph.class).hasSingleBean(SubwayRouteFinder.class);
+                    assertThat(context.getBean(SubwayRouteFinder.class)).isNotInstanceOf(DijkstraSubwayRouteFinder.class);
+                });
+    }
 }

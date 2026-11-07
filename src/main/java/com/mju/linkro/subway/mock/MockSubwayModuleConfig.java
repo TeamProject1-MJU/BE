@@ -3,14 +3,14 @@ package com.mju.linkro.subway.mock;
 import com.mju.linkro.subway.api.FareCalculator;
 import com.mju.linkro.subway.api.SubwayRouteFinder;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 
-/** Mock routes and fares unless {@code linkro.subway.module} names another implementation (graph). */
+/** Mock routes and fares unless {@code linkro.subway.module} names another implementation (graph); empty means mock. */
 @Slf4j
 @Configuration(proxyBeanMethods = false)
-@ConditionalOnProperty(name = "linkro.subway.module", havingValue = "mock", matchIfMissing = true)
+@Conditional(MockSwitchCondition.Module.class)
 public class MockSubwayModuleConfig {
 
     public MockSubwayModuleConfig() {

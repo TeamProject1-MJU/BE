@@ -2,14 +2,14 @@ package com.mju.linkro.subway.mock;
 
 import com.mju.linkro.subway.api.CongestionLookup;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 
-/** Mock congestion until the real lookup exists; then {@code linkro.subway.congestion} switches it off. */
+/** Mock congestion unless {@code linkro.subway.congestion} names another implementation (db); empty means mock. */
 @Slf4j
 @Configuration(proxyBeanMethods = false)
-@ConditionalOnProperty(name = "linkro.subway.congestion", havingValue = "mock", matchIfMissing = true)
+@Conditional(MockSwitchCondition.Congestion.class)
 public class MockCongestionConfig {
 
     public MockCongestionConfig() {

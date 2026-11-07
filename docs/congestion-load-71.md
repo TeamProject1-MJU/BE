@@ -145,8 +145,8 @@ loaded rows: 61027 (new 61027, updated 0)
 
 ## API 표시
 
-- DB에는 원값을 저장한다. API의 `pct`는 소수 1자리로 **내림**해서 보여준다(⑦에서 구현).
-- 반올림하면 단계와 어긋날 수 있다(예: 34.96 → 35.0인데 COMFORTABLE). 그래서 내림을 쓴다.
+- DB에는 원값을 저장한다. API의 `pct`는 정수로 반올림하되, 단계 상한을 넘으면 상한 바로 아래 정수로 내린다(예: 34.96 COMFORTABLE → 34).
+  - #79에서 구현했다. 규칙은 `docs/congestion-api-79.md`의 규칙 E다.
 - `level`·`levelLabel`은 저장된 AI 값을 그대로 내려준다.
 
 ## 알려진 제한
@@ -160,6 +160,8 @@ loaded rows: 61027 (new 61027, updated 0)
 - **성수 외선은 추정값이다**: 실제 예측이 아니라 앞뒤 역 평균이다. 원본이 고쳐지면 ESTIMATED 행을 지우고 다시 적재한다.
 
 ## ⑦에서 고칠 목록 (35칸·23:00, 05:30 제외·06:00 첫차 가정)
+
+> #79에서 레포 안의 항목(`CongestionLookup.java`, `CongestionSource.java`, `docs/subway-module-interface.md`, `docs/subway-schema-48.md`, ERD)은 고쳤다. API 명세(docx) 항목은 아직이다. 조회 규칙은 `docs/congestion-api-79.md`가 기준이다.
 
 | 파일 | 줄 | 내용 |
 | --- | --- | --- |
