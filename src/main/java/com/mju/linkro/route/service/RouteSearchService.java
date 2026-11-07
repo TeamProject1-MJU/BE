@@ -67,6 +67,8 @@ public class RouteSearchService {
         RouteSource source = RouteSource.KAKAO;
         List<RouteDraft> drafts = List.of();
         String fallback;
+        // Expected fallbacks (no key, cooldown, same station, no usable subway route) are INFO; Kakao failures WARN.
+        boolean expected = true;
         if (origin.id() == destination.id()) {
             fallback = "same station";
         } else {
@@ -75,11 +77,17 @@ public class RouteSearchService {
                 drafts = mapper.map(found.body(), origin.id(), destination.id());
                 fallback = drafts.isEmpty() ? "no usable subway route" : null;
             } else {
-                fallback = ((KakaoRouteClient.Failed) result).reason().name();
+                KakaoRouteClient.Reason reason = ((KakaoRouteClient.Failed) result).reason();
+                fallback = reason.name();
+                expected = reason.expected();
             }
         }
         if (drafts.isEmpty()) {
-            log.info("Route search {} -> {} uses INTERNAL: {}", origin.id(), destination.id(), fallback);
+            if (expected) {
+                log.info("Route search {} -> {} uses INTERNAL: {}", origin.id(), destination.id(), fallback);
+            } else {
+                log.warn("Route search {} -> {} uses INTERNAL: {}", origin.id(), destination.id(), fallback);
+            }
             source = RouteSource.INTERNAL;
             drafts = List.of(internal.build(origin.id(), destination.id()));
         }

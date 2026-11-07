@@ -60,8 +60,37 @@
 | 재시도 | 타임아웃·I/O 오류·5xx일 때 200ms 쉬고 1회. 남은 시간 안에서만 하고, 그 호출의 대기 시간은 남은 시간으로 줄인다 |
 | 재시도 안 함 | 4xx(429 쿼터 초과 포함), 읽을 수 없는 본문 |
 | 키가 비어 있음 | 호출하지 않고 바로 INTERNAL |
+| 호출 스레드 | `ThreadPoolExecutor` core 4, max 16, 대기열 없음(`SynchronousQueue`), 데몬 스레드 `kakao-route-N`, 종료 시 `shutdownNow` |
+| 풀이 가득 참 | 16개가 모두 호출 중이면 카카오를 호출하지 않고 즉시 INTERNAL(`BUSY`) |
 
-설정으로 바꿀 수 있다(기본값 표시): `linkro.route.kakao.base-url=https://dapi.kakao.com`, `call-timeout=3s`, `total-timeout=5s`, `retry-delay=200ms`.
+설정으로 바꿀 수 있다(기본값 표시):
+- `linkro.route.kakao.base-url=https://dapi.kakao.com`
+- `call-timeout=3s`, `total-timeout=5s`, `retry-delay=200ms`
+- `auth-cooldown=5m`, `quota-cooldown=30s`
+
+### 호출 보류(쿨다운)
+
+| 응답 | 보류 시간 | 로그 |
+| --- | --- | --- |
+| 401, 403 (키 오류) | 5분 | ERROR, 쿨다운당 1회(`Kakao rejected the key; INTERNAL only for 300 s. Check KAKAO_REST_API_KEY.`) |
+| 429 (쿼터 초과) | 30초 | WARN, 쿨다운당 1회 |
+
+- 보류 중에는 카카오를 호출하지 않고(호출 0회) 바로 INTERNAL이다(`routeSource: INTERNAL`, 대체 이유 `COOLDOWN`).
+- 보류가 끝나면 다음 요청이 다시 시도한다. 다시 401·403·429면 새 보류가 시작된다.
+- 상태는 앱 메모리에만 있다(DB·파일에 저장하지 않음). 재시작하면 초기화되고, 서버가 여러 대면 서버마다 따로 판단한다.
+- 시간은 주입한 `Clock`으로 계산해 테스트에서 앞당길 수 있다.
+
+### 로그 수준
+
+| 상황 | 수준 |
+| --- | --- |
+| 카카오 성공 | INFO |
+| 카카오 타임아웃·I/O 오류·5xx·그 밖의 4xx·읽을 수 없는 본문·풀 포화, 그로 인한 INTERNAL 대체 | WARN |
+| 429 쿨다운 시작 | WARN(1회) |
+| 401·403 쿨다운 시작 | ERROR(1회) |
+| 키 없음·쿨다운 중·출발역=도착역·쓸 수 있는 지하철 경로 없음(빈 결과)으로 INTERNAL | INFO |
+
+어느 수준이든 키·좌표·응답 본문·예외 메시지는 출력하지 않는다.
 
 ### 약관과 로그
 
@@ -132,11 +161,15 @@ INTERNAL 경로는 다음과 같이 만든다.
 - `KakaoRouteClientTest`
   - 정상(키·좌표 파라미터)
   - 키 없음(호출 0회)
-  - 4xx·429(재시도 없음)
-  - 5xx(재시도 1회)
+  - 400·401·403·429(재시도 없음)
+  - 5xx(재시도 1회, WARN)
   - 느린 응답(호출 타임아웃·전체 상한)
   - 깨진 본문
+  - 풀 포화(즉시 `BUSY`, 추가 호출 없음)
+  - 401 쿨다운(5분 동안 호출 0회, ERROR 1회, 이후 재시도)
+  - 429 쿨다운(30초)
   - 로그에 키·본문·좌표가 없음
+- `RouteSearchFallbackLogTest`: 실패 사유마다 즉시 INTERNAL, 로그 수준(INFO/WARN)
 - `KakaoRouteMapperTest`
   - 정차역·방향·통과 시각, 환승
   - 버스 섞임, 9호선, 없는 역, 인접하지 않은 역, 출발역 불일치 → 제외
@@ -144,6 +177,7 @@ INTERNAL 경로는 다음과 같이 만든다.
 - `RouteSearchPostgresTest`(V1~V13 시드, graph)
   - 카카오 정상: 혼잡도 93/34, 회색 정차역
   - 타임아웃·429·빈 결과·키 없음 → INTERNAL
+  - 401 뒤 쿨다운 중 요청은 카카오 호출 0회, INTERNAL
   - 방 멤버(약속 시각 기준 슬롯), 비멤버 403, 없는 방 404
   - 역 검증(404, 422)이 카카오보다 먼저
   - 인증 없음 401, OpenAPI

@@ -66,7 +66,7 @@ class RouteSearchPostgresTest {
         KakaoRouteClient target;
 
         SwitchableKakaoRouteClient() {
-            super(RestClient.create(), "", Duration.ofSeconds(3), Duration.ofSeconds(5), Duration.ZERO, System::nanoTime);
+            super(RestClient.create(), "", Duration.ofSeconds(3), Duration.ofSeconds(5), Duration.ZERO, Duration.ofMinutes(5), Duration.ofSeconds(30), System::nanoTime, java.time.Clock.systemUTC());
         }
 
         @Override public boolean enabled() { return target.enabled(); }
@@ -114,7 +114,7 @@ class RouteSearchPostgresTest {
     private void useKakao(String key, Duration call, Duration total) {
         RestClient.Builder builder = RestClient.builder().baseUrl("https://dapi.kakao.com");
         server = MockRestServiceServer.bindTo(builder).build();
-        kakao.target = new KakaoRouteClient(builder.build(), key, call, total, Duration.ofMillis(10), System::nanoTime);
+        kakao.target = new KakaoRouteClient(builder.build(), key, call, total, Duration.ofMillis(10), Duration.ofMinutes(5), Duration.ofSeconds(30), System::nanoTime, java.time.Clock.systemUTC());
     }
 
     /** One BUS route, one 9호선 route and the 2호선 강남 -> 사당 route; only the last one can be used. */
@@ -194,6 +194,19 @@ class RouteSearchPostgresTest {
         server.expect(ExpectedCount.once(), requestTo(startsWith(URL))).andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS));
         assertInternal(ok(search(gangnam, sadang, "2026-11-06T08:00:00+09:00", null), member));
         server.verify();
+    }
+
+    @Test void keyErrorStartsACooldownWithoutFurtherCalls(CapturedOutput output) throws Exception {
+        server.expect(ExpectedCount.once(), requestTo(startsWith(URL))).andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+        assertInternal(ok(search(gangnam, sadang, "2026-11-06T08:00:00+09:00", null), member));
+        // The next requests fall back at once: the stub has no further expectation, so any call would fail.
+        assertInternal(ok(search(gangnam, sadang, "2026-11-06T08:00:00+09:00", null), member));
+        assertInternal(ok(search(gangnam, sadang, "2026-11-06T08:00:00+09:00", null), member));
+        server.verify();
+        assertThat(output.getAll().lines().filter(line -> line.contains(" ERROR ") && line.contains("Kakao rejected the key"))).hasSize(1);
+        assertThat(output.getAll().lines().filter(line -> line.contains("uses INTERNAL: COOLDOWN"))).hasSize(2)
+                .allSatisfy(line -> assertThat(line).contains(" INFO "));
+        assertThat(output.getAll()).doesNotContain(KEY);
     }
 
     @Test void emptyResultFallsBack() throws Exception {
