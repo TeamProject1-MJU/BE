@@ -54,15 +54,15 @@ cors:
 #     fare:
 #       base-fare: 1550
 
-# AI module (#73). Unset means mock, which logs a WARN at startup.
-# - module: mock | openai (production: LINKRO_AI_MODULE=openai). openai with a blank OPENAI_API_KEY fails startup.
-# - model defaults to the design doc name; replace it with the real API model id via OPENAI_MODEL.
+# AI module (#73). Unset or blank means mock, which logs a WARN at startup.
+# - module: mock | openai (production: LINKRO_AI_MODULE=openai).
+# - openai with a blank OPENAI_API_KEY or OPENAI_MODEL fails startup. There is no default model id.
 linkro:
   ai:
     module: ${LINKRO_AI_MODULE:mock}
     openai:
       api-key: ${OPENAI_API_KEY:}
-      model: ${OPENAI_MODEL:GPT-6.1 Terra}
+      model: ${OPENAI_MODEL:}
       connect-timeout: ${OPENAI_CONNECT_TIMEOUT:2s}
       read-timeout: ${OPENAI_READ_TIMEOUT:8s}
       vision-read-timeout: ${OPENAI_VISION_READ_TIMEOUT:4s}

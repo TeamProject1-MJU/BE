@@ -4,8 +4,8 @@
 
 | 값 | 구현 | 비고 |
 | --- | --- | --- |
-| 미설정 / `mock` | `MockAiClient` | 기동 시 WARN. 결정적 규칙 |
-| `openai` | `OpenAiClient` | `OPENAI_API_KEY` 비면 기동 실패 |
+| 미설정 / 빈 값 / `mock` | `MockAiClient` | 기동 시 WARN. 결정적 규칙 |
+| `openai` | `OpenAiClient` | `OPENAI_API_KEY` 또는 `OPENAI_MODEL`이 비면 기동 실패 |
 
 ```java
 ConditionInterpretation interpretCondition(ConditionRequest req);   // #74 조건 해석(문자열·숫자 원문만)
@@ -20,4 +20,4 @@ GeneratedText replyToChat(ChatReplyRequest req);                     // #76 채�
 - 이미지 형식·크기 검사(`IMAGE_INVALID`)는 #75 컨트롤러에서 AI 호출 전에 한다.
 - 필드명은 팀 문서 용어를 따른다: 조건 해석은 API 명세 8.1 filter(`maxMinutes`, `maxTransfers`, `maxFareWon`, 제외 역 `excludeStationNames`, 개인별 한도 `memberLimits[{nickname, maxMinutes}]`), 표지판은 9.1(`result`, `reason`, `stationName`, `lineName`, `direction`, `headsign`), 채팅 메시지는 10장(`nickname`, `content`).
 - Mock 규칙: `N분 이내`/`N원 이하`/`환승 없이`/`환승 N번 이하`/`<역> 빼고`/`<닉네임>는 N분` 해석, 표지판은 이미지 첫 바이트로 결정 — `0`(`SIGN_RETAKE_BYTE`) → RETAKE/UNREADABLE, `'W'`(`SIGN_WRONG_BYTE`) → WRONG/DIRECTION_MISMATCH, 그 외 CORRECT(ctx 그대로), 텍스트에 `__AI_FAIL__`/`__AI_QUOTA__`가 있으면 해당 예외.
-- 설정: `OPENAI_MODEL`(기본 'GPT-6.1 Terra', 텍스트·이미지 공용), `OPENAI_CONNECT_TIMEOUT`(2s), `OPENAI_READ_TIMEOUT`(8s), `OPENAI_VISION_READ_TIMEOUT`(4s).
+- 설정: `OPENAI_MODEL`(기본값 없음, 비어 있으면 기동 실패, 텍스트·이미지 공용), `OPENAI_CONNECT_TIMEOUT`(2s), `OPENAI_READ_TIMEOUT`(8s), `OPENAI_VISION_READ_TIMEOUT`(4s).

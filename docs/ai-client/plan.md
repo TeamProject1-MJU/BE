@@ -36,16 +36,16 @@ linkro:
     module: ${LINKRO_AI_MODULE:mock}        # mock | openai
     openai:
       api-key: ${OPENAI_API_KEY:}
-      model: ${OPENAI_MODEL:GPT-6.1 Terra}  # 상세설계서 명칭, 실제 API id로 교체 가능
+      model: ${OPENAI_MODEL:}               # 기본값 없음. openai에서 비어 있으면 기동 실패
       connect-timeout: 2s
       read-timeout: 8s
       vision-read-timeout: 4s
 ```
 - `OpenAiProperties`는 `@ConfigurationProperties` + `@Validated`, openai 모드에서 빈 키면 기동 실패.
-- `.env.example`: `LINKRO_AI_MODULE=`, `OPENAI_API_KEY=` (빈 값, "never commit" 주석).
+- `.env.example`: `LINKRO_AI_MODULE`은 주석(빈 값이면 mock이 안 잡힘). `OPENAI_API_KEY=`, `OPENAI_MODEL=` (빈 값, "never commit" 주석).
 
 ## 4. Mock
-- `MockAiConfig`: `@ConditionalOnProperty(name="linkro.ai.module", havingValue="mock", matchIfMissing=true)`, WARN `AI is MOCK ... Set LINKRO_AI_MODULE=openai`.
+- `MockAiConfig`: `linkro.ai.module`이 없거나 `mock`이거나 빈 값. WARN `AI is MOCK ... Set LINKRO_AI_MODULE=openai`.
 - `MockAiClient` 결정적 규칙:
   - 조건: 정규식으로 "N분 이내"→maxMinutes, "환승 없이"→0 등 최소 해석
   - 설명/채팅: 고정 템플릿 문장
@@ -65,7 +65,7 @@ linkro:
 ## 7. 테스트 (실제 OpenAI 호출 없음)
 - `MockAiClientTest`: 규칙·실패 마커
 - `OpenAiClientTest`(MockRestServiceServer): 성공 4종, 429, 500, 타임아웃, 깨진 JSON, refusal, 요청 바디에 schema·모델·data URL 포함 검증
-- `AiModuleConfigTest`(ApplicationContextRunner): 미설정→Mock, openai+키→OpenAi, openai+빈키→실패
+- `AiModuleConfigTest`(ApplicationContextRunner): 미설정·빈 값→Mock, openai+키+모델→OpenAi, openai+빈 키 또는 빈 모델→실패
 - `AiClientContract`(선택): 공통 계약(null 금지 등)
 
 ## 8. 파일 목록
@@ -84,13 +84,13 @@ linkro:
 ## 10. 결정 (모두 확정)
 1. **연동 방식**: **확정: RestClient** (의존성 0, Kakao 패턴, 테스트 용이). 이후 필요하면 OpenAiClient 내부만 교체.
 2. **API 엔드포인트**: **확정: Responses API** (structured output·vision 통합).
-3. **모델명**: **확정: 설정값 `OPENAI_MODEL`, 기본값은 설계서 명칭 'GPT-6.1 Terra'**, 배포 전 실제 id 확인. 텍스트·이미지 모두 같은 모델(명세 9.1 "이미지 입력을 지원하는 모델, 모델명은 설정값").
+3. **모델명**: **확정: 설정값 `OPENAI_MODEL`, 기본값 없음**. openai 모드에서 비어 있으면 키와 같이 기동 실패. 텍스트·이미지 모두 같은 모델(명세 9.1 "이미지 입력을 지원하는 모델, 모델명은 설정값").
 4. **인터페이스 형태**: **확정: 용도별 메서드 4개** (프롬프트·스키마를 ai 모듈에 캡슐화).
 5. **조건 해석 결과 범위**: **확정: 문자열만 반환, 매핑·범위검증은 #74 서버**.
 6. **표지판 판정 위치**: **확정(A): AI가 CORRECT/WRONG/RETAKE와 reason을 판정하고 그 결과를 그대로 쓴다.** API 명세 9.1 그대로, 상세설계서 문장은 팀이 수정.
 7. **재시도**: **확정: 클라이언트 0회. #76 비동기만 소비자 측에서 1회 검토**.
 8. **타임아웃**: **확정: connect 2s, 텍스트 read 8s, vision read 4s** (env로 조정).
 9. **401/403/400 매핑**: **확정: `AI_UNAVAILABLE` + ERROR 로그**. `EXTERNAL_API_ERROR`는 AI에서 미사용.
-10. **openai 모드 + 빈 키**: **확정: 기동 실패**.
+10. **openai 모드 + 빈 키 또는 빈 모델**: **확정: 기동 실패**.
 11. **env 이름**: **확정: `LINKRO_AI_MODULE`, `OPENAI_API_KEY`, `OPENAI_MODEL`**.
 12. **live 테스트**: **확정: 만들지 않음** (실제 OpenAI 호출 테스트 없음).

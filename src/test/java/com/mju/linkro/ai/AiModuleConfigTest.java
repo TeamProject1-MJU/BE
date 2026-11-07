@@ -25,8 +25,15 @@ class AiModuleConfigTest {
     }
 
     @Test
+    void emptyModuleIsMock() {
+        runner.withPropertyValues("linkro.ai.module=")
+                .run(context -> assertThat(context.getBean(AiClient.class)).isInstanceOf(MockAiClient.class));
+    }
+
+    @Test
     void openaiWithKeyRegistersOpenAiClient() {
-        runner.withPropertyValues("linkro.ai.module=openai", "linkro.ai.openai.api-key=test-dummy")
+        runner.withPropertyValues("linkro.ai.module=openai", "linkro.ai.openai.api-key=test-dummy",
+                        "linkro.ai.openai.model=test-model")
                 .run(context -> assertThat(context).hasSingleBean(AiClient.class)
                         .doesNotHaveBean(MockAiConfig.class)
                         .getBean(AiClient.class).isInstanceOf(OpenAiClient.class));
@@ -40,5 +47,20 @@ class AiModuleConfigTest {
                     assertThat(context.getStartupFailure()).hasStackTraceContaining("apiKey");
                 });
         runner.withPropertyValues("linkro.ai.module=openai").run(context -> assertThat(context).hasFailed());
+    }
+
+    @Test
+    void openaiWithBlankModelFailsStartup() {
+        runner.withPropertyValues("linkro.ai.module=openai", "linkro.ai.openai.api-key=test-dummy",
+                        "linkro.ai.openai.model=")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure()).hasStackTraceContaining("model");
+                });
+        runner.withPropertyValues("linkro.ai.module=openai", "linkro.ai.openai.api-key=test-dummy")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure()).hasStackTraceContaining("model");
+                });
     }
 }

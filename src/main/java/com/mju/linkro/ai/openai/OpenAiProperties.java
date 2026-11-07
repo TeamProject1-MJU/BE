@@ -8,7 +8,7 @@ import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
-/** {@code linkro.ai.openai.*}. Bound only with {@code linkro.ai.module=openai}; a blank key fails startup. */
+/** {@code linkro.ai.openai.*}. Bound only with {@code linkro.ai.module=openai}; a blank key or model fails startup. */
 @Getter
 @Setter
 @Validated
@@ -16,9 +16,9 @@ import org.springframework.validation.annotation.Validated;
 public class OpenAiProperties {
     @NotBlank
     private String apiKey;
-    /** One model for text and images (API spec 9.1: an image-capable model, name from settings). */
+    /** One model for text and images (API spec 9.1). No default id; blank fails startup, same as a blank key. */
     @NotBlank
-    private String model = "GPT-6.1 Terra";
+    private String model;
     @NotNull
     private Duration connectTimeout = Duration.ofSeconds(2);
     @NotNull
