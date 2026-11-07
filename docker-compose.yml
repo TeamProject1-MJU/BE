@@ -34,6 +34,8 @@ services:
       LINKRO_SUBWAY_CONGESTION: ${LINKRO_SUBWAY_CONGESTION:-mock}
       # Kakao REST API key for POST /routes/search (optional). Empty means INTERNAL routes only.
       KAKAO_REST_API_KEY: ${KAKAO_REST_API_KEY:-}
+      # data.go.kr "Decoding" key for the KASI holiday refresh (optional). Empty means subway-holidays.properties only.
+      KASI_SPECIAL_DAY_KEY: ${KASI_SPECIAL_DAY_KEY:-}
     ports:
       - "8080:8080"
 
