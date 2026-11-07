@@ -153,12 +153,15 @@ class AuthWebIntegrationTest {
 		assertLocalReferencesResolve(root, root);
 		var join = root.at("/paths/~1api~1v1~1rooms~1join/post");
 		var departure = root.at("/paths/~1api~1v1~1rooms~1{roomId}~1members~1me/patch");
-		assertErrorExamples(join, com.mju.linkro.common.exception.ErrorCode.ROOM_CODE_INVALID,
+		var leave = root.at("/paths/~1api~1v1~1rooms~1{roomId}~1members~1me/delete");
+		assertMembershipResponses(join, com.mju.linkro.common.exception.ErrorCode.ROOM_CODE_INVALID,
 			com.mju.linkro.common.exception.ErrorCode.ALREADY_JOINED, com.mju.linkro.common.exception.ErrorCode.ROOM_FULL,
 			com.mju.linkro.common.exception.ErrorCode.ROOM_BUSY);
-		assertErrorExamples(departure, com.mju.linkro.common.exception.ErrorCode.NOT_ROOM_MEMBER,
+		assertMembershipResponses(departure, com.mju.linkro.common.exception.ErrorCode.NOT_ROOM_MEMBER,
 			com.mju.linkro.common.exception.ErrorCode.ROOM_NOT_FOUND, com.mju.linkro.common.exception.ErrorCode.STATION_NOT_FOUND,
 			com.mju.linkro.common.exception.ErrorCode.ROOM_BUSY, com.mju.linkro.common.exception.ErrorCode.STATION_UNSUPPORTED);
+		assertMembershipResponses(leave, com.mju.linkro.common.exception.ErrorCode.NOT_ROOM_MEMBER,
+			com.mju.linkro.common.exception.ErrorCode.ROOM_NOT_FOUND, com.mju.linkro.common.exception.ErrorCode.ROOM_BUSY);
 		org.assertj.core.api.Assertions.assertThat(join.at("/responses/200/content/application~1json/schema/$ref").asString())
 			.isEqualTo("#/components/schemas/RoomJoinResponse");
 		org.assertj.core.api.Assertions.assertThat(root.at("/components/schemas/RoomJoinResponse/properties/data/$ref").asString())
@@ -167,12 +170,32 @@ class AuthWebIntegrationTest {
 			com.mju.linkro.common.response.ApiResponse.success(new com.mju.linkro.room.dto.RoomResponses.Joined(java.util.UUID.randomUUID()))));
 		org.assertj.core.api.Assertions.assertThat(departure.at("/responses/200/content/application~1json/schema/$ref").asString())
 			.isEqualTo("#/components/schemas/ApiEmptySuccessResponse");
+		org.assertj.core.api.Assertions.assertThat(leave.at("/responses/200/content/application~1json/schema/$ref").asString())
+			.isEqualTo("#/components/schemas/RoomLeaveResponse");
+		org.assertj.core.api.Assertions.assertThat(root.at("/components/schemas/RoomLeaveResponse/properties/data/$ref").asString())
+			.isEqualTo("#/components/schemas/RoomLeftData");
+	}
+
+	private void assertMembershipResponses(tools.jackson.databind.JsonNode operation, com.mju.linkro.common.exception.ErrorCode... domainCodes) {
+		var codes = new java.util.ArrayList<>(java.util.List.of(
+			com.mju.linkro.common.exception.ErrorCode.VALIDATION_ERROR, com.mju.linkro.common.exception.ErrorCode.AUTH_REQUIRED,
+			com.mju.linkro.common.exception.ErrorCode.TOKEN_INVALID, com.mju.linkro.common.exception.ErrorCode.TOKEN_EXPIRED,
+			com.mju.linkro.common.exception.ErrorCode.INTERNAL_ERROR));
+		codes.addAll(java.util.List.of(domainCodes));
+		var statuses = new java.util.HashSet<String>();
+		statuses.add("200");
+		codes.forEach(code -> statuses.add(Integer.toString(code.getStatus().value())));
+		for (String status : statuses) {
+			org.assertj.core.api.Assertions.assertThat(operation.path("responses").has(status))
+				.as("Required membership HTTP response %s", status).isTrue();
+		}
+		assertErrorExamples(operation, codes.toArray(com.mju.linkro.common.exception.ErrorCode[]::new));
 	}
 
 	private void assertErrorExamples(tools.jackson.databind.JsonNode operation, com.mju.linkro.common.exception.ErrorCode... codes) {
 		var groups = java.util.Arrays.stream(codes).collect(java.util.stream.Collectors.groupingBy(code -> code.getStatus().value()));
 		groups.forEach((status, errors) -> {
-			var response = operation.get("responses").get(Integer.toString(status));
+			var response = operation.path("responses").path(Integer.toString(status));
 			org.assertj.core.api.Assertions.assertThat(response.at("/content/application~1json/schema/$ref").asString())
 				.isEqualTo("#/components/schemas/ApiFailureResponse");
 			var examples = response.at("/content/application~1json/examples");
@@ -180,7 +203,10 @@ class AuthWebIntegrationTest {
 			for (var code : errors) {
 				var expected = actualJson.valueToTree(com.mju.linkro.common.response.ApiResponse.failure(
 					code.getCode(), code.getMessage(), java.util.Map.of()));
-				org.assertj.core.api.Assertions.assertThat(examples.get(code.getCode()).get("value")).isEqualTo(expected);
+				var value = examples.path(code.getCode()).path("value");
+				org.assertj.core.api.Assertions.assertThat(value.at("/error/code").asString()).isEqualTo(code.getCode());
+				org.assertj.core.api.Assertions.assertThat(value.at("/error/message").asString()).isEqualTo(code.getMessage());
+				org.assertj.core.api.Assertions.assertThat(value).isEqualTo(expected);
 			}
 		});
 	}

@@ -29,12 +29,14 @@ FK는 `fk_sl_station`, `fk_sl_line`, `fk_conn_from`, `fk_conn_to`, `fk_cong_stat
 | ck_conn_type | RIDE, TRANSFER |
 | ck_conn_direction_val | null 또는 UP, DOWN, INNER, OUTER, LOOP |
 | ck_cong_pct | `congestion_pct >= 0` |
-| ck_cong_slot | 분이 0 또는 30이고 06:00~23:00 (35개 슬롯) |
-| ck_cong_model | PREDICTED일 때만 model_version 있음 |
+| ck_cong_slot | 분이 0 또는 30이고 06:00~23:00 (35개 슬롯). **V13에서 05:30~23:30 + 00:00, 00:30 (39칸)으로 변경** |
+| ck_cong_model | PREDICTED일 때만 model_version 있음 (V13에서 ESTIMATED도 null로 명시) |
 | ck_cong_level | 단계와 pct 구간 일치: COMFORTABLE [0,35), RELAXED [35,50), NORMAL [50,100), CROWDED [100,150), VERY_CROWDED [150,∞) |
 | ck_cong_direction | UP, DOWN, INNER, OUTER, LOOP |
 | ck_cong_day | WEEKDAY, SATURDAY, SUNDAY |
-| ck_cong_source | PREDICTED, MOCK (ACTUAL 없음) |
+| ck_cong_source | PREDICTED, MOCK (ACTUAL 없음). **V13에서 ESTIMATED 추가** |
+
+> V13(#71)이 `congestion_pct`를 자릿수 없는 `numeric`으로 바꾸고 `ck_cong_slot`, `ck_cong_source`, `ck_cong_model`을 다시 만들었다. 현재 값은 `docs/congestion-load-71.md`를 본다. 이 문서의 나머지는 V10 기준이다.
 
 congestion_level_label에는 CHECK를 두지 않는다. ERD는 단계에만 "pct와 일치 CHECK"를 적었고, 라벨은 "AI 파일 값 그대로" 저장한다고 적었다. 부록 A에도 라벨 제약은 없다. 라벨과 단계의 대응은 적재 스크립트에서 검증한다.
 

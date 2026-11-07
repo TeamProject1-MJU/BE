@@ -31,6 +31,10 @@ public class MeetingMember extends BaseUuidEntity {
         this.departureStationId = Objects.requireNonNull(stationId);
     }
 
+    public void promoteToOwner() {
+        this.role = RoomRole.OWNER;
+    }
+
     protected MeetingMember() {}
 
     public MeetingMember(UUID roomId, UUID userId, RoomRole role) {

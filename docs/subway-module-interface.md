@@ -14,7 +14,7 @@
 | `ShortestPathTree` | `Set<Long> reachableStationIds()` | 도달 가능한 지원 역. 출발역 자신 포함 |
 | | `Optional<RoutePath> pathTo(long stationId)` | `shortestPath(출발역, stationId)`와 같은 경로. 도달 불가·미지원·없는 역이면 empty, 예외 없음 |
 | `FareCalculator` | `int fareOf(RoutePath path)` | 예상 요금(원) |
-| `CongestionLookup` | `CongestionResult congestionOf(RoutePath path, Instant departAt)` | 경로 모든 정차역 혼잡도 중 최댓값 |
+| `CongestionLookup` | `CongestionResult congestionOf(RoutePath path, Instant departAt)` | 경로 모든 정차역 혼잡도 중 최댓값(DB 구현은 정차역별 값도 `stops`에 담음) |
 
 ## 타입 (record, 불변)
 
@@ -23,12 +23,16 @@
 | `RoutePath` | `List<PathStep> steps`, `List<PathStop> stops`, `int totalSeconds`, `int transferCount`, `int rideDistanceM`, `long fromStationId`, `long toStationId` |
 | `PathStep` | `StepType type`, `Long lineId`, `String lineName`, `String color`, `DirectionCode direction`, `long fromStationId`, `String fromStationName`, `long toStationId`, `String toStationName`, `int stationCount`, `int durationSec`, `int distanceM` |
 | `PathStop` | `long stationId`, `String stationName`, `double latitude`, `double longitude`, `long stationLineId`, `long lineId`, `DirectionCode direction`, `int offsetSec` |
-| `CongestionResult` | `boolean supported`, `Double pct`, `String level`, `String levelLabel`, `CongestionSource source` |
-| enum | `DirectionCode`(UP, DOWN, INNER, OUTER, LOOP), `StepType`(RIDE, TRANSFER), `CongestionSource`(PREDICTED, MOCK) |
+| `CongestionResult` | `boolean supported`, `Double pct`, `String level`, `String levelLabel`, `CongestionSource source`, `List<StopCongestion> stops` |
+| `StopCongestion` | `long stationId`, `long stationLineId`, `long lineId`, `DirectionCode direction`, `LocalDate slotDate`, `LocalTime slotStart`, `boolean firstTrain`, `CongestionResult congestion` |
+| enum | `DirectionCode`(UP, DOWN, INNER, OUTER, LOOP), `StepType`(RIDE, TRANSFER), `CongestionSource`(PREDICTED, ESTIMATED, MOCK), `DayType`(WEEKDAY, SATURDAY, SUNDAY) |
 
 - `PathStep`: RIDE는 `direction` 필수, TRANSFER는 `direction = null`(생성자에서 검사). TRANSFER의 `lineId`는 갈아탈 노선이다. `stationCount`는 RIDE에서 이동한 역 수(승차역 제외)이고 TRANSFER는 0이다.
 - `PathStop`: 지나는 그래프 노드(역×노선)를 순서대로 담는다. 환승역은 내린 노선의 노드와 탄 노선의 노드로 두 번 나온다. `direction`은 그 정차역에서 탄 열차의 방향이다. 어떤 RIDE에도 속하지 않는 정차역(빈 경로의 유일한 정차역 등)은 null이다.
-- `CongestionResult`: `supported = false`면 나머지 필드가 모두 null이고, `true`면 모두 값이 있다(생성자에서 검사). `CongestionResult.of(...)`, `CongestionResult.unsupported()`로 만든다.
+- `CongestionResult`: `supported = false`면 값 필드(pct, level, levelLabel, source)가 모두 null이고, `true`면 모두 값이 있다(생성자에서 검사). `CongestionResult.of(...)`, `CongestionResult.unsupported()`로 만든다.
+  - `stops`(#79에서 추가)는 정차역별 혼잡도다. DB 구현이 채우고, mock과 정차역 하나의 값에서는 빈 리스트다. 5개 인자 생성자도 그대로 쓸 수 있다.
+- `StopCongestion`: `RoutePath.stops` 순서. `slotDate`·`slotStart`·`firstTrain`은 실제 조회한 영업일과 슬롯이고, 데이터가 없으면(회색) 통과 시각의 슬롯이다. `direction`은 RIDE에 속하지 않는 정차역이면 null이다.
+- `CongestionSource`: 같은 슬롯에 여럿 있으면 PREDICTED > ESTIMATED > MOCK(선언 순서) 하나만 쓴다.
 - `RoutePath`의 리스트는 `List.copyOf`로 복사해 바꿀 수 없다.
 
 ## 예외 규칙
@@ -66,8 +70,10 @@
 
 - `congestionOf`:
   - 정차역마다 `departAt + offsetSec` 시각으로 슬롯을 찾는다. 30분 슬롯과 요일 구분(WEEKDAY/SATURDAY/SUNDAY, 공휴일은 SUNDAY)은 **Asia/Seoul 기준**이다.
-  - 06:00~23:00 밖은 다음 첫차 06:00 슬롯을 쓴다(6.2).
-  - 데이터가 없는 정차역은 건너뛰고, 모든 정차역에 데이터가 없으면 `unsupported()`를 돌려준다.
+  - 슬롯은 05:30~23:30과 00:00, 00:30(39칸)이다. 00:00~00:59는 전날 영업일, 01:00~05:29는 같은 날 05:30(첫차) 슬롯이다.
+  - 그 노드·방향의 막차가 지났으면(그 슬롯 행이 없고 같은 영업일에 뒤 슬롯도 없음) 다음 영업일 05:30 슬롯을 쓴다(`firstTrain`).
+  - 규칙 전체는 `docs/congestion-api-79.md`에 있다.
+  - 데이터가 없는 정차역은 최댓값에서 빼고, 모든 정차역에 데이터가 없으면 요약은 `supported = false`다.
 
 ## offsetSec
 
@@ -81,27 +87,28 @@ mock은 두 설정 클래스로 나뉜다. 각 설정은 활성화될 때 WARN �
 
 | 설정 클래스 | 조건 | 등록하는 빈 | WARN |
 | --- | --- | --- | --- |
-| `MockSubwayModuleConfig` | `linkro.subway.module`이 없거나 `mock` | `SubwayRouteFinder`, `FareCalculator` mock | `Subway route module is MOCK ...` |
-| `MockCongestionConfig` | `linkro.subway.congestion`이 없거나 `mock` | `CongestionLookup` mock | `Subway congestion is MOCK ...` |
+| `MockSubwayModuleConfig` | `linkro.subway.module`이 없거나 비어 있거나 `mock` | `SubwayRouteFinder`, `FareCalculator` mock | `Subway route module is MOCK ...` |
+| `MockCongestionConfig` | `linkro.subway.congestion`이 없거나 비어 있거나 `mock` | `CongestionLookup` mock | `Subway congestion is MOCK ...` |
 
-프로퍼티가 없으면 mock 3개가 모두 등록된다. `module=graph`이면 경로·요금은 실제 구현(#69)이 쓰이고 혼잡도만 mock으로 남는다.
+`linkro.subway.congestion=db`이면 `MockCongestionConfig` 대신 `DbCongestionConfig`가 `DbCongestionLookup`을 등록하고 INFO 로그(`Subway congestion is DB ...`)를 남긴다.
+
+프로퍼티가 없으면 mock 3개가 모두 등록된다. 조건은 `MockSwitchCondition`이다. `@ConditionalOnProperty(havingValue = "mock", matchIfMissing = true)`와 달리 빈 값(`LINKRO_SUBWAY_MODULE=`)도 mock으로 본다(대소문자·앞뒤 공백 무시). `module=graph`이면 경로·요금은 실제 구현(#69)이 쓰이고 혼잡도만 mock으로 남는다.
 
 | mock | 규칙 |
 | --- | --- |
 | `MockSubwayRouteFinder` | 역 1~240(V11 시드의 역 수)이 id 순서로 이어진 한 노선. 두 역 사이를 id 순서로 지나는 RIDE 1개, 구간마다 90초·1,000 m, 환승 0회. 방향은 id 증가면 DOWN, 감소면 UP. 노선은 `1호선`(lineId 1)으로 고정. 역 이름은 `목업역{id}`, stationLineId는 역 id와 같음 |
 | | id ≤ 0, 241~999,999: `STATION_NOT_FOUND`. id ≥ 1,000,000: 존재하지만 어디와도 연결되지 않은 역(`ROUTE_NOT_FOUND` 재현용, 자기 자신만 도달 가능). `STATION_UNSUPPORTED`는 재현하지 않음 |
 | `MockFareCalculator` | 실제 요금식 그대로(값은 상수) |
-| `MockCongestionLookup` | 정차역마다 `pct = 40 + (stationId % 7) × 15`, 경로 최댓값. 단계는 6.2 기준(35/50/100/150, 하한 포함)으로 계산, source `MOCK`. 시각은 무시 |
+| `MockCongestionLookup` | 정차역마다 `pct = 40 + (stationId % 7) × 15`, 경로 최댓값. 단계는 6.2 기준(35/50/100/150, 하한 포함)으로 계산, source `MOCK`. 시각은 무시. `stops`는 비어 있음 |
 
 ## 실제 구현(⑥)으로 교체하는 방법
 
 - **경로·요금(완료, #69)**: `com.mju.linkro.subway.graph`의 `SubwayGraphModuleConfig`가 `linkro.subway.module=graph`일 때 `DijkstraSubwayRouteFinder`와 `GraphFareCalculator`를 등록한다.
   - 운영 전환은 환경변수 `LINKRO_SUBWAY_MODULE=graph`로 한다.
   - 기본값은 여전히 mock이다. 그래프 모델과 설정은 `docs/subway-graph-69.md`에 있다.
-- **혼잡도(⑦)**:
-  1. 실제 `CongestionLookup` 구현을 만들고, 그 설정 클래스에 `@ConditionalOnProperty(name = "linkro.subway.congestion", havingValue = "<새 값>")`을 붙인다.
-  2. 운영 설정에서 `linkro.subway.congestion`을 그 값으로 바꾼다. `MockCongestionConfig`는 `havingValue = "mock", matchIfMissing = true`라 자동으로 빠진다.
-  3. 실제 혼잡도는 저장된 `congestion_level`·`congestion_level_label`을 그대로 쓰고, mock처럼 다시 계산하지 않는다(6.2).
+- **혼잡도(완료, #79)**: `com.mju.linkro.subway.congestion`의 `DbCongestionConfig`가 `linkro.subway.congestion=db`일 때 `DbCongestionLookup`을 등록한다.
+  - 운영 전환은 운영 DB에 혼잡도를 적재한 뒤 환경변수 `LINKRO_SUBWAY_CONGESTION=db`로 한다. 기본값은 여전히 mock이다.
+  - 저장된 `congestion_level`·`congestion_level_label`을 그대로 쓰고 다시 계산하지 않는다(6.2). 규칙은 `docs/congestion-api-79.md`에 있다.
 - **테스트**: `SubwayRouteFinderContract`를 상속하면 같은 계약 테스트를 구현마다 돌릴 수 있다. 출발·도착·없는 역·도달 불가 역 id만 정해 주면 된다(`DijkstraSubwayRouteFinderContractTest` 참고).
 
 ## 추천(8.1) 사용 예시

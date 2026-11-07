@@ -11,6 +11,11 @@ public final class RoomResponses {
     @Schema(name = "RoomJoinedData", requiredProperties = {"roomId"})
     public record Joined(UUID roomId) {}
 
+    @JsonInclude(JsonInclude.Include.ALWAYS)
+    @Schema(name = "RoomLeftData", requiredProperties = {"roomDeleted", "newOwnerId"})
+    public record Left(boolean roomDeleted,
+                       @Schema(types = {"string", "null"}, format = "uuid", description = "승계된 방장의 사용자 ID. 승계 없으면 null") UUID newOwnerId) {}
+
     public static final String CREATED_SCHEMA = "RoomCreatedData";
     public static final String SUMMARY_SCHEMA = "RoomSummaryData";
     public static final String DETAIL_SCHEMA = "RoomDetailData";

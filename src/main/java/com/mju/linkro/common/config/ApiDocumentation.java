@@ -3,6 +3,7 @@ package com.mju.linkro.common.config;
 import com.mju.linkro.auth.dto.*;
 import com.mju.linkro.common.response.ApiResponse;
 import com.mju.linkro.room.dto.RoomResponses;
+import com.mju.linkro.subway.congestion.dto.CongestionResponse;
 import com.mju.linkro.subway.station.dto.StationResponses;
 import com.mju.linkro.user.dto.*;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -14,6 +15,9 @@ public final class ApiDocumentation {
 
     @Schema(name = "RoomJoinResponse", requiredProperties = {"success", "data"})
     public record JoinResponse(@Schema(example = "true", description = "항상 true") boolean success, RoomResponses.Joined data) {}
+
+    @Schema(name = "RoomLeaveResponse", requiredProperties = {"success", "data"})
+    public record LeaveResponse(@Schema(example = "true") boolean success, RoomResponses.Left data) {}
 
     @Schema(name = "RoomCreateRequest", description = "정원은 4명 고정. userId·ownerId는 받지 않고 인증된 사용자를 생성자로 사용합니다.")
     public record RoomCreateRequest(
@@ -39,6 +43,8 @@ public final class ApiDocumentation {
     public record LineList(@Schema(description = "항상 true", example = "true") boolean success, List<StationResponses.Line> data) {}
     @Schema(name = "StationPageResponse", requiredProperties = {"success", "data"})
     public record StationPageResponse(@Schema(description = "항상 true", example = "true") boolean success, StationResponses.StationPage data) {}
+    @Schema(name = "CongestionResponse", requiredProperties = {"success", "data"})
+    public record Congestion(@Schema(description = "항상 true", example = "true") boolean success, CongestionResponse data) {}
     @Schema(name = "StationDetailResponse", requiredProperties = {"success", "data"})
     public record StationDetail(@Schema(description = "항상 true", example = "true") boolean success, StationResponses.Station data) {}
     @Schema(name = "AuthLoginResponse", requiredProperties = {"success", "data"})

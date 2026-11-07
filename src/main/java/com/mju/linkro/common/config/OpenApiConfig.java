@@ -50,19 +50,30 @@ public class OpenApiConfig {
     OpenApiCustomizer roomMembershipErrorExamples() {
         return document -> {
             var join = document.getPaths().get("/api/v1/rooms/join");
-            if (join != null) addErrorExamples(join.getPost(), ErrorCode.ROOM_CODE_INVALID,
+            if (join != null) addMembershipErrorExamples(join.getPost(), ErrorCode.ROOM_CODE_INVALID,
                     ErrorCode.ALREADY_JOINED, ErrorCode.ROOM_FULL, ErrorCode.ROOM_BUSY);
-            var departure = document.getPaths().get("/api/v1/rooms/{roomId}/members/me");
-            if (departure != null) addErrorExamples(departure.getPatch(), ErrorCode.NOT_ROOM_MEMBER,
+            var myMembership = document.getPaths().get("/api/v1/rooms/{roomId}/members/me");
+            if (myMembership != null) addMembershipErrorExamples(myMembership.getDelete(), ErrorCode.NOT_ROOM_MEMBER,
+                    ErrorCode.ROOM_NOT_FOUND, ErrorCode.ROOM_BUSY);
+            if (myMembership != null) addMembershipErrorExamples(myMembership.getPatch(), ErrorCode.NOT_ROOM_MEMBER,
                     ErrorCode.ROOM_NOT_FOUND, ErrorCode.STATION_NOT_FOUND, ErrorCode.ROOM_BUSY,
                     ErrorCode.STATION_UNSUPPORTED);
         };
     }
 
+    private static void addMembershipErrorExamples(Operation operation, ErrorCode... codes) {
+        addErrorExamples(operation, ErrorCode.VALIDATION_ERROR, ErrorCode.AUTH_REQUIRED,
+                ErrorCode.TOKEN_INVALID, ErrorCode.TOKEN_EXPIRED, ErrorCode.INTERNAL_ERROR);
+        addErrorExamples(operation, codes);
+    }
+
     private static void addErrorExamples(Operation operation, ErrorCode... codes) {
-        if (operation == null) return;
+        if (operation == null || operation.getResponses() == null) return;
         for (ErrorCode code : codes) {
             var response = operation.getResponses().get(Integer.toString(code.getStatus().value()));
+            // Optional/bodyless responses need no examples. Required contracts are checked on /v3/api-docs.
+            if (response == null || response.getContent() == null
+                    || response.getContent().get("application/json") == null) continue;
             response.getContent().get("application/json").addExamples(code.getCode(),
                     new Example().value(ApiResponse.failure(code.getCode(), code.getMessage(), Map.of())));
         }

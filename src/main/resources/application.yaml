@@ -36,7 +36,9 @@ cors:
 # Subway module. Unset values mean mock, and each mock logs a WARN at startup.
 # - module: mock | graph. graph loads the subway graph at startup for real routes and fares
 #   (production: environment variable LINKRO_SUBWAY_MODULE=graph).
-# - congestion: mock until the real congestion lookup exists; any other value removes the mock.
+# - congestion: mock | db. db reads congestion_stats for route congestion; turn it on after the production DB is
+#   loaded (environment variable LINKRO_SUBWAY_CONGESTION=db). GET /congestion reads the DB either way.
+# - holidays: comma-separated yyyy-MM-dd used as SUNDAY; defaults are in subway-holidays.properties.
 # - graph.* and fare.* apply only with module=graph; defaults are in subway-graph-defaults.properties
 #   (docs/subway-graph-69.md lists them).
 # linkro:
