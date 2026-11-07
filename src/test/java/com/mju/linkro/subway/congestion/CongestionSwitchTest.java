@@ -31,6 +31,15 @@ class CongestionSwitchTest {
     }
 
     @Test
+    void emptyValueIsTheMock(CapturedOutput output) {
+        runner.withPropertyValues("linkro.subway.congestion=").run(context -> {
+            assertThat(context).hasSingleBean(CongestionLookup.class).doesNotHaveBean(DbCongestionConfig.class);
+            assertThat(context.getBean(CongestionLookup.class)).isInstanceOf(MockCongestionLookup.class);
+        });
+        assertThat(output.getAll()).contains("Subway congestion is MOCK").doesNotContain("Subway congestion is DB");
+    }
+
+    @Test
     void dbRegistersOnlyTheDbLookup(CapturedOutput output) {
         runner.withPropertyValues("linkro.subway.congestion=db").run(context -> {
             assertThat(context).hasSingleBean(CongestionLookup.class).doesNotHaveBean(MockCongestionConfig.class);

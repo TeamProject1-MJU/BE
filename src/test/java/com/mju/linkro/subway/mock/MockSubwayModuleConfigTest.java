@@ -50,6 +50,25 @@ class MockSubwayModuleConfigTest {
     }
 
     @Test
+    void emptyValuesKeepTheMocks(CapturedOutput output) {
+        // docker-compose passes ${VAR:-mock}, but an empty or blank value from elsewhere must still mean mock.
+        for (String value : new String[] {"", " "}) {
+            runner.withPropertyValues("linkro.subway.module=" + value, "linkro.subway.congestion=" + value).run(context -> {
+                assertThat(context).hasSingleBean(SubwayRouteFinder.class).hasSingleBean(FareCalculator.class)
+                        .hasSingleBean(CongestionLookup.class);
+                assertThat(context.getBean(CongestionLookup.class)).isInstanceOf(MockCongestionLookup.class);
+            });
+        }
+        assertThat(output.getAll()).contains(ROUTE_WARN, CONGESTION_WARN);
+    }
+
+    @Test
+    void mockValueIgnoresCaseAndSurroundingSpaces() {
+        runner.withPropertyValues("linkro.subway.module= MOCK ", "linkro.subway.congestion=Mock")
+                .run(context -> assertThat(context).hasSingleBean(SubwayRouteFinder.class).hasSingleBean(CongestionLookup.class));
+    }
+
+    @Test
     void otherCongestionValueRemovesTheCongestionMock(CapturedOutput output) {
         runner.withPropertyValues("linkro.subway.congestion=stats").run(context -> {
             assertThat(context).doesNotHaveBean(CongestionLookup.class).doesNotHaveBean(MockCongestionConfig.class)
