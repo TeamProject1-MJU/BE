@@ -87,12 +87,12 @@ mock은 두 설정 클래스로 나뉜다. 각 설정은 활성화될 때 WARN �
 
 | 설정 클래스 | 조건 | 등록하는 빈 | WARN |
 | --- | --- | --- | --- |
-| `MockSubwayModuleConfig` | `linkro.subway.module`이 없거나 `mock` | `SubwayRouteFinder`, `FareCalculator` mock | `Subway route module is MOCK ...` |
-| `MockCongestionConfig` | `linkro.subway.congestion`이 없거나 `mock` | `CongestionLookup` mock | `Subway congestion is MOCK ...` |
+| `MockSubwayModuleConfig` | `linkro.subway.module`이 없거나 비어 있거나 `mock` | `SubwayRouteFinder`, `FareCalculator` mock | `Subway route module is MOCK ...` |
+| `MockCongestionConfig` | `linkro.subway.congestion`이 없거나 비어 있거나 `mock` | `CongestionLookup` mock | `Subway congestion is MOCK ...` |
 
 `linkro.subway.congestion=db`이면 `MockCongestionConfig` 대신 `DbCongestionConfig`가 `DbCongestionLookup`을 등록하고 INFO 로그(`Subway congestion is DB ...`)를 남긴다.
 
-프로퍼티가 없으면 mock 3개가 모두 등록된다. `module=graph`이면 경로·요금은 실제 구현(#69)이 쓰이고 혼잡도만 mock으로 남는다.
+프로퍼티가 없으면 mock 3개가 모두 등록된다. 조건은 `MockSwitchCondition`이다. `@ConditionalOnProperty(havingValue = "mock", matchIfMissing = true)`와 달리 빈 값(`LINKRO_SUBWAY_MODULE=`)도 mock으로 본다(대소문자·앞뒤 공백 무시). `module=graph`이면 경로·요금은 실제 구현(#69)이 쓰이고 혼잡도만 mock으로 남는다.
 
 | mock | 규칙 |
 | --- | --- |

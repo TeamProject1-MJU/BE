@@ -137,15 +137,20 @@
 
 | `linkro.subway.congestion` | `CongestionLookup` 빈 | 기동 로그 |
 | --- | --- | --- |
-| 없음 또는 `mock` (기본) | `MockCongestionLookup` (`MockCongestionConfig`) | WARN `Subway congestion is MOCK: ...` |
+| 없음, 빈 값 또는 `mock` (기본) | `MockCongestionLookup` (`MockCongestionConfig`) | WARN `Subway congestion is MOCK: ...` |
 | `db` | `DbCongestionLookup` (`DbCongestionConfig`) | INFO `Subway congestion is DB: ...` |
 
 - 두 설정은 조건이 겹치지 않아 동시에 등록되지 않는다.
 - 운영 전환 순서:
   1. 운영 DB에 혼잡도를 적재한다(`docs/congestion-load-71.md`의 `loadCongestion`).
-  2. 환경변수 `LINKRO_SUBWAY_CONGESTION=db`를 설정하고 재시작한다.
+  2. 서버 `~/BE/.env`에 `LINKRO_SUBWAY_CONGESTION=db`를 적고 재배포한다.
+     - `docker-compose.yml`의 `app.environment`에 `LINKRO_SUBWAY_CONGESTION: ${LINKRO_SUBWAY_CONGESTION:-mock}`을 추가했다. 그래서 `.env` 값이 컨테이너로 전달된다.
+     - 경로·요금 스위치 `LINKRO_SUBWAY_MODULE`도 같은 방식으로 추가했다.
+  3. 시작 로그에 `Subway congestion is DB`(INFO)가 있고 `Subway congestion is MOCK` WARN이 없는지 확인한다.
 - 적재 전에 켜면 모든 정차역이 회색이 된다.
-- 기본값은 mock 그대로다.
+- 기본값은 mock 그대로다. `.env`에 값이 없거나 비어 있어도 mock이다.
+  - compose가 `:-mock`으로 채우고, 앱의 `MockSwitchCondition`도 빈 값을 mock으로 본다.
+- 두 변수는 선택값이라 `.github/workflows/deploy.yml`의 필수 설정 검사에는 넣지 않았다.
 
 ## 알려진 제한
 

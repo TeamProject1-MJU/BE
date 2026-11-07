@@ -179,9 +179,12 @@
 
 ## 운영 전환
 
-1. 배포 환경에 환경변수 `LINKRO_SUBWAY_MODULE=graph`를 넣는다(Spring의 relaxed binding으로 `linkro.subway.module=graph`가 된다). 이 PR은 배포 파일을 바꾸지 않는다.
+1. 서버 `~/BE/.env`에 `LINKRO_SUBWAY_MODULE=graph`를 적고 재배포한다.
+   - `docker-compose.yml`의 `app.environment`에 `LINKRO_SUBWAY_MODULE: ${LINKRO_SUBWAY_MODULE:-mock}`을 추가했다(#79). 그래서 이 값이 컨테이너로 전달된다.
+   - Spring relaxed binding으로 `linkro.subway.module=graph`가 된다.
+   - `.env`에 값이 없거나 비어 있으면 mock이다. compose의 `:-mock` 기본값과 `MockSwitchCondition`이 둘 다 빈 값을 mock으로 처리한다.
 2. 시작 로그에서 `Subway graph loaded: 277 nodes ...`(V12 기준)를 확인하고, `Subway route module is MOCK` WARN이 없는지 확인한다.
-3. 혼잡도는 실제 구현 전까지 `Subway congestion is MOCK` WARN이 남는다.
+3. 혼잡도는 별도 스위치 `LINKRO_SUBWAY_CONGESTION`이다(`docs/congestion-api-79.md`). mock이면 `Subway congestion is MOCK` WARN이 남는다.
 
 ## 알려진 한계
 
