@@ -55,3 +55,16 @@ cors:
 #         - { station: 성수, line: "2", seconds: 19, meters: 23 }
 #     fare:
 #       base-fare: 1550
+
+# AI module (#73). Unset or blank means mock, which logs a WARN at startup.
+# - module: mock | openai (production: LINKRO_AI_MODULE=openai).
+# - openai with a blank OPENAI_API_KEY or OPENAI_MODEL fails startup. There is no default model id.
+linkro:
+  ai:
+    module: ${LINKRO_AI_MODULE:mock}
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      model: ${OPENAI_MODEL:}
+      connect-timeout: ${OPENAI_CONNECT_TIMEOUT:2s}
+      read-timeout: ${OPENAI_READ_TIMEOUT:8s}
+      vision-read-timeout: ${OPENAI_VISION_READ_TIMEOUT:4s}

@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["result", "reason", "stationName", "lineName", "headsign"],
+  "properties": {
+    "result": {"type": "string", "enum": ["CORRECT", "WRONG", "RETAKE"]},
+    "reason": {"type": ["string", "null"],
+      "enum": ["LINE_NOT_ON_ROUTE", "DIRECTION_MISMATCH", "NOT_A_SIGN", "UNREADABLE", "MISSING_INFO", null]},
+    "stationName": {"type": ["string", "null"]},
+    "lineName": {"type": ["string", "null"]},
+    "headsign": {"type": ["string", "null"]}
+  }
+}

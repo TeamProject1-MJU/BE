@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["maxMinutes", "maxTransfers", "maxFareWon", "excludeStationNames", "memberLimits"],
+  "properties": {
+    "maxMinutes": {"type": ["integer", "null"]},
+    "maxTransfers": {"type": ["integer", "null"]},
+    "maxFareWon": {"type": ["integer", "null"]},
+    "excludeStationNames": {"type": "array", "items": {"type": "string"}},
+    "memberLimits": {"type": "array", "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nickname", "maxMinutes"],
+      "properties": {
+        "nickname": {"type": "string"},
+        "maxMinutes": {"type": ["integer", "null"]}
+      }
+    }}
+  }
+}
