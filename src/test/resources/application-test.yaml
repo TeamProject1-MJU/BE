@@ -20,3 +20,8 @@ linkro:
     kasi:
       # Tests never call the real KASI API, even when .env or the shell has KASI_SPECIAL_DAY_KEY.
       service-key: ""
+  route:
+    kakao:
+      # Tests never call the real Kakao API, even when .env or the shell has KAKAO_REST_API_KEY.
+      # Kakao tests build their own client against a stub server.
+      rest-api-key: ""
