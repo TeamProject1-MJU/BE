@@ -67,6 +67,7 @@
 - `linkro.route.kakao.base-url=https://dapi.kakao.com`
 - `call-timeout=3s`, `total-timeout=5s`, `retry-delay=200ms`
 - `auth-cooldown=5m`, `quota-cooldown=30s`
+- 키: `linkro.route.kakao.rest-api-key`, 없으면 `KAKAO_REST_API_KEY`. 테스트 설정은 이 프로퍼티를 빈 값으로 고정해, `.env`나 셸에 키가 있어도 실제 카카오를 호출하지 않는다
 
 ### 호출 보류(쿨다운)
 

@@ -24,7 +24,8 @@ import org.springframework.web.client.RestClientResponseException;
  * Kakao public-transport route search (GET /v2/routing/publictraffic, API 6.1).
  *
  * <ul>
- *   <li>Without {@code KAKAO_REST_API_KEY} it never calls Kakao and every search returns {@link Reason#NO_KEY}.</li>
+ *   <li>The key is {@code linkro.route.kakao.rest-api-key}, else {@code KAKAO_REST_API_KEY}. Without it Kakao is never
+ *       called and every search returns {@link Reason#NO_KEY}.</li>
  *   <li>One call waits at most {@code call-timeout} (3 s); the whole search, retry included, at most
  *       {@code total-timeout} (5 s). A timeout, I/O error or 5xx is retried once after {@code retry-delay}, only
  *       within the time left. 4xx is not retried.</li>
@@ -88,7 +89,7 @@ public class KakaoRouteClient {
 
     @Autowired
     public KakaoRouteClient(RestClient.Builder builder,
-                            @Value("${KAKAO_REST_API_KEY:}") String apiKey,
+                            @Value("${linkro.route.kakao.rest-api-key:${KAKAO_REST_API_KEY:}}") String apiKey,
                             @Value("${linkro.route.kakao.base-url:https://dapi.kakao.com}") String baseUrl,
                             @Value("${linkro.route.kakao.call-timeout:3s}") Duration callTimeout,
                             @Value("${linkro.route.kakao.total-timeout:5s}") Duration totalTimeout,

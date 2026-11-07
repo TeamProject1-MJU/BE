@@ -39,6 +39,10 @@ cors:
 # - congestion: mock | db. db reads congestion_stats for route congestion; turn it on after the production DB is
 #   loaded (environment variable LINKRO_SUBWAY_CONGESTION=db). GET /congestion reads the DB either way.
 # - holidays: comma-separated yyyy-MM-dd used as SUNDAY; defaults are in subway-holidays.properties.
+#   With KASI_SPECIAL_DAY_KEY (linkro.holiday.kasi.service-key, data.go.kr "Decoding" key) this year and next year
+#   are refreshed from the KASI special-day API on startup (background) and daily at 03:00 KST; a year is replaced
+#   only when all 12 months succeed. Optional: linkro.holiday.kasi.base-url, connect-timeout=2s, read-timeout=3s.
+#   See docs/holiday-refresh-83.md.
 # Route search (POST /routes/search): the Kakao REST API key comes only from the environment variable
 # KAKAO_REST_API_KEY (production: ~/BE/.env, passed by docker-compose). Empty means INTERNAL routes only.
 # Optional overrides (defaults shown): linkro.route.kakao.base-url=https://dapi.kakao.com,
