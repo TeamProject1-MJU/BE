@@ -144,7 +144,7 @@ Table congestion_stats {
   direction       direction_code    [not null]
   day_type        day_type          [not null]
   slot_start      time              [not null, note: '30분 단위, 05:30~23:30과 00:00, 00:30 시작 슬롯만 (39칸, CHECK, V13)']
-  congestion_pct  numeric           [not null, note: '정원 대비 % (자릿수 지정 없음, V13). PREDICTED는 AI가 계산한 값, ESTIMATED는 앞뒤 역 평균, MOCK은 AI 파일 연동 전 임시 데이터. API는 소수 1자리 내림']
+  congestion_pct  numeric           [not null, note: '정원 대비 % (자릿수 지정 없음, V13). PREDICTED는 AI가 계산한 값, ESTIMATED는 앞뒤 역 평균, MOCK은 AI 파일 연동 전 임시 데이터. API는 정수 반올림, 단계 상한을 넘으면 상한 바로 아래 정수']
   congestion_level       varchar(12) [not null, note: 'COMFORTABLE/RELAXED/NORMAL/CROWDED/VERY_CROWDED. PREDICTED는 AI 파일 값 그대로, MOCK은 적재 시 같은 기준으로 채움. 쾌적 [0,35), 여유 [35,50), 보통 [50,100), 혼잡 [100,150), 매우 혼잡 [150,∞) (하한 포함·상한 미포함, pct와 일치 CHECK)']
   congestion_level_label varchar(10) [not null, note: '쾌적/여유/보통/혼잡/매우 혼잡 (AI 파일 값 그대로)']
   source          congestion_source [not null, note: '조회 우선순위 PREDICTED > ESTIMATED > MOCK']

@@ -107,14 +107,14 @@ class CongestionApiPostgresTest {
 
     @ParameterizedTest(name = "{0} {1} -> {3} {4} {2}")
     @CsvSource({
-            "2026-11-06, 05:29, 2026-11-06, 05:30, true,  WEEKDAY, 11.0",
-            "2026-11-06, 05:30, 2026-11-06, 05:30, false, WEEKDAY, 11.0",
-            "2026-11-06, 23:59, 2026-11-06, 23:30, false, WEEKDAY, 30.0",
-            "2026-11-06, 00:00, 2026-11-05, 00:00, false, WEEKDAY, 20.0",
-            "2026-11-06, 00:29, 2026-11-05, 00:00, false, WEEKDAY, 20.0",
-            "2026-11-06, 00:30, 2026-11-05, 00:30, false, WEEKDAY, 21.0",
-            "2026-11-06, 00:59, 2026-11-05, 00:30, false, WEEKDAY, 21.0",
-            "2026-11-06, 01:00, 2026-11-06, 05:30, true,  WEEKDAY, 11.0"})
+            "2026-11-06, 05:29, 2026-11-06, 05:30, true,  WEEKDAY, 11",
+            "2026-11-06, 05:30, 2026-11-06, 05:30, false, WEEKDAY, 11",
+            "2026-11-06, 23:59, 2026-11-06, 23:30, false, WEEKDAY, 30",
+            "2026-11-06, 00:00, 2026-11-05, 00:00, false, WEEKDAY, 20",
+            "2026-11-06, 00:29, 2026-11-05, 00:00, false, WEEKDAY, 20",
+            "2026-11-06, 00:30, 2026-11-05, 00:30, false, WEEKDAY, 21",
+            "2026-11-06, 00:59, 2026-11-05, 00:30, false, WEEKDAY, 21",
+            "2026-11-06, 01:00, 2026-11-06, 05:30, true,  WEEKDAY, 11"})
     void slotBoundaries(String date, String time, String slotDate, String slot, boolean firstTrain, String dayType, String pct) throws Exception {
         JsonNode data = ok(query(gangnamStation, line2, "INNER", null, time, date));
         assertThat(data.get("slotDate").asString()).isEqualTo(slotDate);
@@ -129,22 +129,22 @@ class CongestionApiPostgresTest {
         // Calendar Saturday 00:10 is Friday night: WEEKDAY 00:00 of Friday.
         JsonNode saturday = ok(query(gangnamStation, line2, "INNER", null, "00:10", "2026-11-07"));
         assertThat(List.of(saturday.get("dayType").asString(), saturday.get("slotDate").asString(), saturday.get("pct").asString()))
-                .containsExactly("WEEKDAY", "2026-11-06", "20.0");
+                .containsExactly("WEEKDAY", "2026-11-06", "20");
         // Calendar Sunday 00:10 is Saturday night: SATURDAY.
         JsonNode sunday = ok(query(gangnamStation, line2, "INNER", null, "00:10", "2026-11-08"));
         assertThat(List.of(sunday.get("dayType").asString(), sunday.get("slotDate").asString(), sunday.get("pct").asString()))
-                .containsExactly("SATURDAY", "2026-11-07", "25.0");
+                .containsExactly("SATURDAY", "2026-11-07", "25");
     }
 
     @Test void holidaysAreSundayByServiceDay() throws Exception {
         // 12-25 00:10 is still the night of 12-24 (Thursday, WEEKDAY); 12-25 08:00 is the holiday itself (SUNDAY).
         assertThat(ok(query(gangnamStation, line2, "INNER", null, "00:10", "2026-12-25")).get("dayType").asString()).isEqualTo("WEEKDAY");
         JsonNode holiday = ok(query(gangnamStation, line2, "INNER", null, "08:00", "2026-12-25"));
-        assertThat(List.of(holiday.get("dayType").asString(), holiday.get("pct").asString())).containsExactly("SUNDAY", "17.0");
+        assertThat(List.of(holiday.get("dayType").asString(), holiday.get("pct").asString())).containsExactly("SUNDAY", "17");
         // 12-26 00:10 is the holiday's night: SUNDAY 00:00 of 12-25.
         JsonNode holidayNight = ok(query(gangnamStation, line2, "INNER", null, "00:10", "2026-12-26"));
         assertThat(List.of(holidayNight.get("dayType").asString(), holidayNight.get("slotDate").asString(), holidayNight.get("pct").asString()))
-                .containsExactly("SUNDAY", "2026-12-25", "26.0");
+                .containsExactly("SUNDAY", "2026-12-25", "26");
     }
 
     // ---- rule C ----
@@ -154,7 +154,7 @@ class CongestionApiPostgresTest {
         JsonNode next = ok(query(sadangStation, line2, "INNER", null, "23:30", "2026-11-06"));
         assertThat(next.get("supported").asBoolean()).isTrue();
         assertThat(List.of(next.get("slotDate").asString(), next.get("slotStart").asString(), next.get("dayType").asString(),
-                next.get("pct").asString())).containsExactly("2026-11-07", "05:30", "SATURDAY", "52.0");
+                next.get("pct").asString())).containsExactly("2026-11-07", "05:30", "SATURDAY", "52");
         assertThat(next.get("firstTrain").asBoolean()).isTrue();
         // Saturday 23:30: Sunday has no 05:30 row, so gray; the slot fields stay those of the request.
         JsonNode gray = ok(query(sadangStation, line2, "INNER", null, "23:30", "2026-11-07"));
@@ -174,16 +174,18 @@ class CongestionApiPostgresTest {
     @Test void sourcePriorityIsPredictedThenEstimatedThenMock() throws Exception {
         assertThat(ok(query(gangnamStation, line2, "INNER", "WEEKDAY", "09:10", null)).get("source").asString()).isEqualTo("PREDICTED");
         JsonNode estimated = ok(query(gangnamStation, line2, "INNER", "WEEKDAY", "09:40", null));
-        assertThat(List.of(estimated.get("source").asString(), estimated.get("pct").asString())).containsExactly("ESTIMATED", "71.0");
+        assertThat(List.of(estimated.get("source").asString(), estimated.get("pct").asString())).containsExactly("ESTIMATED", "71");
         assertThat(ok(query(gangnamStation, line2, "INNER", "WEEKDAY", "10:00", null)).get("source").asString()).isEqualTo("MOCK");
     }
 
-    @Test void pctIsRoundedDownAndTheStoredLevelIsKept() throws Exception {
+    @Test void pctIsAnIntegerCappedByTheStoredLevel() throws Exception {
         JsonNode comfortable = ok(query(gangnamStation, line2, "INNER", "WEEKDAY", "08:00", null));
-        assertThat(comfortable.get("pct").decimalValue()).isEqualTo(new BigDecimal("34.9"));
+        assertThat(comfortable.get("pct").isIntegralNumber()).isTrue();
+        assertThat(comfortable.get("pct").asInt()).isEqualTo(34);
         assertThat(List.of(comfortable.get("level").asString(), comfortable.get("levelLabel").asString())).containsExactly("COMFORTABLE", "쾌적");
         JsonNode normal = ok(query(gangnamStation, line2, "INNER", "WEEKDAY", "08:45", null));
-        assertThat(normal.get("pct").decimalValue()).isEqualTo(new BigDecimal("99.9"));
+        assertThat(normal.get("pct").isIntegralNumber()).isTrue();
+        assertThat(normal.get("pct").asInt()).isEqualTo(99);
         assertThat(normal.get("level").asString()).isEqualTo("NORMAL");
     }
 
@@ -192,10 +194,10 @@ class CongestionApiPostgresTest {
     @Test void withoutDateTheDayTypeIsTheServiceDays() throws Exception {
         JsonNode midnight = ok(query(gangnamStation, line2, "INNER", "SATURDAY", "00:10", null));
         assertThat(List.of(midnight.get("dayType").asString(), midnight.get("slotStart").asString(), midnight.get("pct").asString()))
-                .containsExactly("SATURDAY", "00:00", "25.0");
+                .containsExactly("SATURDAY", "00:00", "25");
         assertThat(midnight.get("slotDate").isNull()).isTrue();
         JsonNode early = ok(query(gangnamStation, line2, "INNER", "WEEKDAY", "03:00", null));
-        assertThat(List.of(early.get("slotStart").asString(), early.get("pct").asString())).containsExactly("05:30", "11.0");
+        assertThat(List.of(early.get("slotStart").asString(), early.get("pct").asString())).containsExactly("05:30", "11");
         assertThat(early.get("firstTrain").asBoolean()).isTrue();
         assertThat(early.get("slotDate").isNull()).isTrue();
         // After the last train the next day is unknown without a date: gray.
@@ -240,6 +242,8 @@ class CongestionApiPostgresTest {
         assertThat(fieldNames(operation.get("responses"))).contains("200", "400", "401", "404");
         JsonNode source = root.get("components").get("schemas").get("CongestionData").get("properties").get("source");
         assertThat(source.toString()).contains("PREDICTED", "ESTIMATED", "MOCK");
+        JsonNode pct = root.get("components").get("schemas").get("CongestionData").get("properties").get("pct");
+        assertThat(pct.toString()).contains("integer").doesNotContain("number");
         assertThat(operation.get("responses").get("200").toString()).contains("ESTIMATED", "\"firstTrain\":true", "\"supported\":false");
     }
 
@@ -254,18 +258,18 @@ class CongestionApiPostgresTest {
         stat(yongdap, "UP", "WEEKDAY", "08:00", "45", "PREDICTED");
         RoutePath path = path(
                 stop(gangnam, DirectionCode.INNER, 0),        // 07:50 -> 07:30 slot, 40
-                stop(sadang2, DirectionCode.INNER, 600),      // 08:00, 120.5
+                stop(sadang2, DirectionCode.INNER, 600),      // 08:00, 120.5 shown as 121
                 stop(sadang4, DirectionCode.DOWN, 900),       // same station, 4호선 node: 08:05 -> 08:00, 60
                 stop(yeokchon, DirectionCode.LOOP, 1200),     // 6호선 응암순환 LOOP node: 08:10 -> 08:00, 30
                 stop(yongdap, DirectionCode.UP, 1500),        // 2호선 성수지선 UP node: 08:15 -> 08:00, 45
-                stop(gangnam, DirectionCode.INNER, 2400));    // 08:30 -> 99.96 shown as 99.9
+                stop(gangnam, DirectionCode.INNER, 2400));    // 08:30 -> 99.96 NORMAL shown as 99
 
         CongestionResult result = lookup.congestionOf(path, at("2026-11-06T07:50"));
 
         assertThat(result).extracting(CongestionResult::supported, CongestionResult::pct, CongestionResult::level,
-                CongestionResult::source).containsExactly(true, 120.5, "CROWDED", CongestionSource.PREDICTED);
+                CongestionResult::source).containsExactly(true, 121.0, "CROWDED", CongestionSource.PREDICTED);
         assertThat(result.stops()).extracting(s -> s.slotStart().toString() + " " + s.congestion().pct())
-                .containsExactly("07:30 40.0", "08:00 120.5", "08:00 60.0", "08:00 30.0", "08:00 45.0", "08:30 99.9");
+                .containsExactly("07:30 40.0", "08:00 121.0", "08:00 60.0", "08:00 30.0", "08:00 45.0", "08:30 99.0");
         assertThat(result.stops()).extracting(StopCongestion::stationLineId).containsExactly(gangnam, sadang2, sadang4, yeokchon, yongdap, gangnam);
         assertThat(result.stops().get(1).stationId()).isEqualTo(result.stops().get(2).stationId());
         assertThat(result.stops()).allSatisfy(s -> {

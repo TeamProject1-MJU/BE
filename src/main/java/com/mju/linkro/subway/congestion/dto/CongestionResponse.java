@@ -5,7 +5,6 @@ import com.mju.linkro.subway.api.CongestionSource;
 import com.mju.linkro.subway.api.DayType;
 import com.mju.linkro.subway.api.DirectionCode;
 import io.swagger.v3.oas.annotations.media.Schema;
-import java.math.BigDecimal;
 
 /** GET /congestion data (6.2). Without data {@code supported} is false and pct, level, levelLabel, source are null. */
 @JsonInclude(JsonInclude.Include.ALWAYS)
@@ -21,7 +20,8 @@ public record CongestionResponse(
                 example = "2026-11-06", types = {"string", "null"}) String slotDate,
         @Schema(description = "첫차(05:30) 슬롯으로 바꿔 조회했으면 true. 01:00~05:29, 또는 막차 이후 다음 영업일 05:30", example = "false") boolean firstTrain,
         @Schema(description = "false면 데이터 없음(회색): pct, level, levelLabel, source가 null", example = "true") boolean supported,
-        @Schema(description = "정원 대비 %, 소수 1자리 내림. 데이터 없으면 null", example = "92.5", types = {"number", "null"}) BigDecimal pct,
+        @Schema(description = "정원 대비 %, 정수. 원값을 반올림하되 단계 경계를 넘으면 그 단계 상한 바로 아래 정수(쾌적 34, 여유 49, 보통 99, 혼잡 149). 데이터 없으면 null",
+                example = "93", types = {"integer", "null"}) Integer pct,
         @Schema(description = "저장된 단계 그대로(COMFORTABLE/RELAXED/NORMAL/CROWDED/VERY_CROWDED). 데이터 없으면 null",
                 example = "NORMAL", types = {"string", "null"}) String level,
         @Schema(description = "저장된 화면 라벨 그대로. 데이터 없으면 null", example = "보통", types = {"string", "null"}) String levelLabel,

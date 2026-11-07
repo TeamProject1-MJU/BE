@@ -5,6 +5,8 @@ import java.util.List;
 /**
  * Congestion of a route. When {@code supported} is false there is no data and every value field is null.
  *
+ * @param pct        percent of capacity as shown; the DB lookup always gives a whole number (rounded half up, capped
+ *                   below the level's upper bound), the mock gives its own values
  * @param level      COMFORTABLE, RELAXED, NORMAL, CROWDED or VERY_CROWDED
  * @param levelLabel screen label stored with the level (쾌적, 여유, 보통, 혼잡, 매우 혼잡)
  * @param stops      per-stop congestion in route order. Filled by the DB lookup; empty from the mock and for a

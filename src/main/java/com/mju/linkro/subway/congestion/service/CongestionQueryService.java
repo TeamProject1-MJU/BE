@@ -67,7 +67,7 @@ public class CongestionQueryService {
         var stat = found.stat();
         return new CongestionResponse(query.stationId(), query.lineId(), query.direction(), found.dayType(),
                 found.slot().toString(), found.slotDate() == null ? null : found.slotDate().toString(), found.firstTrain(),
-                stat != null, stat == null ? null : CongestionResolver.display(stat.pct()),
+                stat != null, stat == null ? null : CongestionResolver.display(stat.pct(), stat.level()),
                 stat == null ? null : stat.level(), stat == null ? null : stat.label(), stat == null ? null : stat.source());
     }
 }

@@ -32,7 +32,7 @@ public class CongestionResolver {
     public record Resolution(LocalDate slotDate, DayType dayType, LocalTime slot, boolean firstTrain, Stat stat) {
         public CongestionResult result() {
             return stat == null ? CongestionResult.unsupported()
-                    : CongestionResult.of(display(stat.pct()).doubleValue(), stat.level(), stat.label(), stat.source());
+                    : CongestionResult.of(display(stat.pct(), stat.level()), stat.level(), stat.label(), stat.source());
         }
     }
 
@@ -70,8 +70,20 @@ public class CongestionResolver {
         return first == null ? requested : new Resolution(next, nextType, ServiceSlots.FIRST_TRAIN, true, first);
     }
 
-    /** Rule E: one decimal, rounded down, so the shown value never crosses into the next level. */
-    public static BigDecimal display(BigDecimal pct) {
-        return pct.setScale(1, RoundingMode.DOWN);
+    /**
+     * Rule E, the one place the shown pct is made: the stored pct rounded half up to an integer, but never past the
+     * stored level's upper bound (COMFORTABLE 34, RELAXED 49, NORMAL 99, CROWDED 149; VERY_CROWDED has none). Half
+     * up never lowers a value, so the lower bound cannot be crossed. The level itself is not recomputed.
+     */
+    public static int display(BigDecimal pct, String level) {
+        int rounded = pct.setScale(0, RoundingMode.HALF_UP).intValueExact();
+        Integer upperBound = switch (level) {
+            case "COMFORTABLE" -> 35;
+            case "RELAXED" -> 50;
+            case "NORMAL" -> 100;
+            case "CROWDED" -> 150;
+            default -> null;
+        };
+        return upperBound != null && rounded >= upperBound ? upperBound - 1 : rounded;
     }
 }

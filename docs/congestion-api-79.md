@@ -54,10 +54,25 @@
 
 ### E. 값 표시
 
-- `pct`는 소수 1자리 **내림**(`BigDecimal`, `RoundingMode.DOWN`)이다. 예: 34.95326485813263 → 34.9, 99.96055952795814 → 99.9.
-  - 내림이라 표시값이 다음 단계 경계를 넘지 않는다. 반올림하면 34.96 → 35.0인데 COMFORTABLE이 된다.
-- `level`, `levelLabel`은 DB 값 그대로이고 다시 계산하지 않는다.
-- 경로 최댓값 비교는 내리기 전 원값으로 한다.
+- `pct`는 **정수**다. DB 원값(`BigDecimal`)을 소수 첫째 자리에서 반올림(`HALF_UP`)한다.
+- 단, 반올림한 값이 DB `level`의 상한 이상이 되면 **그 단계 상한 바로 아래 정수**로 내린다.
+
+  | level | 상한 | 보정 |
+  | --- | --- | --- |
+  | COMFORTABLE | 35 | 35 이상이면 34 |
+  | RELAXED | 50 | 50 이상이면 49 |
+  | NORMAL | 100 | 100 이상이면 99 |
+  | CROWDED | 150 | 150 이상이면 149 |
+  | VERY_CROWDED | 없음 | 보정 없음 |
+
+- 하한 쪽은 보정할 일이 없다. 반올림(HALF_UP)은 값을 내리지 않으므로 하한 아래로 가지 않는다.
+- 예:
+  - 반올림: 92.5 → 93, 92.49 → 92, 8.97 → 9
+  - 상한 보정: 34.95326485813263 COMFORTABLE → 34, 99.96055952795814 NORMAL → 99, 149.5 CROWDED → 149
+  - 하한 바로 위: 35.0 RELAXED → 35, 100.4 CROWDED → 100
+- `level`, `levelLabel`은 DB 값 그대로이고 다시 계산하지 않는다. 위 보정 덕분에 표시 pct로 단계를 계산해도 항상 DB `level`과 같다.
+- 규칙은 `CongestionResolver.display` 한 곳에 있고, GET /congestion과 `congestionOf` 정차역 값이 같이 쓴다.
+- 경로 최댓값은 **원값으로 비교**해 가장 큰 정차역을 고른 뒤 그 정차역의 표시값을 쓴다. 반올림한 값끼리 비교하지 않는다.
 
 ### F. ESTIMATED
 
@@ -88,7 +103,7 @@
 ```json
 { "success": true, "data": { "stationId": 31, "lineId": 2, "direction": "INNER", "dayType": "WEEKDAY",
   "slotStart": "18:30", "slotDate": null, "firstTrain": false, "supported": true,
-  "pct": 92.5, "level": "NORMAL", "levelLabel": "보통", "source": "PREDICTED" } }
+  "pct": 93, "level": "NORMAL", "levelLabel": "보통", "source": "PREDICTED" } }
 ```
 
 막차 이후 첫차(date=2026-11-06 금요일, time=23:30):
@@ -96,7 +111,7 @@
 ```json
 { "success": true, "data": { "stationId": 35, "lineId": 2, "direction": "INNER", "dayType": "SATURDAY",
   "slotStart": "05:30", "slotDate": "2026-11-07", "firstTrain": true, "supported": true,
-  "pct": 12.3, "level": "COMFORTABLE", "levelLabel": "쾌적", "source": "PREDICTED" } }
+  "pct": 12, "level": "COMFORTABLE", "levelLabel": "쾌적", "source": "PREDICTED" } }
 ```
 
 데이터 없음(회색):
@@ -108,6 +123,7 @@
 ```
 
 - 명세 6.2의 필드에 `supported`를 더했다. 데이터 없음 형식(`supported: false`, 값 null)을 그대로 따른다.
+- `pct`는 정수(JSON number, 소수점 없음)다.
 - 시각 필드는 `"HH:mm"`, 날짜는 `"yyyy-MM-dd"` 문자열이다.
 
 ### 오류
@@ -129,7 +145,8 @@
 - 환승역처럼 같은 역이 두 노드로 나오면 각각 조회한다.
 - `direction`이 null인 정차역(빈 경로의 유일한 정차역)은 회색이다.
 - 결과:
-  - **요약**(`supported`, `pct`, `level`, `levelLabel`, `source`): 회색이 아닌 정차역 중 원값이 가장 큰 정차역의 값이다. 회색이 아닌 정차역이 없으면 `supported: false`다.
+  - **요약**(`supported`, `pct`, `level`, `levelLabel`, `source`): 회색이 아닌 정차역 중 원값이 가장 큰 정차역의 값(표시값)이다. 회색이 아닌 정차역이 없으면 `supported: false`다.
+  - `CongestionResult.pct`는 계약상 `Double`이다. DB 구현은 항상 정수 값(예: 93.0)을 넣는다.
   - **`stops`**: 정차역별 `StopCongestion`(slotDate, slotStart, firstTrain, 값)이고 `RoutePath.stops` 순서다. `CongestionResult`에 덧붙인 필드라 기존 5개 필드의 의미는 그대로다. mock은 `stops`를 비워 둔다.
 - **쿼리 수**: 경로의 (노드, 방향, dayType) 조합을 모아 `where (station_line_id, direction, day_type) in (...)` **한 번**으로 그 조합의 모든 슬롯을 읽고, 규칙은 메모리에서 적용한다. 다음 영업일 대체용 dayType도 같은 조회에 포함한다.
 
