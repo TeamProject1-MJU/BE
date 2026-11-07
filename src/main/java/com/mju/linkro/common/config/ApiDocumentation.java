@@ -3,6 +3,7 @@ package com.mju.linkro.common.config;
 import com.mju.linkro.auth.dto.*;
 import com.mju.linkro.common.response.ApiResponse;
 import com.mju.linkro.room.dto.RoomResponses;
+import com.mju.linkro.route.dto.RouteSearchResponse;
 import com.mju.linkro.subway.congestion.dto.CongestionResponse;
 import com.mju.linkro.subway.station.dto.StationResponses;
 import com.mju.linkro.user.dto.*;
@@ -43,6 +44,8 @@ public final class ApiDocumentation {
     public record LineList(@Schema(description = "항상 true", example = "true") boolean success, List<StationResponses.Line> data) {}
     @Schema(name = "StationPageResponse", requiredProperties = {"success", "data"})
     public record StationPageResponse(@Schema(description = "항상 true", example = "true") boolean success, StationResponses.StationPage data) {}
+    @Schema(name = "RouteSearchResponse", requiredProperties = {"success", "data"})
+    public record RouteSearch(@Schema(description = "항상 true", example = "true") boolean success, RouteSearchResponse data) {}
     @Schema(name = "CongestionResponse", requiredProperties = {"success", "data"})
     public record Congestion(@Schema(description = "항상 true", example = "true") boolean success, CongestionResponse data) {}
     @Schema(name = "StationDetailResponse", requiredProperties = {"success", "data"})
