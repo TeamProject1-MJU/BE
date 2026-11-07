@@ -1,0 +1,6 @@
+# Estimated congestion (source = ESTIMATED): for a (line, station, direction) that has no row at all in the AI file,
+# pct = mean of the previous and next station's rows for the same direction, day_type and slot.
+# A slot is estimated only when both neighbours have it. Add a rule by adding one line. See docs/congestion-load-71.md.
+line_code,station,direction,previous,next
+# 2호선 성수 외선: the source input is 0 in all 117 cells (unverified_zero_input), so the AI file has no row.
+2,성수,OUTER,건대입구,뚝섬
