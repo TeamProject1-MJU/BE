@@ -39,7 +39,7 @@ public class UserService {
 		return UserProfileResponse.from(activeUser(userId));
 	}
 
-	@Transactional
+	@Transactional(isolation = Isolation.READ_COMMITTED)
 	public NicknameUpdateResponse updateNickname(UUID userId, String nickname) {
 		// The account check comes first so a withdrawn user always gets TOKEN_INVALID.
 		User user = userAccess.lockActive(userId);

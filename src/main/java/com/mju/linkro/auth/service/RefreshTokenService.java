@@ -1,10 +1,9 @@
 package com.mju.linkro.auth.service;
 
-import com.mju.linkro.user.service.UserAccess;
-
 import com.mju.linkro.auth.domain.RefreshToken;
 import com.mju.linkro.auth.repository.RefreshTokenRepository;
 import com.mju.linkro.common.exception.ErrorCode;
+import com.mju.linkro.user.service.UserAccess;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -16,6 +15,7 @@ import java.util.HexFormat;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -38,7 +38,7 @@ public class RefreshTokenService {
 	}
 
 	/** Returns the raw token; only its hash is persisted. */
-	@Transactional
+	@Transactional(isolation = Isolation.READ_COMMITTED)
 	public String issue(UUID userId, UUID familyId) {
 		userAccess.lockActive(userId);
 		byte[] bytes = new byte[TOKEN_BYTES];
@@ -52,7 +52,7 @@ public class RefreshTokenService {
 	 * Failures are returned rather than thrown so that a family revocation for reuse commits
 	 * with this transaction instead of being rolled back by the TOKEN_INVALID exception.
 	 */
-	@Transactional
+	@Transactional(isolation = Isolation.READ_COMMITTED)
 	public Rotation rotate(String rawToken) {
 		RefreshToken token = refreshTokens.findByTokenHash(hash(rawToken)).orElse(null);
 		if (token == null) {
@@ -60,11 +60,11 @@ public class RefreshTokenService {
 		}
 		var lockedUser = userAccess.lock(token.getUserId());
 		Instant now = Instant.now();
-		token = refreshTokens.findByTokenHash(hash(rawToken)).orElseThrow();
 		if (!token.getExpiresAt().isAfter(now)) {
 			return Rotation.failure(ErrorCode.TOKEN_EXPIRED);
 		}
-		// Already revoked, or a concurrent request with the same token won the conditional update.
+		// Identity, family and expiry are immutable. A stale null revokedAt is safe:
+		// the conditional UPDATE checks current DB state and detects concurrent reuse.
 		if (token.getRevokedAt() != null || refreshTokens.revokeIfActive(token.getId(), now) == 0) {
 			refreshTokens.revokeFamily(token.getFamilyId(), now);
 			return Rotation.failure(ErrorCode.TOKEN_INVALID);

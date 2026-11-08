@@ -6,8 +6,10 @@ import com.mju.linkro.common.exception.*;
 import jakarta.persistence.*;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.hibernate.Session;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.*;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /** Database row lock shared by account, membership and token writers. */
 @Service
@@ -18,13 +20,21 @@ public class UserAccess {
 
     @Transactional(propagation = Propagation.MANDATORY)
     public User lock(UUID id) {
-        var session = em.unwrap(org.hibernate.Session.class);
-        if (org.springframework.transaction.support.TransactionSynchronizationManager.isCurrentTransactionReadOnly())
+        var session = em.unwrap(Session.class);
+        if (!TransactionSynchronizationManager.isActualTransactionActive()
+                || TransactionSynchronizationManager.isCurrentTransactionReadOnly())
             throw new IllegalStateException("User locks require a read-write transaction");
         if (session.isDirty())
             throw new IllegalStateException("Acquire user lock before entity changes");
-        if (session.doReturningWork(java.sql.Connection::getTransactionIsolation)
-                != java.sql.Connection.TRANSACTION_READ_COMMITTED)
+        // Use JDBC on this session so reading the actual PostgreSQL setting cannot auto-flush.
+        String isolation = session.doReturningWork(connection -> {
+            try (var statement = connection.prepareStatement("select current_setting('transaction_isolation')");
+                    var result = statement.executeQuery()) {
+                result.next();
+                return result.getString(1);
+            }
+        });
+        if (!"read committed".equals(isolation))
             throw new IllegalStateException("User locks require READ COMMITTED isolation");
         User user = users.findLockedById(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.TOKEN_INVALID));

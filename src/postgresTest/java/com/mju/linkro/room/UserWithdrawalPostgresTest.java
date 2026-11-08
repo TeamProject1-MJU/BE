@@ -1,15 +1,22 @@
 package com.mju.linkro.room;
 
+import com.mju.linkro.auth.dto.KakaoUserInfo;
 import com.mju.linkro.auth.jwt.JwtProvider;
+import com.mju.linkro.auth.repository.RefreshTokenRepository;
+import com.mju.linkro.auth.service.RefreshTokenService;
+import com.mju.linkro.auth.service.UserLoginService;
 import com.mju.linkro.common.exception.*;
 import com.mju.linkro.room.domain.*;
-import com.mju.linkro.room.dto.RoomWriteRequest;
 import com.mju.linkro.room.repository.*;
 import com.mju.linkro.room.service.*;
 import com.mju.linkro.user.domain.User;
 import com.mju.linkro.user.repository.UserRepository;
+import com.mju.linkro.user.service.UserAccess;
+import com.mju.linkro.user.service.UserService;
+import jakarta.persistence.EntityManager;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -19,15 +26,16 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.*;
 import org.springframework.test.context.bean.override.mockito.*;
+import org.springframework.test.util.AopTestUtils;
 import org.springframework.test.web.servlet.*;
-import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.WebApplicationContext;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
-import tools.jackson.databind.json.JsonMapper;
+
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
@@ -48,19 +56,20 @@ class UserWithdrawalPostgresTest {
         registry.add("spring.datasource.password", POSTGRES::getPassword);
     }
 
+    @Autowired EntityManager em;
     @Autowired UserRepository users;
     @Autowired MeetingRoomRepository rooms;
     @Autowired MeetingMemberRepository members;
-    @Autowired com.mju.linkro.user.service.UserService withdrawal;
-    @MockitoSpyBean com.mju.linkro.user.service.UserAccess userAccess;
+    @Autowired UserService withdrawal;
+    @MockitoSpyBean UserAccess userAccess;
     @MockitoSpyBean RoomLeaveProcessor processor;
     @MockitoSpyBean RoomAccess access;
     @Autowired RoomCreationAttempt creation;
     @Autowired RoomMembershipService membership;
     @Autowired RoomLeaveService leaving;
-    @Autowired com.mju.linkro.auth.service.RefreshTokenService tokens;
-    @Autowired com.mju.linkro.auth.repository.RefreshTokenRepository refreshTokens;
-    @Autowired com.mju.linkro.auth.service.UserLoginService login;
+    @Autowired RefreshTokenService tokens;
+    @Autowired RefreshTokenRepository refreshTokens;
+    @Autowired UserLoginService login;
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager manager;
     @Autowired WebApplicationContext context;
@@ -85,6 +94,75 @@ class UserWithdrawalPostgresTest {
         assertThat(members.findRoomIdsForWithdrawal(target)).isEmpty();
         assertThat(jdbc.queryForObject("select count(*) from refresh_tokens where user_id=? and revoked_at is null",Long.class,target)).isZero();
     }
+    @Test void pendingChangesAreRejectedWithoutFlushingOrDiscardingThem() {
+        new TransactionTemplate(manager).executeWithoutResult(status->{
+            User user=users.findById(target).orElseThrow();
+            user.changeNickname("pending");
+            assertThatThrownBy(()->userAccess.lockActive(target)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("before entity changes");
+            assertThat(em.contains(user)).isTrue();
+            assertThat(user.getNickname()).isEqualTo("pending");
+            assertThat(jdbc.queryForObject("select nickname from users where id=?",String.class,target)).isEqualTo("target");
+            status.setRollbackOnly();
+        });
+    }
+    @Test void readOnlyUserLockIsRejected() {
+        var transaction=new TransactionTemplate(manager);
+        transaction.setReadOnly(true);
+        assertThatThrownBy(()->transaction.executeWithoutResult(status->userAccess.lockActive(target)))
+            .isInstanceOf(IllegalStateException.class).hasMessageContaining("read-write");
+    }
+    @Test void concurrentRotationsRevokeWinnersFamilyWithPreloadedToken() throws Exception {
+        UUID family=UUID.randomUUID();
+        String raw=tokens.issue(target,family);
+        tokens.issue(target,UUID.randomUUID());
+        CyclicBarrier read=new CyclicBarrier(2);
+        // Both transactions have already loaded the same unrevoked token before either locks the user.
+        ThreadLocal<Boolean> firstLock=ThreadLocal.withInitial(()->true);
+        doAnswer(call->{
+            if(firstLock.get()) { firstLock.set(false); read.await(10,TimeUnit.SECONDS); }
+            return call.callRealMethod();
+        })
+            .when(AopTestUtils.<UserAccess>getUltimateTargetObject(userAccess)).lock(target);
+        ExecutorService pool=Executors.newFixedThreadPool(2);
+        try {
+            var first=pool.submit(()->tokens.rotate(raw));
+            var second=pool.submit(()->tokens.rotate(raw));
+            var results=List.of(first.get(15,TimeUnit.SECONDS),second.get(15,TimeUnit.SECONDS));
+            assertThat(results.stream().filter(r->r.error()==null).count()).isEqualTo(1);
+            assertThat(results.stream().filter(r->r.error()==ErrorCode.TOKEN_INVALID).count()).isEqualTo(1);
+            assertThat(jdbc.queryForObject("select count(*) from refresh_tokens where family_id=?",Long.class,family)).isEqualTo(2);
+            assertThat(jdbc.queryForObject("select count(*) from refresh_tokens where family_id=? and revoked_at is null",Long.class,family)).isZero();
+            assertThat(jdbc.queryForObject("select count(*) from refresh_tokens where family_id<>? and revoked_at is null",Long.class,family)).isEqualTo(1);
+        } finally { pool.shutdownNow(); }
+    }
+    @ParameterizedTest @ValueSource(strings={"nickname","issue","rotate","withdraw"})
+    void requiredWriterRejectsActualRepeatableReadWithNullSpringMetadata(String operation) {
+        String raw=tokens.issue(target,UUID.randomUUID());
+        assertThatThrownBy(()->new TransactionTemplate(manager).executeWithoutResult(status->{
+            assertThat(TransactionSynchronizationManager.getCurrentTransactionIsolationLevel()).isNull();
+            jdbc.execute("set transaction isolation level repeatable read");
+            switch(operation) {
+                case "nickname" -> withdrawal.updateNickname(target,"renamed");
+                case "issue" -> tokens.issue(target,UUID.randomUUID());
+                case "rotate" -> tokens.rotate(raw);
+                case "withdraw" -> withdrawal.withdraw(target);
+            }
+        })).isInstanceOf(IllegalStateException.class).hasMessageContaining("READ COMMITTED");
+        assertThat(users.findById(target).orElseThrow().getDeletedAt()).isNull();
+        assertThat(users.findById(target).orElseThrow().getNickname()).isEqualTo("target");
+        assertThat(jdbc.queryForObject("select count(*) from refresh_tokens where revoked_at is null",Long.class)).isEqualTo(1);
+    }
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void loginRequiresNewUsesReadCommittedDespiteRepeatableReadCaller(boolean existingOnly) {
+        new TransactionTemplate(manager).executeWithoutResult(status->{
+            jdbc.execute("set transaction isolation level repeatable read");
+            if(existingOnly) login.loginExisting("target");
+            else login.login(new KakaoUserInfo("target","target"));
+            assertThat(jdbc.queryForObject("show transaction_isolation",String.class)).isEqualTo("repeatable read");
+        });
+    }
+
     @Test void oldAccessAndRefreshTokensAreRejectedByHttpAfterWithdrawal() throws Exception {
         UUID owned=room(target); add(owned,other);
         String accessToken=jwt.createAccessToken(target);
@@ -156,7 +234,7 @@ class UserWithdrawalPostgresTest {
         tokens.issue(target,UUID.randomUUID());
         AtomicInteger calls=new AtomicInteger();
         doAnswer(call->{ if(calls.incrementAndGet()==2) throw new IllegalStateException("injected"); return call.callRealMethod(); })
-                .when(org.springframework.test.util.AopTestUtils.<RoomLeaveProcessor>getUltimateTargetObject(processor)).leaveLocked(any(),eq(target));
+                .when(AopTestUtils.<RoomLeaveProcessor>getUltimateTargetObject(processor)).leaveLocked(any(),eq(target));
         assertThatThrownBy(()->withdrawal.withdraw(target)).isInstanceOf(IllegalStateException.class);
         assertThat(users.findById(target).orElseThrow().getDeletedAt()).isNull();
         assertThat(members.findRoomIdsForWithdrawal(target)).containsExactlyInAnyOrder(a,b);
@@ -190,14 +268,14 @@ class UserWithdrawalPostgresTest {
         String code=rooms.findById(existing).orElseThrow().getRoomCode();
         String raw=tokens.issue(target,UUID.randomUUID());
         CountDownLatch locked=new CountDownLatch(1), release=new CountDownLatch(1);
-        java.util.concurrent.atomic.AtomicBoolean armed=new java.util.concurrent.atomic.AtomicBoolean(true);
+        AtomicBoolean armed=new AtomicBoolean(true);
         doAnswer(call->{
             Object value=call.callRealMethod();
             if(Thread.currentThread().getName().equals("withdrawal-first") && armed.compareAndSet(true,false)) {
                 locked.countDown(); assertThat(release.await(10,TimeUnit.SECONDS)).isTrue();
             }
             return value;
-        }).when(org.springframework.test.util.AopTestUtils.<com.mju.linkro.user.service.UserAccess>getUltimateTargetObject(userAccess)).lock(target);
+        }).when(AopTestUtils.<UserAccess>getUltimateTargetObject(userAccess)).lock(target);
         Runnable writer=()->{
             switch(operation) {
                 case "create" -> room(target);
@@ -239,7 +317,7 @@ class UserWithdrawalPostgresTest {
             try { pool.submit(()->leaving.leave(last,target)).get(10,TimeUnit.SECONDS); }
             finally { pool.shutdownNow(); }
             return call.callRealMethod(); })
-            .when(org.springframework.test.util.AopTestUtils.<RoomAccess>getUltimateTargetObject(access)).lockForWithdrawal(last);
+            .when(AopTestUtils.<RoomAccess>getUltimateTargetObject(access)).lockForWithdrawal(last);
         withdrawal.withdraw(target); assertGone();
         assertThat(rooms.findById(last).isEmpty()).isEqualTo(lastMember);
         if(!lastMember) assertThat(members.findCurrentRole(last,other)).contains(RoomRole.OWNER);
@@ -252,7 +330,7 @@ class UserWithdrawalPostgresTest {
         doAnswer(call->{
             if(first.get()) { first.set(false); barrier.await(10,TimeUnit.SECONDS); }
             return call.callRealMethod();
-        }).when(org.springframework.test.util.AopTestUtils.<RoomAccess>getUltimateTargetObject(access)).lockForWithdrawal(any());
+        }).when(AopTestUtils.<RoomAccess>getUltimateTargetObject(access)).lockForWithdrawal(any());
         ExecutorService pool=Executors.newFixedThreadPool(2);
         try {
             Future<?> one=pool.submit(()->withdrawal.withdraw(target));

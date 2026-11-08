@@ -1,12 +1,11 @@
 package com.mju.linkro.room.service;
 
-import com.mju.linkro.user.service.UserAccess;
-
 import com.mju.linkro.common.exception.*;
 import com.mju.linkro.room.domain.*;
 import com.mju.linkro.room.dto.RoomMembershipRequests.*;
 import com.mju.linkro.room.dto.RoomResponses.Joined;
 import com.mju.linkro.room.repository.*;
+import com.mju.linkro.user.service.UserAccess;
 import java.util.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
