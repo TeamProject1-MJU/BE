@@ -43,8 +43,9 @@ public class UserController {
 		return ApiResponse.success(userService.updateNickname(userId, request.getNickname()));
 	}
 
+	@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "ROOM_BUSY", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
 	@DeleteMapping
-	@Operation(summary = "회원 탈퇴", description = "인증된 사용자 계정을 soft delete하고 Refresh Token을 폐기합니다. 전체 방 정리는 #38 후속 범위입니다.")
+	@Operation(summary = "회원 탈퇴", description = "모든 참여 방에서 퇴장한 뒤 계정을 soft delete하고 모든 Refresh Token을 폐기합니다. 전체 처리는 원자적입니다.")
 	@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "탈퇴 성공. data는 null.", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.EmptySuccess.class), examples = @ExampleObject(value = "{\"success\":true,\"data\":null}")))
 	public ApiResponse<Void> withdraw(@CurrentUser UUID userId) {
 		userService.withdraw(userId);

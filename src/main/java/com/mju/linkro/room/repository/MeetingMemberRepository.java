@@ -7,6 +7,8 @@ import org.springframework.data.repository.query.Param;
 
 public interface MeetingMemberRepository extends JpaRepository<MeetingMember, UUID> {
     Optional<MeetingMember> findByRoomIdAndUserId(UUID roomId, UUID userId);
+    @Query("select m.roomId from MeetingMember m where m.userId = :userId order by m.roomId asc")
+    List<UUID> findRoomIdsForWithdrawal(@Param("userId") UUID userId);
     long countByRoomId(UUID roomId);
 
     // Scalar projection always reads the database, even if a stale member is managed.

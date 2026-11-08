@@ -22,7 +22,7 @@ class UserLoginServiceTest {
         var repository = mock(UserRepository.class);
         when(repository.findByKakaoId("123")).thenReturn(Optional.empty());
         when(repository.saveAndFlush(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        var result = new UserLoginService(repository).login(new KakaoUserInfo("123", "🚇".repeat(21)));
+        var result = new UserLoginService(repository, null).login(new KakaoUserInfo("123", "🚇".repeat(21)));
         assertThat(result.user().getNickname()).isEqualTo("🚇".repeat(20));
         assertThat(result.user().getNickname().codePointCount(0, result.user().getNickname().length())).isEqualTo(20);
         assertThat(result.user().getId().version()).isEqualTo(7);

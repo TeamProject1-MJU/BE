@@ -49,6 +49,8 @@ public class OpenApiConfig {
     @Bean
     OpenApiCustomizer roomMembershipErrorExamples() {
         return document -> {
+            var withdrawal = document.getPaths().get("/api/v1/users/me");
+            if (withdrawal != null) addMembershipErrorExamples(withdrawal.getDelete(), ErrorCode.ROOM_BUSY);
             var join = document.getPaths().get("/api/v1/rooms/join");
             if (join != null) addMembershipErrorExamples(join.getPost(), ErrorCode.ROOM_CODE_INVALID,
                     ErrorCode.ALREADY_JOINED, ErrorCode.ROOM_FULL, ErrorCode.ROOM_BUSY);

@@ -1,9 +1,10 @@
 package com.mju.linkro.auth.service;
 
+import com.mju.linkro.user.service.UserAccess;
+
 import com.mju.linkro.auth.domain.RefreshToken;
 import com.mju.linkro.auth.repository.RefreshTokenRepository;
 import com.mju.linkro.common.exception.ErrorCode;
-import com.mju.linkro.user.repository.UserRepository;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -23,22 +24,23 @@ public class RefreshTokenService {
 	private static final int TOKEN_BYTES = 32;
 
 	private final RefreshTokenRepository refreshTokens;
-	private final UserRepository users;
 	private final Duration refreshTokenTtl;
+	private final UserAccess userAccess;
 
-	public RefreshTokenService(RefreshTokenRepository refreshTokens, UserRepository users,
-		@Value("${auth.jwt.refresh-token-ttl}") Duration refreshTokenTtl) {
+	public RefreshTokenService(RefreshTokenRepository refreshTokens,
+		@Value("${auth.jwt.refresh-token-ttl}") Duration refreshTokenTtl, UserAccess userAccess) {
 		if (refreshTokenTtl == null || refreshTokenTtl.compareTo(Duration.ofSeconds(1)) < 0) {
 			throw new IllegalArgumentException("Refresh token TTL must be at least one second");
 		}
+		this.userAccess = userAccess;
 		this.refreshTokens = refreshTokens;
-		this.users = users;
 		this.refreshTokenTtl = refreshTokenTtl;
 	}
 
 	/** Returns the raw token; only its hash is persisted. */
 	@Transactional
 	public String issue(UUID userId, UUID familyId) {
+		userAccess.lockActive(userId);
 		byte[] bytes = new byte[TOKEN_BYTES];
 		RANDOM.nextBytes(bytes);
 		String rawToken = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
@@ -52,11 +54,13 @@ public class RefreshTokenService {
 	 */
 	@Transactional
 	public Rotation rotate(String rawToken) {
-		Instant now = Instant.now();
 		RefreshToken token = refreshTokens.findByTokenHash(hash(rawToken)).orElse(null);
 		if (token == null) {
 			return Rotation.failure(ErrorCode.TOKEN_INVALID);
 		}
+		var lockedUser = userAccess.lock(token.getUserId());
+		Instant now = Instant.now();
+		token = refreshTokens.findByTokenHash(hash(rawToken)).orElseThrow();
 		if (!token.getExpiresAt().isAfter(now)) {
 			return Rotation.failure(ErrorCode.TOKEN_EXPIRED);
 		}
@@ -65,7 +69,7 @@ public class RefreshTokenService {
 			refreshTokens.revokeFamily(token.getFamilyId(), now);
 			return Rotation.failure(ErrorCode.TOKEN_INVALID);
 		}
-		if (users.findById(token.getUserId()).filter(user -> user.getDeletedAt() == null).isEmpty()) {
+		if (lockedUser.getDeletedAt() != null) {
 			return Rotation.failure(ErrorCode.TOKEN_INVALID);
 		}
 		return new Rotation(token.getUserId(), issue(token.getUserId(), token.getFamilyId()), null);

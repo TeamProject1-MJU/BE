@@ -147,7 +147,7 @@ class RoomMembershipPostgresTest {
             List<Integer> waiting = List.of();
             while (System.nanoTime() < deadline) {
                 waiting = jdbc.queryForList("select pid from pg_stat_activity where datname=current_database() "
-                        + "and wait_event_type='Lock' and query like '%meeting_rooms%' and pid<>pg_backend_pid()", Integer.class);
+                        + "and wait_event_type='Lock' and (query like '%meeting_rooms%' or query like '%users%') and pid<>pg_backend_pid()", Integer.class);
                 if (waiting.size() == 3) break;
                 Thread.sleep(10);
             }
@@ -280,7 +280,7 @@ class RoomMembershipPostgresTest {
             long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(2);
             boolean waiting=false;
             while (System.nanoTime()<deadline) {
-                waiting=jdbc.queryForObject("select exists(select 1 from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and query like '%meeting_rooms%' and pid<>pg_backend_pid())",Boolean.class);
+                waiting=jdbc.queryForObject("select exists(select 1 from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and (query like '%meeting_rooms%' or query like '%users%') and pid<>pg_backend_pid())",Boolean.class);
                 if (waiting) break;
                 Thread.sleep(10);
             }

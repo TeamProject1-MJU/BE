@@ -1,5 +1,7 @@
 package com.mju.linkro.auth.service;
 
+import com.mju.linkro.user.service.UserAccess;
+
 import com.mju.linkro.auth.dto.KakaoUserInfo;
 import com.mju.linkro.user.domain.User;
 import com.mju.linkro.user.repository.UserRepository;
@@ -13,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class UserLoginService {
 	private final UserRepository userRepository;
+	private final UserAccess userAccess;
 
 	@Transactional(propagation = Propagation.REQUIRES_NEW)
 	public LoginResult login(KakaoUserInfo info) {
@@ -28,6 +31,7 @@ public class UserLoginService {
 	}
 
 	private LoginResult existing(User user) {
+		user = userAccess.lock(user.getId());
 		if (user.getDeletedAt() != null) {
 			user.restore();
 		}

@@ -58,6 +58,12 @@ public class RoomAccess {
                 .orElseThrow(() -> error(ErrorCode.ROOM_CODE_INVALID)));
     }
 
+    /** Empty only when a concurrent last departure has deleted this room. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public java.util.Optional<MeetingRoom> lockForWithdrawal(UUID roomId) {
+        return java.util.Optional.ofNullable(lock(() -> rooms.findLockedById(roomId).orElse(null)));
+    }
+
     private void checkRole(UUID roomId, UUID userId, boolean owner) {
         RoomRole role = members.findCurrentRole(roomId, userId)
                 .orElseThrow(() -> error(ErrorCode.NOT_ROOM_MEMBER));
@@ -86,7 +92,7 @@ public class RoomAccess {
             MeetingRoom room = query.get();
             // Refresh clean preloaded state after waiting; pre-lock edits were rejected above.
             // Hibernate 7.4/PostgreSQL retains the query's NO KEY UPDATE lock without upgrading it.
-            em.refresh(room, LockModeType.PESSIMISTIC_WRITE);
+            if (room != null) em.refresh(room, LockModeType.PESSIMISTIC_WRITE);
             lockTimeout(session, previous);
             return room;
         } catch (RuntimeException exception) {
