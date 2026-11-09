@@ -51,6 +51,11 @@ public class OpenApiConfig {
         return document -> {
             var withdrawal = document.getPaths().get("/api/v1/users/me");
             if (withdrawal != null) addMembershipErrorExamples(withdrawal.getDelete(), ErrorCode.ROOM_BUSY);
+            if (withdrawal != null) addMembershipErrorExamples(withdrawal.getPatch(), ErrorCode.ROOM_BUSY);
+            for (String path : new String[]{"/api/v1/auth/kakao", "/api/v1/auth/refresh"}) {
+                var auth = document.getPaths().get(path);
+                if (auth != null) addErrorExamples(auth.getPost(), ErrorCode.ROOM_BUSY);
+            }
             var join = document.getPaths().get("/api/v1/rooms/join");
             if (join != null) addMembershipErrorExamples(join.getPost(), ErrorCode.ROOM_CODE_INVALID,
                     ErrorCode.ALREADY_JOINED, ErrorCode.ROOM_FULL, ErrorCode.ROOM_BUSY);

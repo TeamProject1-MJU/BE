@@ -8,6 +8,8 @@ public final class H2PostgresSettings {
     private H2PostgresSettings() {}
 
     public static String currentSetting(Connection connection, String name) throws SQLException {
+        // Compatibility only; H2's SET_CONFIG is a no-op. Timeout semantics need PostgreSQL.
+        if ("lock_timeout".equals(name)) return "0";
         if (!"transaction_isolation".equals(name)) {
             throw new SQLException("Unsupported test setting: " + name);
         }

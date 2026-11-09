@@ -18,6 +18,13 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import javax.sql.DataSource;
+import com.mju.linkro.auth.client.KakaoClient;
+import com.mju.linkro.auth.service.AuthService;
+import com.mju.linkro.room.dto.RoomWriteRequest;
+import com.mju.linkro.room.dto.RoomMembershipRequests.Join;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -74,6 +81,12 @@ class UserWithdrawalPostgresTest {
     @Autowired PlatformTransactionManager manager;
     @Autowired WebApplicationContext context;
     @Autowired JwtProvider jwt;
+    @Autowired DataSource dataSource;
+    @Autowired AuthService auth;
+    @Autowired RoomCreationService roomCreation;
+    @Autowired RoomJoinService roomJoin;
+    @MockitoBean KakaoClient kakao;
+    @MockitoSpyBean UserLoginService loginSpy;
     UUID target, other;
     AtomicInteger codes;
 
@@ -93,6 +106,174 @@ class UserWithdrawalPostgresTest {
         assertThat(users.findById(target).orElseThrow().getDeletedAt()).isNotNull();
         assertThat(members.findRoomIdsForWithdrawal(target)).isEmpty();
         assertThat(jdbc.queryForObject("select count(*) from refresh_tokens where user_id=? and revoked_at is null",Long.class,target)).isZero();
+    }
+
+    // Independent physical connection, never a connection borrowed from the application's pool.
+    Connection blocker(String table, UUID id) throws Exception {
+        Connection connection=DriverManager.getConnection(POSTGRES.getJdbcUrl(),POSTGRES.getUsername(),POSTGRES.getPassword());
+        try {
+            connection.setAutoCommit(false);
+            try(var statement=connection.prepareStatement("select id from "+table+" where id=? for update")) {
+                statement.setObject(1,id);
+                try(var result=statement.executeQuery()) { assertThat(result.next()).isTrue(); }
+            }
+            return connection;
+        } catch(Exception | AssertionError failure) { connection.close(); throw failure; }
+    }
+
+    void awaitBlockedBy(int waiter, int blocker) {
+        long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(10);
+        while(System.nanoTime()<deadline) {
+            if(Boolean.TRUE.equals(jdbc.queryForObject("select ? = any(pg_blocking_pids(?))",Boolean.class,blocker,waiter))) return;
+            Thread.yield();
+        }
+        throw new AssertionError("Expected backend "+waiter+" to wait for "+blocker);
+    }
+
+    int backend(Connection connection) throws Exception {
+        try(var statement=connection.createStatement(); var result=statement.executeQuery("select pg_backend_pid()")) {
+            result.next(); return result.getInt(1);
+        }
+    }
+
+    List<String> snapshot() {
+        // Called in a separate transaction after the failed request, covering roles, data and tokens.
+        return new TransactionTemplate(manager).execute(status->{
+            var result=new ArrayList<String>();
+            for(String table:List.of("users","meeting_rooms","meeting_members","refresh_tokens"))
+                result.addAll(jdbc.queryForList("select row_to_json(t)::text from "+table+" t order by id",String.class));
+            return result;
+        });
+    }
+
+    void assertUnlocked(String table, UUID id) {
+        new TransactionTemplate(manager).executeWithoutResult(status->{
+            jdbc.queryForObject("select id from "+table+" where id=? for update nowait",UUID.class,id);
+        });
+    }
+
+    @Test void actualSecondRoomTimeoutPreservesEntireWithdrawalAndReleasesLocks() throws Exception {
+        UUID owned=room(target); add(owned,other);
+        UUID joined=room(other); add(joined,target);
+        tokens.issue(target,UUID.randomUUID());
+        var before=snapshot();
+        var ordered=members.findRoomIdsForWithdrawal(target); // Exact query used by withdrawal, PostgreSQL UUID order.
+        assertThat(ordered).containsExactlyInAnyOrder(owned,joined);
+        var firstLocked=new CountDownLatch(1);
+        var pid=new AtomicInteger();
+        doAnswer(call->{
+            Object result=call.callRealMethod();
+            pid.set(jdbc.queryForObject("select pg_backend_pid()",Integer.class));
+            firstLocked.countDown();
+            return result;
+        }).when(AopTestUtils.<RoomAccess>getUltimateTargetObject(access)).lockForWithdrawal(ordered.get(0));
+        var mvc=MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
+        String bearer=jwt.createAccessToken(target);
+        var pool=Executors.newSingleThreadExecutor();
+        try(var held=blocker("meeting_rooms",ordered.get(1))) {
+            try {
+                var request=pool.submit(()->mvc.perform(delete("/api/v1/users/me").header("Authorization","Bearer "+bearer))
+                    .andExpect(status().isConflict()).andExpect(jsonPath("$.error.code").value("ROOM_BUSY")));
+                assertThat(firstLocked.await(10,TimeUnit.SECONDS)).isTrue();
+                awaitBlockedBy(pid.get(),backend(held));
+                // NOWAIT proves the first room was really locked while the second room was blocked.
+                try(var probe=DriverManager.getConnection(POSTGRES.getJdbcUrl(),POSTGRES.getUsername(),POSTGRES.getPassword());
+                    var statement=probe.prepareStatement("select id from meeting_rooms where id=? for update nowait")) {
+                    statement.setObject(1,ordered.get(0));
+                    assertThatThrownBy(statement::executeQuery).isInstanceOf(java.sql.SQLException.class)
+                        .extracting(e->((java.sql.SQLException)e).getSQLState()).isEqualTo("55P03");
+                }
+                request.get(25,TimeUnit.SECONDS);
+                assertThat(snapshot()).isEqualTo(before);
+                assertUnlocked("users",target);
+                assertUnlocked("meeting_rooms",ordered.get(0));
+            } finally { held.rollback(); pool.shutdownNow(); assertThat(pool.awaitTermination(10,TimeUnit.SECONDS)).isTrue(); }
+        }
+    }
+
+    @ParameterizedTest @ValueSource(strings={"refresh","login","restore","loginExisting","nickname","create","join","withdraw"})
+    void actualUserLockTimeoutPropagatesWithoutRetryAndRollsBack(String operation) throws Exception {
+        UUID existing=room(other);
+        String code=rooms.findById(existing).orElseThrow().getRoomCode();
+        String raw=tokens.issue(target,UUID.randomUUID());
+        if(operation.equals("restore")) withdrawal.withdraw(target);
+        when(kakao.getUserInfo("test")).thenReturn(new KakaoUserInfo("target","target"));
+        var before=snapshot();
+        var entered=new CountDownLatch(1);
+        var pid=new AtomicInteger();
+        var calls=new AtomicInteger();
+        doAnswer(call->{
+            calls.incrementAndGet();
+            pid.set(jdbc.queryForObject("select pg_backend_pid()",Integer.class));
+            entered.countDown();
+            return call.callRealMethod();
+        }).when(AopTestUtils.<UserAccess>getUltimateTargetObject(userAccess)).lock(target);
+        Runnable writer=()->{
+            switch(operation) {
+                case "refresh" -> auth.refresh(raw);
+                case "login", "restore" -> auth.login("test");
+                case "loginExisting" -> login.loginExisting("target");
+                case "nickname" -> withdrawal.updateNickname(target,"renamed");
+                case "create" -> {
+                    var request=new RoomWriteRequest();
+                    request.setName(tools.jackson.databind.node.StringNode.valueOf("created"));
+                    roomCreation.create(target,request);
+                }
+                case "join" -> roomJoin.join(target,new Join(tools.jackson.databind.node.StringNode.valueOf(code)));
+                case "withdraw" -> withdrawal.withdraw(target);
+            }
+        };
+        var pool=Executors.newSingleThreadExecutor();
+        try(var held=blocker("users",target)) {
+            try {
+                long started=System.nanoTime();
+                var request=pool.submit(()->assertThatThrownBy(writer::run).isInstanceOf(BusinessException.class)
+                    .satisfies(failure->{
+                        assertThat(((BusinessException)failure).getErrorCode()).isEqualTo(ErrorCode.ROOM_BUSY);
+                        assertThat(failure.getCause()).isNotNull();
+                        assertThat(org.assertj.core.util.Throwables.getRootCause(failure)).isInstanceOf(java.sql.SQLException.class)
+                            .extracting(e->((java.sql.SQLException)e).getSQLState()).isEqualTo("55P03");
+                    }));
+                assertThat(entered.await(10,TimeUnit.SECONDS)).isTrue();
+                awaitBlockedBy(pid.get(),backend(held));
+                request.get(25,TimeUnit.SECONDS); // Blocker remains held until the request itself times out.
+                assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-started)).isBetween(2500L,25000L);
+                assertThat(calls).hasValue(1);
+                if(operation.equals("login") || operation.equals("restore")) verify(loginSpy,never()).loginExisting(anyString());
+                assertThat(snapshot()).isEqualTo(before);
+            } finally { held.rollback(); pool.shutdownNow(); assertThat(pool.awaitTermination(10,TimeUnit.SECONDS)).isTrue(); }
+        }
+        assertUnlocked("users",target);
+        assertPoolTimeoutReset(pid.get());
+    }
+
+    void assertPoolTimeoutReset(int expectedPid) throws Exception {
+        // Borrow every pool slot at once to include the failed transaction's actual backend.
+        var connections=new ArrayList<Connection>();
+        try {
+            var pids=new ArrayList<Integer>();
+            int maximum=dataSource.unwrap(com.zaxxer.hikari.HikariDataSource.class).getMaximumPoolSize();
+            for(int i=0;i<maximum;i++) {
+                var connection=dataSource.getConnection(); connections.add(connection); pids.add(backend(connection));
+                try(var statement=connection.createStatement(); var result=statement.executeQuery("show lock_timeout")) {
+                    result.next(); assertThat(result.getString(1)).isEqualTo("0");
+                }
+            }
+            assertThat(pids).contains(expectedPid);
+        } finally { for(var connection:connections) connection.close(); }
+    }
+
+    @Test void successfulUserLockAndRefreshRestorePreviousLocalTimeout() throws Exception {
+        var usedPid=new AtomicInteger();
+        new TransactionTemplate(manager).executeWithoutResult(status->{
+            jdbc.execute("set local lock_timeout='7s'");
+            int pid=jdbc.queryForObject("select pg_backend_pid()",Integer.class);
+            usedPid.set(pid);
+            userAccess.lockActive(target);
+            assertThat(jdbc.queryForObject("show lock_timeout",String.class)).isEqualTo("7s");
+            assertThat(jdbc.queryForObject("select pg_backend_pid()",Integer.class)).isEqualTo(pid);
+        });
+        assertPoolTimeoutReset(usedPid.get());
     }
     @Test void pendingChangesAreRejectedWithoutFlushingOrDiscardingThem() {
         new TransactionTemplate(manager).executeWithoutResult(status->{

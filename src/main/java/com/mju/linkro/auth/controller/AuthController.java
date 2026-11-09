@@ -27,6 +27,7 @@ public class AuthController {
 	private final AuthService authService;
 
 	@PostMapping("/kakao")
+	@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "ROOM_BUSY: 사용자 잠금 대기 초과", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
 	@Operation(summary = "카카오 로그인", description = "공개 API. 카카오 Access Token을 본문으로 전달합니다. 응답의 서버 accessToken을 Swagger Authorize에 등록합니다.")
 	@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "로그인 성공", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Login.class)))
 	@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "KAKAO_AUTH_FAILED", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
@@ -36,6 +37,7 @@ public class AuthController {
 	}
 
 	@PostMapping("/refresh")
+	@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "ROOM_BUSY: 사용자 잠금 대기 초과", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
 	@Operation(summary = "토큰 갱신", description = "공개 API. Bearer Access Token 대신 본문의 refreshToken을 검증합니다.")
 	@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "새 Access Token과 Refresh Token", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Tokens.class)))
 	@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "TOKEN_INVALID / TOKEN_EXPIRED", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
