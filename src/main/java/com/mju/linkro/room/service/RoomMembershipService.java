@@ -5,6 +5,7 @@ import com.mju.linkro.room.domain.*;
 import com.mju.linkro.room.dto.RoomMembershipRequests.*;
 import com.mju.linkro.room.dto.RoomResponses.Joined;
 import com.mju.linkro.room.repository.*;
+import com.mju.linkro.user.service.UserAccess;
 import java.util.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -20,11 +21,13 @@ import org.springframework.transaction.annotation.*;
 @RequiredArgsConstructor
 public class RoomMembershipService {
     private final RoomAccess access;
+    private final UserAccess users;
     private final MeetingMemberRepository members;
     private final RoomReadRepository reads;
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Joined join(UUID userId, String code) {
+        users.lockActive(userId);
         MeetingRoom room = access.lockByCode(code);
         if (members.findCurrentRole(room.getId(), userId).isPresent()) throw new BusinessException(ErrorCode.ALREADY_JOINED);
         if (members.countByRoomId(room.getId()) >= room.getMaxMembers()) throw new BusinessException(ErrorCode.ROOM_FULL);

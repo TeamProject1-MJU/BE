@@ -83,7 +83,9 @@ class UserServiceTest {
 		var repository = mock(UserRepository.class);
 		var target = new User("789", "기존");
 		when(repository.findById(target.getId())).thenReturn(Optional.of(target));
-		var service = new UserService(repository, mock(RefreshTokenRepository.class));
+		var access = mock(com.mju.linkro.user.service.UserAccess.class);
+		when(access.lockActive(target.getId())).thenReturn(target);
+		var service = new UserService(repository, mock(RefreshTokenRepository.class), access, null, null, null);
 
 		assertThat(service.updateNickname(target.getId(), "🚇".repeat(20)).nickname()).isEqualTo("🚇".repeat(20));
 		assertError(() -> service.updateNickname(target.getId(), "🚇".repeat(21)), ErrorCode.VALIDATION_ERROR);

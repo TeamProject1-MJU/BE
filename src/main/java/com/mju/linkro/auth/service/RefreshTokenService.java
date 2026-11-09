@@ -3,7 +3,7 @@ package com.mju.linkro.auth.service;
 import com.mju.linkro.auth.domain.RefreshToken;
 import com.mju.linkro.auth.repository.RefreshTokenRepository;
 import com.mju.linkro.common.exception.ErrorCode;
-import com.mju.linkro.user.repository.UserRepository;
+import com.mju.linkro.user.service.UserAccess;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -15,6 +15,7 @@ import java.util.HexFormat;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -23,22 +24,23 @@ public class RefreshTokenService {
 	private static final int TOKEN_BYTES = 32;
 
 	private final RefreshTokenRepository refreshTokens;
-	private final UserRepository users;
 	private final Duration refreshTokenTtl;
+	private final UserAccess userAccess;
 
-	public RefreshTokenService(RefreshTokenRepository refreshTokens, UserRepository users,
-		@Value("${auth.jwt.refresh-token-ttl}") Duration refreshTokenTtl) {
+	public RefreshTokenService(RefreshTokenRepository refreshTokens,
+		@Value("${auth.jwt.refresh-token-ttl}") Duration refreshTokenTtl, UserAccess userAccess) {
 		if (refreshTokenTtl == null || refreshTokenTtl.compareTo(Duration.ofSeconds(1)) < 0) {
 			throw new IllegalArgumentException("Refresh token TTL must be at least one second");
 		}
+		this.userAccess = userAccess;
 		this.refreshTokens = refreshTokens;
-		this.users = users;
 		this.refreshTokenTtl = refreshTokenTtl;
 	}
 
 	/** Returns the raw token; only its hash is persisted. */
-	@Transactional
+	@Transactional(isolation = Isolation.READ_COMMITTED)
 	public String issue(UUID userId, UUID familyId) {
+		userAccess.lockActive(userId);
 		byte[] bytes = new byte[TOKEN_BYTES];
 		RANDOM.nextBytes(bytes);
 		String rawToken = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
@@ -50,22 +52,24 @@ public class RefreshTokenService {
 	 * Failures are returned rather than thrown so that a family revocation for reuse commits
 	 * with this transaction instead of being rolled back by the TOKEN_INVALID exception.
 	 */
-	@Transactional
+	@Transactional(isolation = Isolation.READ_COMMITTED)
 	public Rotation rotate(String rawToken) {
-		Instant now = Instant.now();
 		RefreshToken token = refreshTokens.findByTokenHash(hash(rawToken)).orElse(null);
 		if (token == null) {
 			return Rotation.failure(ErrorCode.TOKEN_INVALID);
 		}
+		var lockedUser = userAccess.lock(token.getUserId());
+		Instant now = Instant.now();
 		if (!token.getExpiresAt().isAfter(now)) {
 			return Rotation.failure(ErrorCode.TOKEN_EXPIRED);
 		}
-		// Already revoked, or a concurrent request with the same token won the conditional update.
+		// Identity, family and expiry are immutable. A stale null revokedAt is safe:
+		// the conditional UPDATE checks current DB state and detects concurrent reuse.
 		if (token.getRevokedAt() != null || refreshTokens.revokeIfActive(token.getId(), now) == 0) {
 			refreshTokens.revokeFamily(token.getFamilyId(), now);
 			return Rotation.failure(ErrorCode.TOKEN_INVALID);
 		}
-		if (users.findById(token.getUserId()).filter(user -> user.getDeletedAt() == null).isEmpty()) {
+		if (lockedUser.getDeletedAt() != null) {
 			return Rotation.failure(ErrorCode.TOKEN_INVALID);
 		}
 		return new Rotation(token.getUserId(), issue(token.getUserId(), token.getFamilyId()), null);

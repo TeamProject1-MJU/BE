@@ -3,9 +3,11 @@ package com.mju.linkro.auth.service;
 import com.mju.linkro.auth.dto.KakaoUserInfo;
 import com.mju.linkro.user.domain.User;
 import com.mju.linkro.user.repository.UserRepository;
+import com.mju.linkro.user.service.UserAccess;
 import java.util.concurrent.ThreadLocalRandom;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -13,8 +15,9 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class UserLoginService {
 	private final UserRepository userRepository;
+	private final UserAccess userAccess;
 
-	@Transactional(propagation = Propagation.REQUIRES_NEW)
+	@Transactional(propagation = Propagation.REQUIRES_NEW, isolation = Isolation.READ_COMMITTED)
 	public LoginResult login(KakaoUserInfo info) {
 		return userRepository.findByKakaoId(info.kakaoId())
 			.map(this::existing)
@@ -22,12 +25,13 @@ public class UserLoginService {
 				new User(info.kakaoId(), initialNickname(info.nickname()))), true));
 	}
 
-	@Transactional(propagation = Propagation.REQUIRES_NEW)
+	@Transactional(propagation = Propagation.REQUIRES_NEW, isolation = Isolation.READ_COMMITTED)
 	public LoginResult loginExisting(String kakaoId) {
 		return userRepository.findByKakaoId(kakaoId).map(this::existing).orElse(null);
 	}
 
 	private LoginResult existing(User user) {
+		user = userAccess.lock(user.getId());
 		if (user.getDeletedAt() != null) {
 			user.restore();
 		}

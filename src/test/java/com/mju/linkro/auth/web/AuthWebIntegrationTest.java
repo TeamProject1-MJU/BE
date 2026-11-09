@@ -85,6 +85,10 @@ class AuthWebIntegrationTest {
 		org.assertj.core.api.Assertions.assertThat(schemas.has("JsonNode")).isFalse();
 		org.assertj.core.api.Assertions.assertThat(schemas.has("RoomWriteRequest")).isFalse();
 		var paths = root.get("paths");
+		var withdrawal = paths.get("/api/v1/users/me").get("delete");
+		org.assertj.core.api.Assertions.assertThat(withdrawal.get("responses").get("409")
+			.get("content").get("application/json").get("examples").has("ROOM_BUSY")).isTrue();
+		org.assertj.core.api.Assertions.assertThat(withdrawal.get("description").asString()).doesNotContain("#38");
 		var create = paths.get("/api/v1/rooms").get("post");
 		org.assertj.core.api.Assertions.assertThat(create.get("responses").has("200")).isFalse();
 		org.assertj.core.api.Assertions.assertThat(create.get("responses").has("201")).isTrue();

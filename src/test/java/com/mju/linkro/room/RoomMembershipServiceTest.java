@@ -16,7 +16,7 @@ class RoomMembershipServiceTest {
     private final RoomAccess access = mock(RoomAccess.class);
     private final MeetingMemberRepository members = mock(MeetingMemberRepository.class);
     private final RoomReadRepository reads = mock(RoomReadRepository.class);
-    private final RoomMembershipService service = new RoomMembershipService(access, members, reads);
+    private final RoomMembershipService service = new RoomMembershipService(access, mock(com.mju.linkro.user.service.UserAccess.class), members, reads);
     private final UUID room = UUID.randomUUID(), user = UUID.randomUUID();
 
     @Test void locksBeforeDuplicateCountAndSave() {

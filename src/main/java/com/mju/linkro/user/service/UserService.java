@@ -1,6 +1,10 @@
 package com.mju.linkro.user.service;
 
 import com.mju.linkro.auth.repository.RefreshTokenRepository;
+import com.mju.linkro.room.domain.MeetingRoom;
+import com.mju.linkro.room.repository.MeetingMemberRepository;
+import com.mju.linkro.room.service.RoomAccess;
+import com.mju.linkro.room.service.RoomLeaveProcessor;
 import com.mju.linkro.common.exception.BusinessException;
 import com.mju.linkro.common.exception.ErrorCode;
 import com.mju.linkro.user.domain.User;
@@ -8,11 +12,13 @@ import com.mju.linkro.user.dto.NicknameUpdateResponse;
 import com.mju.linkro.user.dto.UserProfileResponse;
 import com.mju.linkro.user.repository.UserRepository;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 @Service
 @RequiredArgsConstructor
@@ -23,26 +29,41 @@ public class UserService {
 
 	private final UserRepository userRepository;
 	private final RefreshTokenRepository refreshTokenRepository;
+	private final UserAccess userAccess;
+	private final MeetingMemberRepository members;
+	private final RoomAccess roomAccess;
+	private final RoomLeaveProcessor leaveProcessor;
 
 	@Transactional(readOnly = true)
 	public UserProfileResponse getMe(UUID userId) {
 		return UserProfileResponse.from(activeUser(userId));
 	}
 
-	@Transactional
+	@Transactional(isolation = Isolation.READ_COMMITTED)
 	public NicknameUpdateResponse updateNickname(UUID userId, String nickname) {
 		// The account check comes first so a withdrawn user always gets TOKEN_INVALID.
-		User user = activeUser(userId);
+		User user = userAccess.lockActive(userId);
 		user.changeNickname(normalizeNickname(nickname));
 		return NicknameUpdateResponse.from(user);
 	}
 
-	@Transactional
+	@Transactional(isolation = Isolation.READ_COMMITTED)
 	public void withdraw(UUID userId) {
-		User user = activeUser(userId);
-		// 방 기능 구현 시 7.8 나가기 절차를 이 앞에서 호출한다.
+		User user = userAccess.lockActive(userId);
+		var locked = new ArrayList<MeetingRoom>();
+		// Keep the DB UUID order; acquire every lock before the processor can mutate anything.
+		for (UUID id : members.findRoomIdsForWithdrawal(userId)) {
+			roomAccess.lockForWithdrawal(id).ifPresent(locked::add);
+		}
+		for (var room : locked) {
+			// A regular departure may have committed between the list query and room lock.
+			if (members.findCurrentRole(room.getId(), userId).isPresent()) {
+				leaveProcessor.leaveLocked(room, userId);
+			}
+		}
 		user.softDelete();
-		refreshTokenRepository.revokeAllByUserId(user.getId(), Instant.now());
+		refreshTokenRepository.revokeAllByUserId(userId, Instant.now());
+		// #42/#43: events and WS disconnect only after the outermost commit.
 	}
 
 	/** A valid access token for a withdrawn or missing user is treated like an invalid token. */
