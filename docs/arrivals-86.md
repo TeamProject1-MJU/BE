@@ -78,6 +78,7 @@
    - **LOOP**(파라미터든 간선이든)이면 `updnLine`으로 거르지 않는다. 순환 구간은 모두 "하행"이기 때문이다.
    - **둘 다 없으면**: 그 노선의 모든 열차를 돌려준다.
    - **응암(조회 이름 `응암순환(상선)`)**: 방향 필터를 적용하지 않는다(`SeoulSubwayIds.NO_DIRECTION_FILTER`).
+   - **1호선**: 간선 방향과 `directionCode`의 UP/DOWN을 뒤집어 비교한다(임시 보정, 아래 "1호선 시드 방향 불일치로 임시 보정 중").
 3. **남은 시간**: 기준은 현재 KST − `recptnDt`(행의 나이)다. 모든 건에 아래를 적용한다.
    - 나이가 300초를 넘으면 제외한다. `recptnDt`를 읽을 수 없어도 제외한다.
    - `arvlCd` 0·1이면 0이다(`barvlDt`는 보지 않는다).
@@ -115,7 +116,17 @@
 - 2호선 본선은 UP/DOWN이 없고 INNER/OUTER다(내선 = 시청→을지로입구, 강남→교대 방향).
 - 2호선 지선(성수지선·신정지선)과 5호선 마천지선은 분기점에서 멀어지면 DOWN, 분기점 쪽이면 UP이다.
 - 6호선 응암순환은 응암→역촌→…→구산→응암 한 방향 LOOP다.
-- **1호선 영향**: 1호선은 외부 ID를 만들지 않으므로 `nextStationId`가 우리 간선 방향으로 `updnLine`과 비교된다. 그래서 지금은 **반대 방향 열차**를 고른다. `directionCode=UP`도 시드 기준 UP(서울역 방면)이라 서울시 하행과 맞는다. 코드와 시드는 고치지 않았다(별도 판단 필요).
+### 1호선 시드 방향 불일치로 임시 보정 중 (#86)
+
+- **보정 위치**: 시드와 마이그레이션은 고치지 않았다. 대신 도착 정보의 방향 비교에서만 1호선 UP/DOWN을 뒤집는다.
+  - 보정은 `SeoulSubwayIds.SEED_DIRECTION_REVERSED = {"1"}`와 `seoulDirection()` 한 곳에 있다.
+- **뒤집는 대상**: `nextStationId`의 간선 방향과 `directionCode` 둘 다 시드 기준 값이므로, 비교 직전에 서울시 기준으로 바꾼다.
+  - 예: 종각에서 `nextStationId`=종로3가는 시드 DOWN이지만, 비교할 때는 서울시 상행이다.
+  - 예: `directionCode=DOWN`(시드)은 서울시 상행 열차를 고른다.
+- **응답**: `trains[].directionCode`는 계속 서울시 `updnLine` 기준이다(상행 UP, 하행 DOWN). 그래서 1호선은 요청의 `directionCode`(시드 기준)와 응답의 `directionCode`(서울시 기준)가 반대로 보인다.
+- **제거 시점**: 시드를 서울시 기준으로 고치면 이 보정을 반드시 제거한다(`SEED_DIRECTION_REVERSED`에서 `"1"` 삭제).
+  - 시드가 고쳐지면 `ArrivalApiPostgresTest.seedDirectionsMatchSeoulUpDown`이 실패하면서 보정 제거를 안내한다.
+- **보정 범위**: 경로 검색 응답의 `directionCode`와 혼잡도 조회 방향은 시드를 그대로 쓰므로 이 보정의 영향을 받지 않는다.
 
 ## 우리 DB 확인 결과
 
@@ -178,6 +189,7 @@
 - `ArrivalServiceTest`
   - 노선 필터, 정렬, `secondsUntil` 보정, `arvlCd`별 처리, 오래된 건 제외, 막차
   - 1호선 종각: `barvlDt 0` + `"[N]번째 전역"` → null·stopsAway·N×120초 정렬, 10개 역 초과 제외(설정값), 급행, 문자열 trim, 목적지와 다른 방향(하행 광운대행)
+  - 1호선 임시 보정: `nextStationId`(종로3가·시청)와 `directionCode`(UP·DOWN)로 서울시 상행/하행만 나오고 응답 방향은 서울시 기준, 다른 노선은 뒤집지 않음
   - 방향: 2호선 ID 비교, 7호선 간선 방향 대체, `directionCode`, LOOP, 응암 예외
   - 이름 변환·trim·노선별 매핑
   - NO_DATA·UPSTREAM_ERROR·키 없음·미지원 노선·없는 역
@@ -185,7 +197,8 @@
   - 로그에 키·URL 없음
 - `ArrivalApiPostgresTest`(V1~V13 시드)
   - 시드 사실(이름, 2호선 3자리·5~8호선 4자리 코드, 7호선 건대입구→어린이대공원 = UP)
-  - 시드 방향과 서울시 상행/하행 비교(3~8호선 같음, 1호선 반대를 고정)
+  - 시드 방향과 서울시 상행/하행 비교(3~8호선 같음, 1호선 반대를 고정하고 시드가 고쳐지면 보정 제거 안내)
+  - 실제 시드에서 1호선 종각 `nextStationId`=종로3가 → 서울시 상행 열차만, 응답 `directionCode`=UP
   - 정상 응답·필드
   - 미지원 노선 200
   - 400·404·401
