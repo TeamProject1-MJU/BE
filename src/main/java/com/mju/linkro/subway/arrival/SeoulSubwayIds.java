@@ -22,12 +22,11 @@ public final class SeoulSubwayIds {
     /** Lines whose station_code gives the external station id (confirmed by observation). */
     static final Set<String> ID_LINES = Set.of("2");
     /**
-     * TEMPORARY (#86): lines whose seed UP/DOWN (data/edges.csv -> V11 station_connections) is the opposite of Seoul's
-     * 상행/하행. 1호선: Seoul 상행 runs towards 청량리 (종각 -> 종로3가) but the seed UP runs towards 서울역 (종각 -> 시청).
-     * The seed is not changed here; arrival filtering flips UP/DOWN of these lines instead. Remove the line from this set
-     * when the seed is corrected (ArrivalApiPostgresTest.seedDirectionsMatchSeoulUpDown then fails to remind you).
+     * Lines whose seed UP/DOWN is the opposite of Seoul's 상행/하행; arrival filtering flips them. Empty: line 1 was the
+     * only one (#86) and V14 corrected its seed (#89). ArrivalApiPostgresTest.seedDirectionsMatchSeoulUpDown checks
+     * every line, so a new entry here needs a reason there.
      */
-    static final Set<String> SEED_DIRECTION_REVERSED = Set.of("1");
+    static final Set<String> SEED_DIRECTION_REVERSED = Set.of();
     /** Query names whose statnFid/statnTid do not follow the neighbour rule: no direction filter there. */
     static final Set<String> NO_DIRECTION_FILTER = Set.of("응암순환(상선)");
 

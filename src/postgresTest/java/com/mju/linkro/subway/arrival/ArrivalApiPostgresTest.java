@@ -140,12 +140,14 @@ class ArrivalApiPostgresTest {
     }
 
     /**
-     * Seoul realtime 상행/하행 as observed (#86): the seed UP/DOWN must match, since the arrival API compares them. The
-     * neighbours are the observed next stations at each station. 1호선 does not match: see the last block.
+     * Seoul realtime 상행/하행 as observed (#86): the seed UP/DOWN must match, since the arrival API, route
+     * directionCode and congestion lookups use them. The neighbours are the observed next stations at each station.
+     * 1호선 matches since V14 (#89).
      */
     @Test void seedDirectionsMatchSeoulUpDown() {
         Object[][] observed = {
                 // line, station, observed UP next, observed DOWN next
+                {"1", "종각", "종로3가", "시청"},
                 {"3", "압구정", "옥수", "신사"},
                 {"4", "혜화", "한성대입구", "동대문"},
                 {"5", "마포", "여의나루", "공덕"},
@@ -156,7 +158,7 @@ class ArrivalApiPostgresTest {
             assertThat(next((String) o[0], (String) o[1], "UP")).as(o[0] + "호선 " + o[1] + " UP").containsExactly((String) o[2]);
             assertThat(next((String) o[0], (String) o[1], "DOWN")).as(o[0] + "호선 " + o[1] + " DOWN").containsExactly((String) o[3]);
         }
-        // Terminals: UP towards 구파발(지축)·불암산·방화·응암·장암·암사역사공원, DOWN towards 오금·남태령·마천/하남검단산·신내·온수·모란.
+        // Terminals: UP towards 청량리·구파발(지축)·불암산·방화·응암·장암·암사역사공원, DOWN towards 서울역·오금·남태령·마천/하남검단산·신내·온수·모란.
         assertThat(terminals("3", "UP")).containsExactly("지축");
         assertThat(terminals("3", "DOWN")).containsExactly("오금");
         assertThat(terminals("4", "UP")).containsExactly("불암산");
@@ -170,16 +172,10 @@ class ArrivalApiPostgresTest {
         assertThat(terminals("8", "UP")).containsExactly("암사역사공원");
         assertThat(terminals("8", "DOWN")).containsExactly("모란");
 
-        // 1호선 is the other way round in the seed: Seoul 상행 is towards 청량리 (종각 UP next = 종로3가), but our UP goes
-        // to 서울역. The arrival API flips it through SeoulSubwayIds.SEED_DIRECTION_REVERSED (#86). When the seed is
-        // corrected this fails: then remove "1" from that set and check 1호선 like the lines above.
-        String fixed = "1호선 시드 방향이 서울시 상행/하행 기준으로 바뀐 것 같습니다. SeoulSubwayIds.SEED_DIRECTION_REVERSED에서 "
-                + "\"1\"을 빼서 임시 보정을 제거하고, 이 검사를 3~8호선과 같은 방식으로 바꾸세요 (#86).";
-        assertThat(next("1", "종각", "UP")).withFailMessage(fixed).containsExactly("시청");
-        assertThat(next("1", "종각", "DOWN")).withFailMessage(fixed).containsExactly("종로3가");
-        assertThat(terminals("1", "UP")).withFailMessage(fixed).containsExactly("서울역");
-        assertThat(terminals("1", "DOWN")).withFailMessage(fixed).containsExactly("청량리");
-        assertThat(SeoulSubwayIds.SEED_DIRECTION_REVERSED).containsExactly("1");
+        assertThat(terminals("1", "UP")).containsExactly("청량리");
+        assertThat(terminals("1", "DOWN")).containsExactly("서울역");
+        // V14 (#89) corrected 1호선, so no line needs the arrival flip.
+        assertThat(SeoulSubwayIds.SEED_DIRECTION_REVERSED).isEmpty();
     }
 
     @Test void line1NextStationGivesSeoul상행OnTheRealSeed() throws Exception {
@@ -192,7 +188,7 @@ class ArrivalApiPostgresTest {
                   "barvlDt":"60","arvlCd":"99","arvlMsg2":"1분 후","recptnDt":"%1$s","lstcarAt":"0","btrainSttus":"일반"}]}
                 """.formatted(now);
         SERVER.expect(ExpectedCount.once(), requestTo(containsString("/0/30/%EC%A2%85%EA%B0%81"))).andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
-        // 종각 -> 종로3가 is DOWN in the seed but Seoul 상행: only the 청량리 train, reported as UP.
+        // 종각 -> 종로3가 is UP in the seed (V14, #89) and Seoul 상행: only the 청량리 train, reported as UP.
         JsonNode data = ok(get("/api/v1/stations/" + station("종각") + "/arrivals").param("lineId", String.valueOf(line("1")))
                 .param("nextStationId", String.valueOf(station("종로3가"))));
         assertThat(data.get("trains").size()).isEqualTo(1);

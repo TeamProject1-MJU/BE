@@ -176,6 +176,36 @@ class RouteSearchPostgresTest {
         assertThat(output.getAll()).contains("attempt 1: 200").doesNotContain(KEY).doesNotContain("BODY-MARKER");
     }
 
+    /** 1호선 since V14 (#89): 청량리 방면 is UP (Seoul 상행) and 서울역 방면 DOWN, with the matching congestion. */
+    @Test void line1DirectionCodeFollowsSeoul() throws Exception {
+        stat("종각", "1", "UP", "08:00", "38.412", "RELAXED", "여유");    // 상선 = 청량리 방면
+        stat("종각", "1", "DOWN", "08:00", "48.448", "RELAXED", "여유");  // 하선 = 서울역 방면
+        long jonggak = jdbc.queryForObject("select id from stations where name = '종각'", Long.class);
+        long cityHall = jdbc.queryForObject("select id from stations where name = '시청'", Long.class);
+        long jongno3 = jdbc.queryForObject("select id from stations where name = '종로3가'", Long.class);
+        useKakao("", Duration.ofSeconds(3), Duration.ofSeconds(5));
+
+        JsonNode toSeoul = ok(search(jonggak, cityHall, "2026-11-06T08:00:00+09:00", null), member).get("routes").get(0).get("steps").get(0);
+        assertThat(toSeoul.get("directionCode").asString()).isEqualTo("DOWN");
+        assertCongestion(toSeoul.get("stations").get(0).get("congestion"), 48, "RELAXED", "PREDICTED");
+
+        JsonNode toCheongnyangni = ok(search(jonggak, jongno3, "2026-11-06T08:00:00+09:00", null), member).get("routes").get(0).get("steps").get(0);
+        assertThat(toCheongnyangni.get("directionCode").asString()).isEqualTo("UP");
+        assertCongestion(toCheongnyangni.get("stations").get(0).get("congestion"), 38, "RELAXED", "PREDICTED");
+
+        // Kakao routes take the direction from the same edges.
+        useKakao(KEY, Duration.ofSeconds(3), Duration.ofSeconds(5));
+        server.expect(ExpectedCount.once(), requestTo(startsWith(URL))).andRespond(withSuccess("""
+                {"status":"OK","routes":[{"properties":{"type":"SUBWAY","totalDistance":1000,"totalTime":120,"transfers":0,"fare":{"value":1550}},
+                 "steps":[{"properties":{"type":"SUBWAY","distance":1000,"time":120,"stops":[{"name":"종각"},{"name":"시청"}],
+                 "vehicles":[{"name":"1호선","type":"일반"}]}}]}]}
+                """, MediaType.APPLICATION_JSON));
+        JsonNode kakao = ok(search(jonggak, cityHall, "2026-11-06T08:00:00+09:00", null), member);
+        assertThat(kakao.get("routeSource").asString()).isEqualTo("KAKAO");
+        assertThat(kakao.get("routes").get(0).get("steps").get(0).get("directionCode").asString()).isEqualTo("DOWN");
+        server.verify();
+    }
+
     @Test void timeoutFallsBackToInternal() throws Exception {
         useKakao(KEY, Duration.ofMillis(200), Duration.ofMillis(450));
         server.expect(ExpectedCount.twice(), requestTo(startsWith(URL))).andRespond(request -> {
