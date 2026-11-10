@@ -94,7 +94,8 @@ class CongestionLoadPostgresTest {
     void v12DataSurvivesV13() throws SQLException {
         migrate("12");
         insert(node("서울역", "1"), "UP", "06:00", "12.5", "COMFORTABLE");
-        var flyway = flyway(null);
+        // Target 13 so later migrations (V14 #89) do not change the count.
+        var flyway = flyway("13");
         assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
         flyway.validate();
         assertThat(query("select congestion_pct::text, congestion_level from congestion_stats")).containsExactly("12.5", "COMFORTABLE");
