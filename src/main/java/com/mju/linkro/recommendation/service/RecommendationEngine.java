@@ -107,7 +107,7 @@ public class RecommendationEngine {
             }
             Member member = members.get(i);
             int minutes = minutes(path.get().totalSeconds());
-            int fare = fares.fareOf(path.get());
+            int fare = fareOf(member, stationId, path.get());
             if (exceeds(constraints.maxMinutes(), minutes) || exceeds(constraints.maxTransfers(), path.get().transferCount())
                     || exceeds(constraints.maxFareWon(), fare) || exceeds(personalLimits.get(member.userId()), minutes)) {
                 return null;
@@ -115,6 +115,18 @@ public class RecommendationEngine {
             trips.add(new Trip(member, path.get(), minutes, fare));
         }
         return trips;
+    }
+
+    /**
+     * A member who does not travel (the candidate is their own departure station, ride distance 0) pays nothing. The
+     * fare calculator charges the base fare even at distance 0, which would distort the FARE comparison, so the
+     * exception lives here and the route API's fare is left as it is.
+     */
+    private int fareOf(Member member, long stationId, RoutePath path) {
+        if (member.departureStationId() == stationId || path.rideDistanceM() == 0) {
+            return 0;
+        }
+        return fares.fareOf(path);
     }
 
     private static boolean exceeds(Integer limit, int value) {

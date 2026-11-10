@@ -109,6 +109,13 @@ class RecommendationPostgresTest {
         // trips keep only the departure station id; the name in the response is filled in on read
         assertThat(jdbc.queryForObject("select count(*) from recommendation_results, jsonb_array_elements(trips) trip "
                 + "where trip ? 'departureStationId' and not trip ? 'departureStation'", Integer.class)).isEqualTo(6);
+        // congestion.pct is stored as an integer, and only a member who does not travel pays 0 won
+        assertThat(jdbc.queryForObject("select count(*) from recommendation_results, jsonb_array_elements(trips) trip "
+                + "where trip -> 'congestion' ->> 'pct' ~ '[.]'", Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from recommendation_results, jsonb_array_elements(trips) trip "
+                + "where (trip ->> 'fareWon')::int = 0 and (trip ->> 'travelMinutes')::int > 0", Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from recommendation_results, jsonb_array_elements(trips) trip "
+                + "where (trip ->> 'fareWon')::int > 0 and (trip ->> 'travelMinutes')::int = 0", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("select jsonb_typeof(criteria) || jsonb_array_length(criteria -> 'participants') from recommendation_runs", String.class))
                 .isEqualTo("object2");
         assertThat(jdbc.queryForObject("select metric_value::int from recommendation_results where criterion = 'TIME'", Integer.class))

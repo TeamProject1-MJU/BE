@@ -229,7 +229,7 @@ public class RecommendationService {
             // 8.1: departure = appointment − travel minutes; without an appointment the request time is the departure.
             Instant departAt = appointmentAt == null ? now : appointmentAt.minus(trip.minutes(), ChronoUnit.MINUTES);
             CongestionResult result = congestion.congestionOf(path, departAt);
-            Congestion shown = result.supported() ? new Congestion(result.pct(), result.level(), result.levelLabel()) : null;
+            Congestion shown = result.supported() ? new Congestion(result.pct().intValue(), result.level(), result.levelLabel()) : null;
             StationInfo origin = stations.require(trip.member().departureStationId());
             times.add(new ParticipantTime(trip.member().userId(), trip.member().nickname(),
                     new StationRef(origin.id(), origin.name()), trip.minutes(), path.transferCount(), trip.fareWon(),

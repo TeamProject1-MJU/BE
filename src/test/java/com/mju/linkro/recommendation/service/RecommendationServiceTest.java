@@ -223,6 +223,20 @@ class RecommendationServiceTest {
     }
 
     @Test
+    void rowsStoredBeforeWithADecimalCongestionPctAreStillRead() {
+        create(null);
+        var row = repository.results.get(0);
+        assertThat(row.tripsJson()).contains("\"pct\":92");
+        String legacy = row.tripsJson().replace("\"pct\":92", "\"pct\":93.0");   // how rows were stored while pct was a double
+        assertThat(legacy).contains("\"pct\":93.0");
+        repository.results.set(0, new RecommendationRepository.ResultRow(row.id(), row.runId(), row.criterion(), row.stationId(),
+                row.metricValue(), legacy, row.nearbyJson(), row.reason(), row.reasonSource()));
+
+        var times = service.latest(USER_A, roomId).results().get(0).participantTimes();
+        assertThat(times.get(1).congestion().pct()).isEqualTo(93);
+    }
+
+    @Test
     void createsOneResultPerCriterionAndStoresThem() {
         repository.neighbours.put(1L, List.of(
                 new RecommendationRepository.NeighbourRow(2, "역2", 2, 5, "MAIN", 6, "MAIN"),
@@ -269,7 +283,7 @@ class RecommendationServiceTest {
         assertThat(b.fareWon()).isEqualTo(1500);
         assertThat(b.distanceM()).isEqualTo(6500);
         assertThat(b.departureAt()).isEqualTo("2026-11-12T18:50:00+09:00");    // appointment − 10 minutes
-        assertThat(b.congestion().pct()).isEqualTo(92.5);
+        assertThat(b.congestion().pct()).isEqualTo(92);   // whole number like the route API (92.5 from the fake lookup is cut by intValue, as RouteSearchService does)
         assertThat(b.segments()).hasSize(1);
         assertThat(b.segments().get(0).lineName()).isEqualTo("2호선");
         assertThat(b.segments().get(0).stationCount()).isEqualTo(3);

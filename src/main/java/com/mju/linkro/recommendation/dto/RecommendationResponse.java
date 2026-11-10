@@ -84,7 +84,7 @@ public record RecommendationResponse(
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
     @Schema(name = "RecommendationCongestion")
-    public record Congestion(double pct, String level, String levelLabel) {}
+    public record Congestion(@Schema(description = "정수(경로 RouteCongestionData.pct와 같은 표시값)", example = "93") int pct, String level, String levelLabel) {}
 
     @Schema(name = "RecommendationSegment")
     public record Segment(long lineId, String lineName, String color, String direction,

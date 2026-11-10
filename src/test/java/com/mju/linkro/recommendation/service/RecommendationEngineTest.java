@@ -65,6 +65,30 @@ class RecommendationEngineTest {
     }
 
     @Test
+    void aMemberWhoDoesNotTravelPaysNothingEvenIfTheCalculatorChargesTheBaseFare() {
+        // like GraphFareCalculator: the base fare is charged even at distance 0
+        Evaluation evaluation = engine(graph(), path -> 1550).evaluate(MEMBERS, NONE);
+        var own1 = evaluation.candidates().get(1L);                    // st1 is A's own station: A pays 0, B pays 1550
+        assertThat(own1.trips().get(0).fareWon()).isZero();
+        assertThat(own1.trips().get(0).minutes()).isZero();
+        assertThat(own1.trips().get(0).path().transferCount()).isZero();
+        assertThat(own1.trips().get(1).fareWon()).isEqualTo(1550);
+        assertThat(own1.totalFareWon()).isEqualTo(1550);
+        assertThat(evaluation.candidates().get(2L).totalFareWon()).isEqualTo(1550);   // st2 is B's own station
+        assertThat(evaluation.candidates().get(3L).totalFareWon()).isEqualTo(3100);   // both travel
+        // so the FARE comparison is not distorted: the own stations (1550) beat the meeting in the middle (3100)
+        assertThat(evaluation.best(Criterion.FARE).orElseThrow().totalFareWon()).isEqualTo(1550);
+    }
+
+    @Test
+    void aMemberWhoDoesNotTravelCountsAsZeroAgainstTheFareLimit() {
+        // limit 1550 per person: at st1 A pays 0 and B pays 1550, both within it
+        Evaluation evaluation = engine(graph(), path -> 1550).evaluate(MEMBERS, limits(null, null, 1550, null, null));
+        assertThat(evaluation.candidates()).containsKeys(1L, 2L);
+        assertThat(evaluation.candidates().get(1L).trips().get(0).fareWon()).isZero();
+    }
+
+    @Test
     void fareWithinToleranceIsATieDecidedByTime() {
         // st3 is 1200 won, st1 and st2 are 1250 (within 100 won of the cheapest) and st4 is far above.
         Evaluation evaluation = engine(graph(), path -> path.totalSeconds() == 0 ? 0 : (path.toStationId() == 3 ? 600 : 1250))
