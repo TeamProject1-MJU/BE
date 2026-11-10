@@ -30,7 +30,7 @@ public record ArrivalResponse(
     @Schema(name = "ArrivalTrainData", requiredProperties = {"destinationName", "directionCode", "secondsUntil", "stopsAway", "message", "lastTrain", "express"})
     public record Train(
             @Schema(description = "종착역(bstatnNm)", example = "장암") String destinationName,
-            @Schema(description = "updnLine 변환값(상행 UP, 하행 DOWN, 내선 INNER, 외선 OUTER). 그 밖이면 null", example = "UP", types = {"string", "null"}) DirectionCode directionCode,
+            @Schema(description = "서울시 updnLine 기준(상행 UP, 하행 DOWN, 내선 INNER, 외선 OUTER). 그 밖이면 null. 1호선은 시드·경로의 UP/DOWN과 반대(임시 보정 중, #86)", example = "UP", types = {"string", "null"}) DirectionCode directionCode,
             @Schema(description = "도착까지 남은 초(외부 수신 시각 기준 보정). 알 수 없으면 null(예: barvlDt 0인 \"[N]번째 전역\")", example = "170", types = {"integer", "null"}) Integer secondsUntil,
             @Schema(description = "arvlMsg2가 \"[N]번째 전역\"이면 N, 아니면 null. N이 10을 넘는 열차는 응답에서 뺀다", example = "2", types = {"integer", "null"}) Integer stopsAway,
             @Schema(description = "외부 안내 문구(arvlMsg2) 그대로", example = "2분 50초 후") String message,

@@ -125,6 +125,8 @@ public class ArrivalService {
      * nextStationId first: on lines whose station id can be built, statnTid must be that id; elsewhere the RIDE edge
      * to it gives the direction. Then directionCode. updnLine is compared except for LOOP (the loop runs as 하행).
      * Stations in {@link SeoulSubwayIds#NO_DIRECTION_FILTER} and requests without both keep every train of the line.
+     * Both the edge direction and directionCode are in seed terms, so they go through
+     * {@link SeoulSubwayIds#seoulDirection} before the comparison (1호선 is flipped, temporarily).
      */
     private Predicate<Arrival> direction(String queryName, ArrivalStationRepository.Node node, ArrivalQuery query) {
         if (SeoulSubwayIds.NO_DIRECTION_FILTER.contains(queryName)) return arrival -> true;
@@ -139,7 +141,7 @@ public class ArrivalService {
             }
         }
         if (direction == null || direction == DirectionCode.LOOP) return arrival -> true;
-        DirectionCode wanted = direction;
+        DirectionCode wanted = SeoulSubwayIds.seoulDirection(node.lineCode(), direction);
         return arrival -> wanted == SeoulSubwayIds.direction(arrival.updnLine());
     }
 

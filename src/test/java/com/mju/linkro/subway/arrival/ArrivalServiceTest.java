@@ -57,6 +57,13 @@ class ArrivalServiceTest {
         station(161, " 새절 ");
         station(3, "종각");
         node(3, 1, 1003, "1", "152");
+        station(4, "종로3가");
+        node(4, 1, 1004, "1", "153");
+        station(2, "시청");
+        node(2, 1, 1002, "1", "151");
+        // Seed directions of 1호선 (opposite of Seoul): 종각 -> 종로3가 is DOWN, 종각 -> 시청 is UP.
+        when(stations.rideDirection(1003, 1004)).thenReturn(Optional.of(DirectionCode.DOWN));
+        when(stations.rideDirection(1003, 1002)).thenReturn(Optional.of(DirectionCode.UP));
         node(21, 2, 1021, "2", "212");
         node(21, 7, 7021, "7", "2729");
         node(20, 2, 1020, "2", "211");
@@ -283,9 +290,38 @@ class ArrivalServiceTest {
     @Test
     void directionComesFromUpdnLineNotTheDestination() {
         respond("jonggak.json", ExpectedCount.once());
-        // A 하행 train bound for 광운대 is still DOWN.
-        assertThat(get(3, "1", null, "DOWN", "10").trains()).extracting(Train::destinationName)
-                .containsExactly("인천", "신창", "광운대");
+        // A 하행 train bound for 광운대 is still 하행 (DOWN in the response). The request directionCode is in seed terms:
+        // 1호선 seed UP is Seoul 하행 (temporary flip, #86).
+        ArrivalResponse down = get(3, "1", null, "UP", "10");
+        assertThat(down.trains()).extracting(Train::destinationName).containsExactly("인천", "신창", "광운대");
+        assertThat(down.trains()).extracting(Train::directionCode).containsOnly(DirectionCode.DOWN);
+    }
+
+    @Test
+    void line1SeedDirectionsAreFlippedTemporarily() {
+        respond("jonggak.json", ExpectedCount.once());
+        // Seoul 상행 from 종각 goes to 종로3가; in the seed that edge is DOWN, so the filter flips it (#86).
+        List<String> up = List.of("동두천", "청량리", "광운대", "소요산");
+        assertThat(get(3, "1", "4", null, "10").trains()).extracting(Train::destinationName).containsExactlyElementsOf(up);
+        assertThat(get(3, "1", "4", null, "10").trains()).extracting(Train::directionCode).containsOnly(DirectionCode.UP);
+        // directionCode is read in seed terms too: seed DOWN = Seoul 상행.
+        assertThat(get(3, "1", null, "DOWN", "10").trains()).extracting(Train::destinationName).containsExactlyElementsOf(up);
+        // The other way: 시청 / seed UP = Seoul 하행, reported as DOWN.
+        assertThat(get(3, "1", "2", null, "10").trains()).extracting(Train::destinationName).containsExactly("인천", "신창", "광운대");
+        assertThat(get(3, "1", null, "UP", "10").trains()).extracting(Train::directionCode).containsOnly(DirectionCode.DOWN);
+    }
+
+    @Test
+    void onlyReversedLinesAreFlipped() {
+        assertThat(SeoulSubwayIds.SEED_DIRECTION_REVERSED).containsExactly("1");
+        assertThat(SeoulSubwayIds.seoulDirection("1", DirectionCode.UP)).isEqualTo(DirectionCode.DOWN);
+        assertThat(SeoulSubwayIds.seoulDirection("1", DirectionCode.DOWN)).isEqualTo(DirectionCode.UP);
+        for (String line : new String[] {"2", "3", "4", "5", "6", "7", "8"}) {
+            for (DirectionCode code : DirectionCode.values()) {
+                assertThat(SeoulSubwayIds.seoulDirection(line, code)).as(line + " " + code).isEqualTo(code);
+            }
+        }
+        assertThat(SeoulSubwayIds.seoulDirection("1", DirectionCode.LOOP)).isEqualTo(DirectionCode.LOOP);
     }
 
     @Test

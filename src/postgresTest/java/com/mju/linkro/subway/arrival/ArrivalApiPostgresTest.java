@@ -171,12 +171,34 @@ class ArrivalApiPostgresTest {
         assertThat(terminals("8", "DOWN")).containsExactly("모란");
 
         // 1호선 is the other way round in the seed: Seoul 상행 is towards 청량리 (종각 UP next = 종로3가), but our UP goes
-        // to 서울역. Pinned as found (#86 report); the arrival API compares updnLine with the seed direction only
-        // where no external id can be built, so 1호선 nextStationId currently picks the opposite trains.
-        assertThat(next("1", "종각", "UP")).containsExactly("시청");
-        assertThat(next("1", "종각", "DOWN")).containsExactly("종로3가");
-        assertThat(terminals("1", "UP")).containsExactly("서울역");
-        assertThat(terminals("1", "DOWN")).containsExactly("청량리");
+        // to 서울역. The arrival API flips it through SeoulSubwayIds.SEED_DIRECTION_REVERSED (#86). When the seed is
+        // corrected this fails: then remove "1" from that set and check 1호선 like the lines above.
+        String fixed = "1호선 시드 방향이 서울시 상행/하행 기준으로 바뀐 것 같습니다. SeoulSubwayIds.SEED_DIRECTION_REVERSED에서 "
+                + "\"1\"을 빼서 임시 보정을 제거하고, 이 검사를 3~8호선과 같은 방식으로 바꾸세요 (#86).";
+        assertThat(next("1", "종각", "UP")).withFailMessage(fixed).containsExactly("시청");
+        assertThat(next("1", "종각", "DOWN")).withFailMessage(fixed).containsExactly("종로3가");
+        assertThat(terminals("1", "UP")).withFailMessage(fixed).containsExactly("서울역");
+        assertThat(terminals("1", "DOWN")).withFailMessage(fixed).containsExactly("청량리");
+        assertThat(SeoulSubwayIds.SEED_DIRECTION_REVERSED).containsExactly("1");
+    }
+
+    @Test void line1NextStationGivesSeoul상행OnTheRealSeed() throws Exception {
+        String now = LocalDateTime.now(ZoneId.of("Asia/Seoul")).format(RECEIVED);
+        String body = """
+                {"errorMessage":{"status":200,"code":"INFO-000","total":2},"realtimeArrivalList":[
+                 {"subwayId":"1001","updnLine":"상행","trainLineNm":"청량리행 - 종로3가방면","bstatnNm":"청량리","statnTid":"1001000153",
+                  "barvlDt":"120","arvlCd":"99","arvlMsg2":"2분 후","recptnDt":"%1$s","lstcarAt":"0","btrainSttus":"일반"},
+                 {"subwayId":"1001","updnLine":"하행","trainLineNm":"광운대행 - 시청방면","bstatnNm":"광운대","statnTid":"1001000151",
+                  "barvlDt":"60","arvlCd":"99","arvlMsg2":"1분 후","recptnDt":"%1$s","lstcarAt":"0","btrainSttus":"일반"}]}
+                """.formatted(now);
+        SERVER.expect(ExpectedCount.once(), requestTo(containsString("/0/30/%EC%A2%85%EA%B0%81"))).andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
+        // 종각 -> 종로3가 is DOWN in the seed but Seoul 상행: only the 청량리 train, reported as UP.
+        JsonNode data = ok(get("/api/v1/stations/" + station("종각") + "/arrivals").param("lineId", String.valueOf(line("1")))
+                .param("nextStationId", String.valueOf(station("종로3가"))));
+        assertThat(data.get("trains").size()).isEqualTo(1);
+        assertThat(data.get("trains").get(0).get("destinationName").asString()).isEqualTo("청량리");
+        assertThat(data.get("trains").get(0).get("directionCode").asString()).isEqualTo("UP");
+        SERVER.verify();
     }
 
     /** Two 7호선 rows at 건대입구 received just now: 상행 towards 어린이대공원 and 하행. */

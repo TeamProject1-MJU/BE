@@ -21,6 +21,13 @@ public final class SeoulSubwayIds {
             "5", "1005", "6", "1006", "7", "1007", "8", "1008");
     /** Lines whose station_code gives the external station id (confirmed by observation). */
     static final Set<String> ID_LINES = Set.of("2");
+    /**
+     * TEMPORARY (#86): lines whose seed UP/DOWN (data/edges.csv -> V11 station_connections) is the opposite of Seoul's
+     * 상행/하행. 1호선: Seoul 상행 runs towards 청량리 (종각 -> 종로3가) but the seed UP runs towards 서울역 (종각 -> 시청).
+     * The seed is not changed here; arrival filtering flips UP/DOWN of these lines instead. Remove the line from this set
+     * when the seed is corrected (ArrivalApiPostgresTest.seedDirectionsMatchSeoulUpDown then fails to remind you).
+     */
+    static final Set<String> SEED_DIRECTION_REVERSED = Set.of("1");
     /** Query names whose statnFid/statnTid do not follow the neighbour rule: no direction filter there. */
     static final Set<String> NO_DIRECTION_FILTER = Set.of("응암순환(상선)");
 
@@ -39,7 +46,20 @@ public final class SeoulSubwayIds {
         return Optional.of("100" + lineCode + "000" + stationCode);
     }
 
-    /** updnLine (상행/하행/내선/외선) -> our direction; null for anything else. */
+    /**
+     * A seed direction (our graph, or a directionCode taken from it) in Seoul's terms: UP/DOWN swapped on
+     * {@link #SEED_DIRECTION_REVERSED} lines, otherwise unchanged.
+     */
+    static DirectionCode seoulDirection(String lineCode, DirectionCode seedDirection) {
+        if (seedDirection == null || !SEED_DIRECTION_REVERSED.contains(lineCode)) return seedDirection;
+        return switch (seedDirection) {
+            case UP -> DirectionCode.DOWN;
+            case DOWN -> DirectionCode.UP;
+            default -> seedDirection;
+        };
+    }
+
+    /** updnLine (상행/하행/내선/외선) -> Seoul's direction, used as is in responses; null for anything else. */
     static DirectionCode direction(String updnLine) {
         return updnLine == null ? null : UPDN.get(updnLine.strip());
     }
