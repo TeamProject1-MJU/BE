@@ -1,0 +1,48 @@
+{
+ "errorMessage": {
+  "status": 200,
+  "code": "INFO-000",
+  "message": "정상 처리되었습니다.",
+  "link": "",
+  "developerMessage": "",
+  "total": 2
+ },
+ "realtimeArrivalList": [
+  {
+   "subwayId": "1006",
+   "updnLine": "하행",
+   "trainLineNm": "응암순환(상선)행 - 불광방면",
+   "bstatnNm": "응암순환(상선)",
+   "statnId": "1006000611",
+   "statnNm": "",
+   "statnFid": "1006000610",
+   "statnTid": "1006000612",
+   "barvlDt": "300",
+   "arvlCd": "99",
+   "arvlMsg2": "5분 후",
+   "arvlMsg3": "새절(신사)",
+   "recptnDt": "2026-11-10 07:59:50",
+   "lstcarAt": "0",
+   "btrainSttus": "일반",
+   "btrainNo": "0000"
+  },
+  {
+   "subwayId": "1006",
+   "updnLine": "하행",
+   "trainLineNm": "응암순환(상선)행 - 불광방면",
+   "bstatnNm": "응암순환(상선)",
+   "statnId": "1006000611",
+   "statnNm": "",
+   "statnFid": "1006000610",
+   "statnTid": "1006000612",
+   "barvlDt": "30",
+   "arvlCd": "5",
+   "arvlMsg2": "전역 도착",
+   "arvlMsg3": "응암순환(상선)",
+   "recptnDt": "2026-11-10 07:59:55",
+   "lstcarAt": "0",
+   "btrainSttus": "일반",
+   "btrainNo": "0000"
+  }
+ ]
+}

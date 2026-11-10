@@ -1,0 +1,9 @@
+# Seoul realtime arrival API: our station name -> official query name, only where they differ.
+# Each row was confirmed by a real call on 2026-11-10 (INFO-200 with our name, INFO-000 with the official one).
+# Stations not listed are queried by our stations.name; an INFO-200 there is NO_DATA. See docs/arrivals-86.md.
+line_code,station_name,query_name
+6,응암,응암순환(상선)
+6,새절,새절(신사)
+6,증산,증산(명지대앞)
+6,월드컵경기장,월드컵경기장(성산)
+7,어린이대공원,어린이대공원(세종대)

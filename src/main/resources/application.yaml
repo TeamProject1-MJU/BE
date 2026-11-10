@@ -33,6 +33,13 @@ auth:
 cors:
   allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
 
+logging:
+  level:
+    # The JDK HTTP client behind RestClient (SimpleClientHttpRequestFactory -> HttpURLConnection) logs whole request
+    # lines at FINE/FINEST, and the Seoul arrival API carries its key in the URL path. Keep these at INFO or above
+    # (checked by HttpClientLoggingLevelTest, docs/arrivals-86.md).
+    sun.net.www: INFO
+
 # Subway module. Unset values mean mock, and each mock logs a WARN at startup.
 # - module: mock | graph. graph loads the subway graph at startup for real routes and fares
 #   (production: environment variable LINKRO_SUBWAY_MODULE=graph).
@@ -43,6 +50,9 @@ cors:
 #   are refreshed from the KASI special-day API on startup (background) and daily at 03:00 KST; a year is replaced
 #   only when all 12 months succeed. Optional: linkro.holiday.kasi.base-url, connect-timeout=2s, read-timeout=3s.
 #   See docs/holiday-refresh-83.md.
+# Train arrivals (GET /stations/{id}/arrivals): key from SEOUL_ARRIVAL_API_KEY (linkro.arrival.seoul.api-key);
+#   empty means available=false (DISABLED). Optional: linkro.arrival.seoul.base-url, timeout=3s,
+#   linkro.arrival.cache-ttl=15s, failure-cache-ttl=5s. See docs/arrivals-86.md.
 # Route search (POST /routes/search): the Kakao REST API key comes only from the environment variable
 # KAKAO_REST_API_KEY (production: ~/BE/.env, passed by docker-compose). Empty means INTERNAL routes only.
 # Optional overrides (defaults shown): linkro.route.kakao.base-url=https://dapi.kakao.com,
