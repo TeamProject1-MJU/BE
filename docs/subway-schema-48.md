@@ -72,6 +72,7 @@ DB CHECK는 값의 형식만 본다. 아래 의미 규칙은 DB가 보장하지 
   - INNER·OUTER는 2호선 본선 순환 RIDE에만 쓴다.
   - LOOP는 6호선 응암순환 구간 RIDE에만 쓴다. 응암순환은 한 방향 간선만 있고 상행·하행 구분이 없다(명세 6.1·13장).
   - 그 밖의 RIDE와 지선은 UP·DOWN을 쓴다. 지선은 분기점에서 멀어지면 DOWN, 분기점 쪽이면 UP이다.
+  - UP/DOWN은 서울시 상행/하행과 같다(1호선 상행 = 청량리 방면). 1호선은 V11 시드가 반대였고 V14(#89)에서 바로잡았다.
   - congestion_stats.direction도 같은 기준으로 그 노드의 노선에 맞는 값만 쓴다.
 - congestion_level_label과 congestion_level의 대응: 쾌적·COMFORTABLE, 여유·RELAXED, 보통·NORMAL, 혼잡·CROWDED, 매우 혼잡·VERY_CROWDED.
 - color는 대문자 `#RRGGBB`로 통일한다. DB CHECK는 소문자도 허용한다.
