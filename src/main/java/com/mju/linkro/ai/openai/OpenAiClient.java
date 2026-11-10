@@ -8,9 +8,11 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
@@ -32,6 +34,7 @@ public class OpenAiClient implements AiClient {
 
     private static final JsonMapper MAPPER = JsonMapper.builder().build();
     private static final Map<String, Object> CONDITION_SCHEMA = schema("condition");
+    private static final Map<String, Object> EXPLANATION_SCHEMA = schema("explanation");
     private static final Map<String, Object> SIGN_SCHEMA = schema("sign");
     private static final String CONDITION_PROMPT = resource("ai/prompt/condition.txt");
     private static final String EXPLANATION_PROMPT = resource("ai/prompt/explanation.txt");
@@ -59,10 +62,32 @@ public class OpenAiClient implements AiClient {
     }
 
     @Override
-    public GeneratedText explainRecommendation(ExplanationRequest req) {
-        String input = "기준: " + req.criterion() + "\n역: " + req.stationName() + "\nfacts: " + write(req.facts());
-        return text(call(textClient, EXPLANATION_PROMPT, textInput(input), null), EXPLANATION_MAX_LENGTH);
+    public ExplanationResult explainRecommendation(ExplanationRequest req) {
+        var input = new StringBuilder();
+        for (ExplanationRequest.Item item : req.items()) {
+            input.append("기준: ").append(item.criterion()).append(", 역: ").append(item.stationName())
+                    .append(", facts: ").append(write(item.facts())).append('\n');
+        }
+        String json = call(textClient, EXPLANATION_PROMPT, textInput(input.toString()), jsonFormat("explanation", EXPLANATION_SCHEMA));
+        Reply reply = parse(json, Reply.class);
+        Set<String> asked = new HashSet<>();
+        req.items().forEach(item -> asked.add(item.criterion()));
+        Map<String, String> texts = new LinkedHashMap<>();
+        // Only criteria that were asked for; an unknown, repeated or blank entry is ignored, and the caller uses
+        // its template for any criterion left out.
+        for (ReplyEntry entry : reply.explanations() == null ? List.<ReplyEntry>of() : reply.explanations()) {
+            if (entry != null && entry.criterion() != null && entry.text() != null && asked.contains(entry.criterion())
+                    && !entry.text().isBlank()) {
+                texts.putIfAbsent(entry.criterion(), text(entry.text(), EXPLANATION_MAX_LENGTH).text());
+            }
+        }
+        return new ExplanationResult(texts);
     }
+
+    /** Structured output of {@link #explainRecommendation}: schema ai/schema/explanation.json. */
+    record Reply(List<ReplyEntry> explanations) {}
+
+    record ReplyEntry(String criterion, String text) {}
 
     @Override
     public SignReading readSign(SignImage image, SignContext ctx) {

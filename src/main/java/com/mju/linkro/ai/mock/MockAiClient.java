@@ -3,7 +3,9 @@ package com.mju.linkro.ai.mock;
 import com.mju.linkro.ai.api.*;
 import com.mju.linkro.common.exception.BusinessException;
 import com.mju.linkro.common.exception.ErrorCode;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -37,10 +39,14 @@ public class MockAiClient implements AiClient {
     }
 
     @Override
-    public GeneratedText explainRecommendation(ExplanationRequest req) {
-        checkMarkers(req.criterion());
-        checkMarkers(req.stationName());
-        return new GeneratedText(req.stationName() + "역은 '" + req.criterion() + "' 기준으로 추천된 약속 장소입니다.");
+    public ExplanationResult explainRecommendation(ExplanationRequest req) {
+        Map<String, String> texts = new LinkedHashMap<>();
+        for (ExplanationRequest.Item item : req.items()) {
+            checkMarkers(item.criterion());
+            checkMarkers(item.stationName());
+            texts.put(item.criterion(), item.stationName() + "역은 '" + item.criterion() + "' 기준으로 추천된 약속 장소입니다.");
+        }
+        return new ExplanationResult(texts);
     }
 
     @Override
