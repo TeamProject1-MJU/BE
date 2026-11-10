@@ -33,6 +33,13 @@ auth:
 cors:
   allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
 
+logging:
+  level:
+    # The JDK HTTP client behind RestClient (SimpleClientHttpRequestFactory -> HttpURLConnection) logs whole request
+    # lines at FINE/FINEST, and the Seoul arrival API carries its key in the URL path. Keep these at INFO or above
+    # (checked by HttpClientLoggingLevelTest, docs/arrivals-86.md).
+    sun.net.www: INFO
+
 # Subway module. Unset values mean mock, and each mock logs a WARN at startup.
 # - module: mock | graph. graph loads the subway graph at startup for real routes and fares
 #   (production: environment variable LINKRO_SUBWAY_MODULE=graph).
