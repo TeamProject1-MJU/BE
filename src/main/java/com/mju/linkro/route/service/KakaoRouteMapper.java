@@ -48,8 +48,9 @@ public class KakaoRouteMapper {
         List<StepDraft> steps = new ArrayList<>();
         int offset = 0;
         int rideMeters = 0;
-        // Alighting station of the SUBWAY step before, as Kakao and as we name it; empty before the first ride.
-        List<String> alighted = List.of();
+        // Alighting station of the SUBWAY step before, as Kakao writes it and as we name it; null before the first ride.
+        String alightedKakao = null;
+        String alightedOurs = null;
         for (KakaoRouteResponse.Step step : route.steps()) {
             var p = step.properties();
             if (p == null) return Optional.empty();
@@ -57,8 +58,8 @@ public class KakaoRouteMapper {
             int distance = p.distance() == null ? 0 : p.distance();
             List<List<Double>> path = step.path() == null ? null : step.path().points();
             if ("WALKING".equals(p.type())) {
-                steps.add(new StepDraft(RouteDraft.WALKING, walkingGuidance(p.guidance(), alighted), time, distance, null, null,
-                        List.of(), path));
+                steps.add(new StepDraft(RouteDraft.WALKING, walkingGuidance(p.guidance(), alightedKakao, alightedOurs), time, distance,
+                        null, null, List.of(), path));
             } else if ("SUBWAY".equals(p.type())) {
                 Optional<Ride> ride = ride(p, index, offset, time);
                 if (ride.isEmpty()) return Optional.empty();
@@ -67,8 +68,8 @@ public class KakaoRouteMapper {
                 PathStop last = r.stops().get(r.stops().size() - 1);
                 steps.add(new StepDraft(RouteDraft.SUBWAY, RouteDraft.rideGuidance(r.line().name(), r.stops().size() - 1, last.stationName()),
                         time, distance, r.line(), r.stops().get(0).direction(), r.stops(), path));
-                String kakaoName = p.stops().get(p.stops().size() - 1).name().strip();
-                alighted = kakaoName.equals(last.stationName()) ? List.of(kakaoName) : List.of(kakaoName, last.stationName());
+                alightedKakao = p.stops().get(p.stops().size() - 1).name().strip();
+                alightedOurs = last.stationName();
             } else {
                 // BUS or anything else: subway only.
                 return Optional.empty();
@@ -97,18 +98,20 @@ public class KakaoRouteMapper {
     }
 
     /**
-     * Kakao transfer walks read like "시청시청역 환승": the station name twice before "역". When the guidance starts with
-     * the alighting station of the ride before (Kakao's or our name) written twice and then "역", one copy is dropped
-     * ("시청역 환승"). Anything else, and walks before the first ride, keep Kakao's text.
+     * Kakao transfer walks read "{Kakao name}{our name + 역} 환승", e.g. "시청시청역 환승",
+     * "동대문역사문화공원(DDP)동대문역사문화공원역 환승", "서울역서울역 환승" (no second 역 after a name ending in 역).
+     * When the guidance is exactly that for the alighting station of the ride before, the Kakao name is dropped
+     * ("시청역 환승", "동대문역사문화공원역 환승", "서울역 환승"). Anything else, and walks before the first ride, keep
+     * Kakao's text.
+     *
+     * @param kakaoName  alighting station of the ride before as Kakao writes it, or null before the first ride
+     * @param ourName    the same station as stations.name, or null before the first ride
      */
-    static String walkingGuidance(String guidance, List<String> alightingNames) {
-        if (guidance == null) return null;
-        for (String name : alightingNames) {
-            if (name == null || name.isEmpty()) continue;
-            String doubled = name + name + "역";
-            if (guidance.startsWith(doubled)) return name + guidance.substring(name.length() * 2);
-        }
-        return guidance;
+    static String walkingGuidance(String guidance, String kakaoName, String ourName) {
+        if (guidance == null || kakaoName == null || ourName == null || kakaoName.isEmpty() || ourName.isEmpty()) return guidance;
+        String station = ourName.endsWith("역") ? ourName : ourName + "역";
+        String transfer = station + " 환승";
+        return guidance.equals(kakaoName + transfer) ? transfer : guidance;
     }
 
     private record Ride(Line line, List<PathStop> stops, int meters) {}

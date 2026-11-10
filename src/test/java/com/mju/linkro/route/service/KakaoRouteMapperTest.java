@@ -127,19 +127,25 @@ class KakaoRouteMapperTest {
     }
 
     @Test
-    void transferWalkWithTheStationNameTwiceKeepsOneCopy() {
-        assertThat(KakaoRouteMapper.walkingGuidance("시청시청역 환승", List.of("시청"))).isEqualTo("시청역 환승");
+    void transferWalkWithTheKakaoNameInFrontKeepsOnlyOurs() {
+        // Real Kakao guidance: "{Kakao name}{our name + 역} 환승".
+        assertThat(KakaoRouteMapper.walkingGuidance("시청시청역 환승", "시청", "시청")).isEqualTo("시청역 환승");
+        assertThat(KakaoRouteMapper.walkingGuidance("동대문역사문화공원(DDP)동대문역사문화공원역 환승", "동대문역사문화공원(DDP)", "동대문역사문화공원"))
+                .isEqualTo("동대문역사문화공원역 환승");
+        // A name already ending in 역 gets no second 역.
+        assertThat(KakaoRouteMapper.walkingGuidance("서울역서울역 환승", "서울역", "서울역")).isEqualTo("서울역 환승");
         // Already fine: unchanged.
-        assertThat(KakaoRouteMapper.walkingGuidance("시청역 환승", List.of("시청"))).isEqualTo("시청역 환승");
+        assertThat(KakaoRouteMapper.walkingGuidance("시청역 환승", "시청", "시청")).isEqualTo("시청역 환승");
         // No SUBWAY step before: unchanged.
-        assertThat(KakaoRouteMapper.walkingGuidance("시청시청역 환승", List.of())).isEqualTo("시청시청역 환승");
-        // Only the alighting station counts, not any repetition.
-        assertThat(KakaoRouteMapper.walkingGuidance("종각종각역 환승", List.of("시청"))).isEqualTo("종각종각역 환승");
-        // A name with a repeated syllable ("다다") is not shortened when it is written once...
-        assertThat(KakaoRouteMapper.walkingGuidance("다다역 환승", List.of("다다"))).isEqualTo("다다역 환승");
-        // ...and loses only one whole copy when it is written twice.
-        assertThat(KakaoRouteMapper.walkingGuidance("다다다다역 환승", List.of("다다"))).isEqualTo("다다역 환승");
-        assertThat(KakaoRouteMapper.walkingGuidance(null, List.of("시청"))).isNull();
+        assertThat(KakaoRouteMapper.walkingGuidance("시청시청역 환승", null, null)).isEqualTo("시청시청역 환승");
+        // Another station's name is never shortened: only the alighting station counts.
+        assertThat(KakaoRouteMapper.walkingGuidance("종각종각역 환승", "시청", "시청")).isEqualTo("종각종각역 환승");
+        // A name with a repeated syllable ("다다") written once stays; the doubled form loses only the Kakao copy.
+        assertThat(KakaoRouteMapper.walkingGuidance("다다역 환승", "다다", "다다")).isEqualTo("다다역 환승");
+        assertThat(KakaoRouteMapper.walkingGuidance("다다다다역 환승", "다다", "다다")).isEqualTo("다다역 환승");
+        // Only the exact transfer phrase: other text after the names is left as Kakao wrote it.
+        assertThat(KakaoRouteMapper.walkingGuidance("시청시청역 환승 (2번 출구)", "시청", "시청")).isEqualTo("시청시청역 환승 (2번 출구)");
+        assertThat(KakaoRouteMapper.walkingGuidance(null, "시청", "시청")).isNull();
     }
 
     @Test
@@ -149,11 +155,11 @@ class KakaoRouteMapperTest {
         assertThat(drafts).singleElement().satisfies(draft ->
                 assertThat(draft.steps().get(1).guidance()).isEqualTo("교대역 환승"));
 
-        // Kakao writes the name with its parenthesised part; that spelling counts too.
+        // Kakao writes its own name (with the parenthesised part) in front of ours.
         var kakaoName = mapper.map(ok(route("SUBWAY", 1550, subway("2호선", 120, "강남", "교대(법원.검찰청)"),
-                walk("교대(법원.검찰청)교대(법원.검찰청)역 환승", 90), subway("3호선", 100, "교대", "고속터미널"))), 31, 40);
+                walk("교대(법원.검찰청)교대역 환승", 90), subway("3호선", 100, "교대", "고속터미널"))), 31, 40);
         assertThat(kakaoName).singleElement().satisfies(draft ->
-                assertThat(draft.steps().get(1).guidance()).isEqualTo("교대(법원.검찰청)역 환승"));
+                assertThat(draft.steps().get(1).guidance()).isEqualTo("교대역 환승"));
 
         // A walk before the first ride keeps Kakao's text.
         var leading = mapper.map(ok(route("SUBWAY", 1450, walk("강남강남역 1번 출구", 60), subway("2호선", 300, "강남", "교대", "서초"))), 31, 33);
