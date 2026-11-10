@@ -36,6 +36,8 @@ services:
       KAKAO_REST_API_KEY: ${KAKAO_REST_API_KEY:-}
       # data.go.kr "Decoding" key for the KASI holiday refresh (optional). Empty means subway-holidays.properties only.
       KASI_SPECIAL_DAY_KEY: ${KASI_SPECIAL_DAY_KEY:-}
+      # Seoul Open Data realtime subway arrival key for GET /stations/{id}/arrivals (optional). Empty means DISABLED.
+      SEOUL_ARRIVAL_API_KEY: ${SEOUL_ARRIVAL_API_KEY:-}
     ports:
       - "8080:8080"
 
