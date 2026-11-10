@@ -29,3 +29,7 @@ linkro:
       # Tests never call the real Kakao API, even when .env or the shell has KAKAO_REST_API_KEY.
       # Kakao tests build their own client against a stub server.
       rest-api-key: ""
+  arrival:
+    seoul:
+      # Tests never call the real Seoul arrival API, even when .env or the shell has SEOUL_ARRIVAL_API_KEY.
+      api-key: ""
