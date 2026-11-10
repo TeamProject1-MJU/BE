@@ -117,6 +117,68 @@ class ArrivalApiPostgresTest {
                 """, String.class)).isEqualTo("UP");
     }
 
+    /** Seed neighbour of a station on a line in one direction (RIDE edge). */
+    private List<String> next(String line, String station, String direction) {
+        return jdbc.queryForList("""
+                select sb.name from station_connections c
+                join station_lines a on a.id = c.from_station_line_id join stations sa on sa.id = a.station_id
+                join station_lines b on b.id = c.to_station_line_id join stations sb on sb.id = b.station_id
+                join subway_lines l on l.id = a.line_id
+                where c.connection_type = 'RIDE' and l.line_code = ? and sa.name = ? and c.direction = ?
+                """, String.class, line, station, direction);
+    }
+
+    /** Where the UP or DOWN chain of a line's MAIN ends: nodes with an incoming edge but no outgoing one in that direction. */
+    private List<String> terminals(String line, String direction) {
+        return jdbc.queryForList("""
+                select distinct s.name from station_lines sl join stations s on s.id = sl.station_id join subway_lines l on l.id = sl.line_id
+                where l.line_code = ? and sl.branch_code = 'MAIN'
+                  and exists (select 1 from station_connections c where c.to_station_line_id = sl.id and c.direction = ?)
+                  and not exists (select 1 from station_connections c where c.from_station_line_id = sl.id and c.direction = ?)
+                order by s.name
+                """, String.class, line, direction, direction);
+    }
+
+    /**
+     * Seoul realtime 상행/하행 as observed (#86): the seed UP/DOWN must match, since the arrival API compares them. The
+     * neighbours are the observed next stations at each station. 1호선 does not match: see the last block.
+     */
+    @Test void seedDirectionsMatchSeoulUpDown() {
+        Object[][] observed = {
+                // line, station, observed UP next, observed DOWN next
+                {"3", "압구정", "옥수", "신사"},
+                {"4", "혜화", "한성대입구", "동대문"},
+                {"5", "마포", "여의나루", "공덕"},
+                {"6", "새절", "응암", "증산"},
+                {"7", "건대입구", "어린이대공원", "자양"},     // 뚝섬유원지 is stored as 자양
+                {"8", "석촌", "잠실", "송파"}};
+        for (Object[] o : observed) {
+            assertThat(next((String) o[0], (String) o[1], "UP")).as(o[0] + "호선 " + o[1] + " UP").containsExactly((String) o[2]);
+            assertThat(next((String) o[0], (String) o[1], "DOWN")).as(o[0] + "호선 " + o[1] + " DOWN").containsExactly((String) o[3]);
+        }
+        // Terminals: UP towards 구파발(지축)·불암산·방화·응암·장암·암사역사공원, DOWN towards 오금·남태령·마천/하남검단산·신내·온수·모란.
+        assertThat(terminals("3", "UP")).containsExactly("지축");
+        assertThat(terminals("3", "DOWN")).containsExactly("오금");
+        assertThat(terminals("4", "UP")).containsExactly("불암산");
+        assertThat(terminals("4", "DOWN")).containsExactly("남태령");
+        assertThat(terminals("5", "UP")).containsExactly("방화");
+        assertThat(terminals("5", "DOWN")).containsExactly("하남검단산");
+        assertThat(terminals("6", "UP")).containsExactly("응암");
+        assertThat(terminals("6", "DOWN")).containsExactly("신내");
+        assertThat(terminals("7", "UP")).containsExactly("장암");
+        assertThat(terminals("7", "DOWN")).containsExactly("온수");
+        assertThat(terminals("8", "UP")).containsExactly("암사역사공원");
+        assertThat(terminals("8", "DOWN")).containsExactly("모란");
+
+        // 1호선 is the other way round in the seed: Seoul 상행 is towards 청량리 (종각 UP next = 종로3가), but our UP goes
+        // to 서울역. Pinned as found (#86 report); the arrival API compares updnLine with the seed direction only
+        // where no external id can be built, so 1호선 nextStationId currently picks the opposite trains.
+        assertThat(next("1", "종각", "UP")).containsExactly("시청");
+        assertThat(next("1", "종각", "DOWN")).containsExactly("종로3가");
+        assertThat(terminals("1", "UP")).containsExactly("서울역");
+        assertThat(terminals("1", "DOWN")).containsExactly("청량리");
+    }
+
     /** Two 7호선 rows at 건대입구 received just now: 상행 towards 어린이대공원 and 하행. */
     private static String konkuk7() {
         String now = LocalDateTime.now(ZoneId.of("Asia/Seoul")).format(RECEIVED);
