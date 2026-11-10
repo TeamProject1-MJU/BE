@@ -48,14 +48,23 @@ class MockAiClientTest {
 
     @Test
     void textsAreFixedTemplates() {
-        assertThat(client.explainRecommendation(new ExplanationRequest("공평", "강남", Map.of("avgMinutes", 20))).text())
-                .contains("강남", "공평");
+        var explanations = client.explainRecommendation(new ExplanationRequest(List.of(
+                new ExplanationRequest.Item("TIME", "강남", Map.of("maxMinutes", 20)),
+                new ExplanationRequest.Item("FARE", "사당", Map.of("totalFareWon", 3100)))));
+        assertThat(explanations.texts()).containsOnlyKeys("TIME", "FARE");
+        assertThat(explanations.texts().get("TIME")).contains("강남", "TIME");
+        assertThat(explanations.texts().get("FARE")).contains("사당", "FARE");
+        assertThat(client.explainRecommendation(new ExplanationRequest(List.of())).texts()).isEmpty();
         assertThat(client.replyToChat(new ChatReplyRequest("어디서 만나?", null, null)).text()).contains("어디서 만나?");
     }
 
     @Test
     void markersReproduceFailures() {
         assertCode(() -> client.interpretCondition(new ConditionRequest("x" + MockAiClient.FAIL_MARKER, null, null)),
+                ErrorCode.AI_UNAVAILABLE);
+        // one marked item fails the whole explanation call
+        assertCode(() -> client.explainRecommendation(new ExplanationRequest(List.of(
+                new ExplanationRequest.Item("TIME", "강남", null), new ExplanationRequest.Item("FARE", "x" + MockAiClient.FAIL_MARKER, null)))),
                 ErrorCode.AI_UNAVAILABLE);
         assertCode(() -> client.replyToChat(new ChatReplyRequest(MockAiClient.QUOTA_MARKER, null, null)),
                 ErrorCode.AI_QUOTA_EXCEEDED);

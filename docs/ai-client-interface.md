@@ -9,7 +9,7 @@
 
 ```java
 ConditionInterpretation interpretCondition(ConditionRequest req);   // #74 조건 해석(문자열·숫자 원문만)
-GeneratedText explainRecommendation(ExplanationRequest req);         // #74 추천 설명(facts 수치만 사용)
+ExplanationResult explainRecommendation(ExplanationRequest req);     // #74 추천 설명: 기준(TIME/FARE/DISTANCE) 전부를 한 번에 받아 기준별 문장 반환(facts 수치만 사용)
 SignReading readSign(SignImage image, SignContext ctx);              // #75 표지판 판독 + 판정(API 명세 9.1)
 GeneratedText replyToChat(ChatReplyRequest req);                     // #76 채팅 답변
 ```

@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["explanations"],
+  "properties": {
+    "explanations": {"type": "array", "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["criterion", "text"],
+      "properties": {
+        "criterion": {"type": "string"},
+        "text": {"type": "string"}
+      }
+    }}
+  }
+}

@@ -93,13 +93,45 @@ class OpenAiClientTest {
     }
 
     @Test
-    void textUseCasesReturnTrimmedText() {
+    void explainRecommendationSendsAllCriteriaInOneCallAndParsesPerCriterionTexts() {
+        server.expect(requestTo(URL)).andExpect(method(HttpMethod.POST))
+                .andExpect(jsonPath("$.text.format.type").value("json_schema"))
+                .andExpect(jsonPath("$.text.format.name").value("explanation"))
+                .andExpect(jsonPath("$.text.format.strict").value(true))
+                .andExpect(jsonPath("$.text.format.schema.required[0]").value("explanations"))
+                .andExpect(jsonPath("$.input[0].content").value(containsString("기준: TIME, 역: 강남")))
+                .andExpect(jsonPath("$.input[0].content").value(containsString("기준: FARE, 역: 사당")))
+                .andExpect(jsonPath("$.input[0].content").value(containsString("\"maxMinutes\":20")))
+                .andRespond(withSuccess(response("{\\\"explanations\\\":["
+                        + "{\\\"criterion\\\":\\\"TIME\\\",\\\"text\\\":\\\"  강남역이 가장 공평해요. \\\"},"
+                        + "{\\\"criterion\\\":\\\"FARE\\\",\\\"text\\\":\\\"" + "x".repeat(600) + "\\\"},"
+                        + "{\\\"criterion\\\":\\\"DISTANCE\\\",\\\"text\\\":\\\"묻지 않은 기준\\\"},"
+                        + "{\\\"criterion\\\":\\\"TIME\\\",\\\"text\\\":\\\"두 번째 TIME\\\"}]}"),
+                        MediaType.APPLICATION_JSON));
+        var result = client.explainRecommendation(new ExplanationRequest(List.of(
+                new ExplanationRequest.Item("TIME", "강남", Map.of("maxMinutes", 20)),
+                new ExplanationRequest.Item("FARE", "사당", Map.of("totalFareWon", 3100)))));
+        // trimmed, cut at the length limit, and only the asked criteria (the first sentence of a repeated one)
+        assertThat(result.texts()).containsOnlyKeys("TIME", "FARE");
+        assertThat(result.texts().get("TIME")).isEqualTo("강남역이 가장 공평해요.");
+        assertThat(result.texts().get("FARE")).hasSize(OpenAiClient.EXPLANATION_MAX_LENGTH);
+        server.verify();
+    }
+
+    @Test
+    void explainRecommendationWithAnUnparsableAnswerMapsToAiUnavailable() {
+        server.expect(requestTo(URL)).andRespond(withSuccess(response("그냥 문장입니다"), MediaType.APPLICATION_JSON));
+        assertThatThrownBy(() -> client.explainRecommendation(new ExplanationRequest(List.of(
+                new ExplanationRequest.Item("TIME", "강남", Map.of())))))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo(ErrorCode.AI_UNAVAILABLE));
+        server.verify();
+    }
+
+    @Test
+    void chatReturnsTrimmedAndLimitedText() {
         server.expect(requestTo(URL)).andExpect(jsonPath("$.text").doesNotExist())
-                .andRespond(withSuccess(response("  강남역이 가장 공평해요. "), MediaType.APPLICATION_JSON));
-        server.expect(requestTo(URL))
                 .andRespond(withSuccess(response("x".repeat(600)), MediaType.APPLICATION_JSON));
-        assertThat(client.explainRecommendation(new ExplanationRequest("공평", "강남", Map.of("avg", 20))).text())
-                .isEqualTo("강남역이 가장 공평해요.");
         assertThat(client.replyToChat(new ChatReplyRequest("어디?", List.of(new ChatTurn("민수", "안녕")), null)).text())
                 .hasSize(OpenAiClient.CHAT_MAX_LENGTH);
         server.verify();

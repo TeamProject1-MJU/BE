@@ -9,7 +9,8 @@ package com.mju.linkro.ai.api;
 public interface AiClient {
     ConditionInterpretation interpretCondition(ConditionRequest req);
 
-    GeneratedText explainRecommendation(ExplanationRequest req);
+    /** One call for every criterion of a recommendation; the result has one sentence per explained criterion. */
+    ExplanationResult explainRecommendation(ExplanationRequest req);
 
     SignReading readSign(SignImage image, SignContext ctx);
 

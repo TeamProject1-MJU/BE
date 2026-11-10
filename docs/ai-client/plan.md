@@ -4,7 +4,7 @@
 ```java
 public interface AiClient {
     ConditionInterpretation interpretCondition(ConditionRequest req);   // #74 필터
-    GeneratedText explainRecommendation(ExplanationRequest req);         // #74 설명
+    ExplanationResult explainRecommendation(ExplanationRequest req);     // #74 설명(기준 전부를 한 번에, 기준별 문장)
     SignReading readSign(SignImage image, SignContext ctx);              // #75
     GeneratedText replyToChat(ChatReplyRequest req);                     // #76
 }
@@ -13,7 +13,7 @@ public interface AiClient {
 - record (불변, 생성자 검증):
   - `ConditionRequest(String conditionText, List<String> memberNicknames, List<String> stationNameHints)`
   - `ConditionInterpretation(Integer maxMinutes, Integer maxTransfers, Integer maxFareWon, List<String> excludeStationNames, List<MemberLimit> memberLimits)` + `MemberLimit(String nickname, Integer maxMinutes)` — API 명세 8.1 filter 항목명, 역명·닉네임 문자열만 반환(매핑·범위검증은 #74)
-  - `ExplanationRequest(String criterion, String stationName, Map<String,Object> facts)` — 서버 계산 수치만 전달
+  - `ExplanationRequest(List<Item(String criterion, String stationName, Map<String,Object> facts)>)` → `ExplanationResult(Map<String,String> texts)`(기준 이름별 문장) — 서버 계산 수치만 전달, 추천 1건당 1회 호출
   - `GeneratedText(String text)`
   - `SignImage(byte[] bytes, String contentType)` (메모리 전용, toString에서 바이트 제외)
   - `SignContext(String stationName, String lineName, DirectionCode direction /*nullable*/, String headsign)` — API 명세 9.1 route/expected`
@@ -54,7 +54,7 @@ linkro:
 
 ## 5. OpenAI 구현
 - RestClient(Kakao 방식, 용도별 read-timeout 두 개의 RestClient). `POST /v1/responses`, Bearer 키.
-- 조건/표지판: `json_schema strict` → Jackson → record. 설명/채팅: 텍스트 출력, 길이 상한 trim.
+- 조건/표지판: `json_schema strict` → Jackson → record. 설명: `json_schema strict`(`ai/schema/explanation.json`), 기준별 문장 길이 상한 trim. 채팅: 텍스트 출력, 길이 상한 trim.
 - 표지판: data URL `input_image`, `detail:"low"`.
 - 재시도 0회(초기). 프롬프트는 "판독·해석·설명만, 수치 생성 금지" 명시.
 
