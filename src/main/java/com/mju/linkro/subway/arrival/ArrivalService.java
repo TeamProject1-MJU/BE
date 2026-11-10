@@ -29,14 +29,18 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
- * Next trains at one station on one line (docs/arrivals-86.md). Upstream answers are cached per (query name,
- * subwayId): {@code cache-ttl} (15 s) for rows, {@code failure-cache-ttl} (5 s) for no data and errors, with one
- * upstream call per key at a time. Remaining seconds are recomputed from each row's recptnDt on every request.
+ * Next trains at one station on one line (docs/arrivals-86.md). One upstream answer holds every line of a station,
+ * so it is cached per query name: {@code cache-ttl} (15 s) for rows, {@code failure-cache-ttl} (5 s) for no data and
+ * errors, with one upstream call per name at a time. The line (subwayId) is picked after the cache, and remaining
+ * seconds are recomputed from each row's recptnDt on every request.
  */
 @Slf4j
 @Service
 public class ArrivalService {
     static final long MAX_AGE_SECONDS = 300;
+    /** Sort weight of one station when only stopsAway is known; never sent. */
+    static final int SECONDS_PER_STOP = 120;
+    private static final java.util.regex.Pattern STOPS_AWAY = java.util.regex.Pattern.compile("^\\[(\\d+)\\]번째 전역");
     private static final DateTimeFormatter RECEIVED = new DateTimeFormatterBuilder()
             .appendPattern("yyyy-MM-dd HH:mm:ss").optionalStart().appendFraction(ChronoField.NANO_OF_SECOND, 0, 9, true)
             .optionalEnd().toFormatter();
@@ -46,29 +50,30 @@ public class ArrivalService {
     private final SeoulArrivalClient client;
     private final Duration ttl;
     private final Duration failureTtl;
+    private final int maxStopsAway;
     private final Clock clock;
-    private final ConcurrentHashMap<Key, Entry> cache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Entry> cache = new ConcurrentHashMap<>();
 
     @Autowired
     public ArrivalService(ArrivalStationRepository stations, ArrivalStationNames names, SeoulArrivalClient client,
                           @Value("${linkro.arrival.cache-ttl:15s}") Duration ttl,
-                          @Value("${linkro.arrival.failure-cache-ttl:5s}") Duration failureTtl) {
-        this(stations, names, client, ttl, failureTtl, Clock.systemUTC());
+                          @Value("${linkro.arrival.failure-cache-ttl:5s}") Duration failureTtl,
+                          @Value("${linkro.arrival.max-stops-away:10}") int maxStopsAway) {
+        this(stations, names, client, ttl, failureTtl, maxStopsAway, Clock.systemUTC());
     }
 
     ArrivalService(ArrivalStationRepository stations, ArrivalStationNames names, SeoulArrivalClient client,
-                   Duration ttl, Duration failureTtl, Clock clock) {
+                   Duration ttl, Duration failureTtl, int maxStopsAway, Clock clock) {
         this.stations = stations;
         this.names = names;
         this.client = client;
         this.ttl = ttl;
         this.failureTtl = failureTtl;
+        this.maxStopsAway = maxStopsAway;
         this.clock = clock;
     }
 
-    private record Key(String queryName, String subwayId) {}
-
-    /** One upstream answer for a key: rows already narrowed to the subwayId, no data, or a failure. */
+    /** One upstream answer for a query name: every row of every line, no data, or a failure. */
     private sealed interface Answer permits Found, Empty, Failed {}
 
     private record Found(List<Arrival> arrivals, Instant receivedAt) implements Answer {}
@@ -92,7 +97,7 @@ public class ArrivalService {
 
         String lineCode = node.get().lineCode();
         String queryName = names.queryName(lineCode, station.name());
-        Answer answer = answer(new Key(queryName, subwayId.get()));
+        Answer answer = answer(queryName);
         if (answer instanceof Failed) return ArrivalResponse.unavailable(Reason.UPSTREAM_ERROR, null);
         if (answer instanceof Empty empty) return ArrivalResponse.unavailable(Reason.NO_DATA, format(empty.receivedAt()));
         Found found = (Found) answer;
@@ -101,11 +106,19 @@ public class ArrivalService {
         Instant now = clock.instant();
         List<Train> trains = new ArrayList<>();
         for (Arrival arrival : found.arrivals()) {
-            if (!direction.test(arrival)) continue;
+            // The cached answer has every line of the station: pick this line here.
+            if (!subwayId.get().equals(arrival.subwayId()) || !direction.test(arrival)) continue;
             train(arrival, now).ifPresent(trains::add);
         }
-        trains.sort(Comparator.comparing(Train::secondsUntil, Comparator.nullsLast(Comparator.naturalOrder())));
+        trains.sort(Comparator.comparingLong(ArrivalService::sortKey));
         return new ArrivalResponse(true, null, format(found.receivedAt()), List.copyOf(trains.subList(0, Math.min(query.limit(), trains.size()))));
+    }
+
+    /** secondsUntil, else stopsAway x 120 s (sorting only), else last; ties keep the upstream order. */
+    private static long sortKey(Train train) {
+        if (train.secondsUntil() != null) return train.secondsUntil();
+        if (train.stopsAway() != null) return (long) train.stopsAway() * SECONDS_PER_STOP;
+        return Long.MAX_VALUE;
     }
 
     /**
@@ -130,7 +143,11 @@ public class ArrivalService {
         return arrival -> wanted == SeoulSubwayIds.direction(arrival.updnLine());
     }
 
-    /** Rule 3: arvlCd 0/1 -> 0 s, 2 -> dropped, otherwise barvlDt minus the row's age; rows older than 5 min dropped. */
+    /**
+     * Rule 3: rows older than 5 min are dropped. arvlCd 0/1 -> 0 s; 2 -> dropped; otherwise barvlDt minus the row's age,
+     * but a barvlDt of 0, empty or not a number is unknown (null), never 0. "[N]번째 전역" gives stopsAway N; rows more
+     * than {@code max-stops-away} stops away are dropped.
+     */
     private Optional<Train> train(Arrival arrival, Instant now) {
         Instant received;
         try {
@@ -143,15 +160,26 @@ public class ArrivalService {
         if (age > MAX_AGE_SECONDS) return Optional.empty();
         String code = arrival.arvlCd() == null ? "" : arrival.arvlCd().strip();
         if ("2".equals(code)) return Optional.empty();
+        Integer stopsAway = stopsAway(arrival.arvlMsg2());
+        if (stopsAway != null && stopsAway > maxStopsAway) return Optional.empty();
         Integer seconds;
         if ("0".equals(code) || "1".equals(code)) {
             seconds = 0;
         } else {
             Integer barvl = number(arrival.barvlDt());
-            seconds = barvl == null ? null : (int) Math.max(0, barvl - age);
+            // barvlDt 0 with arvlCd 99 comes with "[N]번째 전역": the time is unknown, not "arriving now".
+            seconds = barvl == null || barvl == 0 ? null : (int) Math.max(0, barvl - age);
         }
-        return Optional.of(new Train(arrival.bstatnNm(), SeoulSubwayIds.direction(arrival.updnLine()), seconds,
-                arrival.arvlMsg2(), "1".equals(arrival.lstcarAt() == null ? null : arrival.lstcarAt().strip())));
+        boolean express = "급행".equals(arrival.btrainSttus())
+                || (arrival.trainLineNm() != null && arrival.trainLineNm().contains("(급행)"));
+        return Optional.of(new Train(arrival.bstatnNm(), SeoulSubwayIds.direction(arrival.updnLine()), seconds, stopsAway,
+                arrival.arvlMsg2(), "1".equals(arrival.lstcarAt()), express));
+    }
+
+    private static Integer stopsAway(String message) {
+        if (message == null) return null;
+        var matcher = STOPS_AWAY.matcher(message);
+        return matcher.find() ? Integer.valueOf(matcher.group(1)) : null;
     }
 
     private static Integer number(String raw) {
@@ -163,41 +191,39 @@ public class ArrivalService {
         }
     }
 
-    /** Cached answer, or one upstream call shared by every request for the key that arrives meanwhile. */
-    private Answer answer(Key key) {
+    /** Cached answer, or one upstream call shared by every request for the name that arrives meanwhile. */
+    private Answer answer(String queryName) {
         Instant now = clock.instant();
-        Entry current = cache.get(key);
+        Entry current = cache.get(queryName);
         if (current != null && !current.expired(now)) return join(current);
         CompletableFuture<Answer> mine = new CompletableFuture<>();
         Entry pending = new Entry(mine, Instant.MAX);
-        Entry winner = cache.compute(key, (k, old) -> old == null || old.expired(now) ? pending : old);
+        Entry winner = cache.compute(queryName, (k, old) -> old == null || old.expired(now) ? pending : old);
         if (winner != pending) return join(winner);
-        Answer answer = call(key);
+        Answer answer = call(queryName);
         mine.complete(answer);
-        cache.replace(key, pending, new Entry(mine, clock.instant().plus(answer instanceof Found ? ttl : failureTtl)));
+        cache.replace(queryName, pending, new Entry(mine, clock.instant().plus(answer instanceof Found ? ttl : failureTtl)));
         return answer;
     }
 
-    private Answer call(Key key) {
+    private Answer call(String queryName) {
         long started = System.nanoTime();
         try {
-            Fetch fetch = client.fetch(key.queryName());
+            Fetch fetch = client.fetch(queryName);
             long elapsedMs = (System.nanoTime() - started) / 1_000_000;
             if (fetch instanceof NoData noData) {
-                log.info("Seoul arrival {} {}: INFO-200 (no data) in {} ms", key.queryName(), key.subwayId(), elapsedMs);
+                log.info("Seoul arrival {}: INFO-200 (no data) in {} ms", queryName, elapsedMs);
                 return new Empty(noData.receivedAt());
             }
             Rows rows = (Rows) fetch;
-            List<Arrival> line = rows.arrivals().stream().filter(arrival -> key.subwayId().equals(arrival.subwayId())).toList();
-            log.info("Seoul arrival {} {}: INFO-000, {} of {} rows in {} ms", key.queryName(), key.subwayId(), line.size(),
-                    rows.arrivals().size(), elapsedMs);
-            return new Found(line, rows.receivedAt());
+            log.info("Seoul arrival {}: INFO-000, {} rows in {} ms", queryName, rows.arrivals().size(), elapsedMs);
+            return new Found(rows.arrivals(), rows.receivedAt());
         } catch (ArrivalUpstreamException exception) {
             // The message is safe by construction (no URL, no key).
-            log.warn("Seoul arrival {} {}: {}", key.queryName(), key.subwayId(), exception.getMessage());
+            log.warn("Seoul arrival {}: {}", queryName, exception.getMessage());
             return new Failed();
         } catch (RuntimeException exception) {
-            log.warn("Seoul arrival {} {}: failed ({})", key.queryName(), key.subwayId(), exception.getClass().getSimpleName());
+            log.warn("Seoul arrival {}: failed ({})", queryName, exception.getClass().getSimpleName());
             return new Failed();
         }
     }

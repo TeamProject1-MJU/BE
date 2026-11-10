@@ -38,7 +38,7 @@ public class SeoulArrivalClient {
 
     public record NoData(Instant receivedAt) implements Fetch {}
 
-    /** The fields used from one realtimeArrivalList row; values as the API sends them (strings). */
+    /** The fields used from one realtimeArrivalList row, as strings with surrounding spaces removed. */
     public record Arrival(String subwayId, String updnLine, String trainLineNm, String bstatnNm, String statnId,
                           String statnFid, String statnTid, String barvlDt, String arvlCd, String arvlMsg2,
                           String arvlMsg3, String recptnDt, String lstcarAt, String btrainSttus, String btrainNo) {}
@@ -125,8 +125,9 @@ public class SeoulArrivalClient {
         return new Rows(List.copyOf(arrivals), receivedAt);
     }
 
+    /** Trimmed before any comparison or use. */
     private static String text(JsonNode row, String field) {
         JsonNode value = row.path(field);
-        return value.isMissingNode() || value.isNull() ? null : value.asString();
+        return value.isMissingNode() || value.isNull() ? null : value.asString().strip();
     }
 }

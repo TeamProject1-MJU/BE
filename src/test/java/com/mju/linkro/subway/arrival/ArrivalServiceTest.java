@@ -55,6 +55,8 @@ class ArrivalServiceTest {
         station(80, "불광");
         station(160, "응암");
         station(161, " 새절 ");
+        station(3, "종각");
+        node(3, 1, 1003, "1", "152");
         node(21, 2, 1021, "2", "212");
         node(21, 7, 7021, "7", "2729");
         node(20, 2, 1020, "2", "211");
@@ -69,10 +71,15 @@ class ArrivalServiceTest {
     }
 
     private ArrivalService service(String key) {
+        return service(key, 10);
+    }
+
+    private ArrivalService service(String key, int maxStopsAway) {
         RestClient.Builder builder = RestClient.builder();
         server = MockRestServiceServer.bindTo(builder).ignoreExpectOrder(true).build();
         SeoulArrivalClient client = new SeoulArrivalClient(builder.build(), BASE, key, clock);
-        return new ArrivalService(stations, new ArrivalStationNames(), client, Duration.ofSeconds(15), Duration.ofSeconds(5), clock);
+        return new ArrivalService(stations, new ArrivalStationNames(), client, Duration.ofSeconds(15), Duration.ofSeconds(5),
+                maxStopsAway, clock);
     }
 
     private void station(long id, String name) {
@@ -216,12 +223,21 @@ class ArrivalServiceTest {
     }
 
     @Test
-    void answersAreCachedPerNameAndLine() {
-        respond("konkuk.json", ExpectedCount.twice());
+    void bothLinesOfAStationShareOneCall() {
+        // One upstream answer holds 2호선 and 7호선 of 건대입구: the line is picked after the cache.
+        respond("konkuk.json", ExpectedCount.once());
+        assertThat(get(21, "2", null, null, "10").trains()).hasSize(4).allSatisfy(t -> assertThat(t.destinationName()).isEqualTo("성수"));
+        assertThat(get(21, "7", null, null, "10").trains()).hasSize(4).allSatisfy(t -> assertThat(t.destinationName()).isIn("장암", "석남"));
+        server.verify();
+    }
+
+    @Test
+    void answersAreCachedPerQueryName() {
+        respond("konkuk.json", ExpectedCount.once());
         get(21, "2", null, null, null);
         clock.advance(Duration.ofSeconds(14));
         get(21, "2", null, "INNER", null);                  // cache hit
-        get(21, "7", null, null, null);                     // same name, other subwayId: second call
+        get(21, "7", null, null, null);                     // same name, other line: still a cache hit
         server.verify();
 
         service = service(KEY);
@@ -250,6 +266,33 @@ class ArrivalServiceTest {
         clock.advance(Duration.ofSeconds(1));
         get(21, "2", null, null, null);                     // 5 s later: called again
         server.verify();
+    }
+
+    @Test
+    void stopsAwayExpressAndUnknownTimes() {
+        respond("jonggak.json", ExpectedCount.once());
+        ArrivalResponse response = get(3, "1", null, null, "10");
+        // barvlDt 0 with "[N]번째 전역" is unknown (null), sorted at N x 120 s; more than 10 stops away is dropped.
+        assertThat(response.trains()).extracting(t -> t.secondsUntil() + "/" + t.stopsAway() + " " + t.message() + (t.express() ? " 급행" : ""))
+                .containsExactly("0/null 종각 도착 급행", "230/null 4분 후 급행", "null/2 [2]번째 전역 (종로5가)", "290/null 5분 후",
+                        "470/null 8분 후 급행", "null/4 [4]번째 전역 (남영)", "null/7 [7]번째 전역 (청량리)");
+        // Spaces around " 상행 " were trimmed, so its direction is known.
+        assertThat(response.trains().get(1).directionCode()).isEqualTo(DirectionCode.UP);
+    }
+
+    @Test
+    void directionComesFromUpdnLineNotTheDestination() {
+        respond("jonggak.json", ExpectedCount.once());
+        // A 하행 train bound for 광운대 is still DOWN.
+        assertThat(get(3, "1", null, "DOWN", "10").trains()).extracting(Train::destinationName)
+                .containsExactly("인천", "신창", "광운대");
+    }
+
+    @Test
+    void maxStopsAwayIsASetting() {
+        service = service(KEY, 25);
+        respond("jonggak.json", ExpectedCount.once());
+        assertThat(get(3, "1", null, null, "10").trains()).extracting(Train::stopsAway).contains(24).doesNotContain(26, 30);
     }
 
     @Test

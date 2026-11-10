@@ -154,7 +154,9 @@ class ArrivalApiPostgresTest {
         assertThat(train.get("lastTrain").asBoolean()).isFalse();
         List<String> fields = new ArrayList<>();
         train.propertyNames().forEach(fields::add);
-        assertThat(fields).containsExactly("destinationName", "directionCode", "secondsUntil", "message", "lastTrain");
+        assertThat(fields).containsExactly("destinationName", "directionCode", "secondsUntil", "stopsAway", "message", "lastTrain", "express");
+        assertThat(train.get("stopsAway").isNull()).isTrue();
+        assertThat(train.get("express").asBoolean()).isFalse();
         assertThat(output.getAll()).doesNotContain("FAKE").doesNotContain("/api/subway/");
     }
 

@@ -13,7 +13,7 @@ public record ArrivalResponse(
         @Schema(description = "available=false일 때 이유. 정상이면 null", types = {"string", "null"}) Reason reason,
         @Schema(description = "서버가 외부 응답을 받은 시각(Asia/Seoul 오프셋). 외부 응답이 없으면 null",
                 example = "2026-11-10T08:00:05+09:00", types = {"string", "null"}) String receivedAt,
-        @Schema(description = "secondsUntil 오름차순(null은 뒤), 최대 limit건") List<Train> trains) {
+        @Schema(description = "secondsUntil 오름차순. secondsUntil이 없으면 stopsAway×120초로 대신 정렬하고, 둘 다 없으면 뒤. 최대 limit건") List<Train> trains) {
 
     public enum Reason {
         /** 1~8호선이 아니거나 그 역에 없는 노선, 또는 미지원 역 */
@@ -27,13 +27,15 @@ public record ArrivalResponse(
     }
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
-    @Schema(name = "ArrivalTrainData", requiredProperties = {"destinationName", "directionCode", "secondsUntil", "message", "lastTrain"})
+    @Schema(name = "ArrivalTrainData", requiredProperties = {"destinationName", "directionCode", "secondsUntil", "stopsAway", "message", "lastTrain", "express"})
     public record Train(
             @Schema(description = "종착역(bstatnNm)", example = "장암") String destinationName,
             @Schema(description = "updnLine 변환값(상행 UP, 하행 DOWN, 내선 INNER, 외선 OUTER). 그 밖이면 null", example = "UP", types = {"string", "null"}) DirectionCode directionCode,
-            @Schema(description = "도착까지 남은 초(외부 수신 시각 기준 보정). 계산할 수 없으면 null", example = "170", types = {"integer", "null"}) Integer secondsUntil,
+            @Schema(description = "도착까지 남은 초(외부 수신 시각 기준 보정). 알 수 없으면 null(예: barvlDt 0인 \"[N]번째 전역\")", example = "170", types = {"integer", "null"}) Integer secondsUntil,
+            @Schema(description = "arvlMsg2가 \"[N]번째 전역\"이면 N, 아니면 null. N이 10을 넘는 열차는 응답에서 뺀다", example = "2", types = {"integer", "null"}) Integer stopsAway,
             @Schema(description = "외부 안내 문구(arvlMsg2) 그대로", example = "2분 50초 후") String message,
-            @Schema(description = "lstcarAt == \"1\"", example = "false") boolean lastTrain) {}
+            @Schema(description = "lstcarAt == \"1\"", example = "false") boolean lastTrain,
+            @Schema(description = "급행 열차(btrainSttus가 \"급행\"이거나 trainLineNm에 \"(급행)\")", example = "false") boolean express) {}
 
     public static ArrivalResponse unavailable(Reason reason, String receivedAt) {
         return new ArrivalResponse(false, reason, receivedAt, List.of());
