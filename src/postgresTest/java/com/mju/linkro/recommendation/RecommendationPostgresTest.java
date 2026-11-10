@@ -109,13 +109,18 @@ class RecommendationPostgresTest {
         // trips keep only the departure station id; the name in the response is filled in on read
         assertThat(jdbc.queryForObject("select count(*) from recommendation_results, jsonb_array_elements(trips) trip "
                 + "where trip ? 'departureStationId' and not trip ? 'departureStation'", Integer.class)).isEqualTo(6);
-        // congestion.pct is stored as an integer, and only a member who does not travel pays 0 won
+        // congestion.pct is stored as an integer; member departure stations are never recommended or shown nearby
         assertThat(jdbc.queryForObject("select count(*) from recommendation_results, jsonb_array_elements(trips) trip "
                 + "where trip -> 'congestion' ->> 'pct' ~ '[.]'", Integer.class)).isZero();
-        assertThat(jdbc.queryForObject("select count(*) from recommendation_results, jsonb_array_elements(trips) trip "
-                + "where (trip ->> 'fareWon')::int = 0 and (trip ->> 'travelMinutes')::int > 0", Integer.class)).isZero();
-        assertThat(jdbc.queryForObject("select count(*) from recommendation_results, jsonb_array_elements(trips) trip "
-                + "where (trip ->> 'fareWon')::int > 0 and (trip ->> 'travelMinutes')::int = 0", Integer.class)).isZero();
+        assertThat(created.appliedConstraints().excludeStationIds()).isEmpty();
+        assertThat(created.results()).allSatisfy(result -> {
+            assertThat(result.recommendedStation().id()).isNotIn(gangnam, sadang);
+            assertThat(result.nearbyAlternatives()).extracting(nearby -> nearby.station().id()).doesNotContain(gangnam, sadang);
+            assertThat(result.participantTimes()).allSatisfy(trip -> {
+                assertThat(trip.travelMinutes()).isPositive();
+                assertThat(trip.fareWon()).isPositive();
+            });
+        });
         assertThat(jdbc.queryForObject("select jsonb_typeof(criteria) || jsonb_array_length(criteria -> 'participants') from recommendation_runs", String.class))
                 .isEqualTo("object2");
         assertThat(jdbc.queryForObject("select metric_value::int from recommendation_results where criterion = 'TIME'", Integer.class))
@@ -166,6 +171,18 @@ class RecommendationPostgresTest {
         jdbc.update("update meeting_rooms set appointment_at = ?::timestamptz where id = ?", "2026-11-12T10:00:00Z", room);
         jdbc.update("update meeting_members set departure_station_id = ? where user_id = ?", sadang, member);
         assertThat(service.latest(owner, room).isStale()).isFalse();
+    }
+
+    @Test
+    void bothMembersAtTheSameStationStillExcludeThatStation() {
+        jdbc.update("update meeting_members set departure_station_id = ? where user_id = ?", gangnam, member);
+        RecommendationResponse created = service.create(owner, room, null);
+        assertThat(created.results()).isNotEmpty().allSatisfy(result -> {
+            assertThat(result.recommendedStation().id()).isNotEqualTo(gangnam);
+            assertThat(result.nearbyAlternatives()).extracting(nearby -> nearby.station().id()).doesNotContain(gangnam);
+            assertThat(result.participantTimes()).allSatisfy(trip -> assertThat(trip.travelMinutes()).isPositive());
+        });
+        assertThat(created.appliedConstraints().excludeStationIds()).isEmpty();
     }
 
     @Test

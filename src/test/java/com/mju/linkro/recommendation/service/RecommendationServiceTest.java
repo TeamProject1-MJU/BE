@@ -238,14 +238,16 @@ class RecommendationServiceTest {
 
     @Test
     void createsOneResultPerCriterionAndStoresThem() {
-        repository.neighbours.put(1L, List.of(
-                new RecommendationRepository.NeighbourRow(2, "역2", 2, 5, "MAIN", 6, "MAIN"),
-                new RecommendationRepository.NeighbourRow(99, "역99", 2, 5, "MAIN", 4, "MAIN")));   // 99 is not a candidate
+        repository.neighbours.put(3L, List.of(
+                new RecommendationRepository.NeighbourRow(1, "역1", 2, 6, "MAIN", 4, "MAIN"),   // A's departure, must be dropped
+                new RecommendationRepository.NeighbourRow(2, "역2", 2, 6, "MAIN", 5, "MAIN"),   // B's departure, must be dropped
+                new RecommendationRepository.NeighbourRow(4, "역4", 2, 6, "MAIN", 8, "MAIN"),
+                new RecommendationRepository.NeighbourRow(99, "역99", 2, 6, "MAIN", 3, "MAIN")));   // 99 is not a candidate
 
         RecommendationResponse response = create(null);
 
         assertThat(response.results()).extracting(Result::criterion).containsExactly("TIME", "FARE", "DISTANCE");
-        assertThat(response.results()).extracting(result -> result.recommendedStation().id()).containsExactly(1L, 3L, 2L);
+        assertThat(response.results()).extracting(result -> result.recommendedStation().id()).containsExactly(3L, 3L, 3L);
         assertThat(response.results()).extracting(Result::explanationSource).containsOnly("AI");
         assertThat(response.isStale()).isFalse();
         assertThat(response.staleReasons()).isEmpty();
@@ -257,43 +259,50 @@ class RecommendationServiceTest {
         // stored: one run, one row per criterion (unique), metric_value in minutes / won / metres
         assertThat(repository.runs).hasSize(1);
         assertThat(repository.results).extracting(RecommendationRepository.ResultRow::criterion).containsExactly("TIME", "FARE", "DISTANCE");
-        assertThat(repository.results).extracting(row -> row.metricValue().intValue()).containsExactly(10, 1200, 5000);
+        assertThat(repository.results).extracting(row -> row.metricValue().intValue()).containsExactly(20, 1200, 7000);
         assertThat(repository.results).extracting(RecommendationRepository.ResultRow::runId).containsOnly(repository.runs.get(0).id());
         assertThat(repository.results).extracting(RecommendationRepository.ResultRow::reasonSource).containsOnly("AI");
 
         // TIME result in detail
         Result time = response.results().get(0);
-        assertThat(time.recommendedStation().name()).isEqualTo("역1");
-        assertThat(time.metrics().maxMinutes()).isEqualTo(10);
-        assertThat(time.metrics().averageMinutes()).isEqualTo(5.0);
-        assertThat(time.metrics().maxDifferenceMinutes()).isEqualTo(10);
-        assertThat(time.metrics().averageFare()).isEqualTo(750);
-        assertThat(time.metrics().totalTransfers()).isZero();
+        assertThat(time.recommendedStation().name()).isEqualTo("역3");
+        assertThat(time.metrics().maxMinutes()).isEqualTo(20);
+        assertThat(time.metrics().averageMinutes()).isEqualTo(17.5);
+        assertThat(time.metrics().maxDifferenceMinutes()).isEqualTo(5);
+        assertThat(time.metrics().averageFare()).isEqualTo(600);
+        assertThat(time.metrics().totalTransfers()).isEqualTo(2);
         assertThat(time.participantTimes()).hasSize(2);
         var a = time.participantTimes().get(0);
         var b = time.participantTimes().get(1);
         assertThat(a.userId()).isEqualTo(USER_A);
-        assertThat(a.travelMinutes()).isZero();
-        assertThat(a.segments()).isEmpty();
-        assertThat(a.congestion()).isNull();                                   // no data for a trip that does not move
-        assertThat(a.departureAt()).isEqualTo("2026-11-12T19:00:00+09:00");   // appointment − 0 minutes
+        assertThat(a.travelMinutes()).isEqualTo(15);
+        assertThat(a.fareWon()).isEqualTo(600);
+        assertThat(a.distanceM()).isEqualTo(3000);
+        assertThat(a.segments()).hasSize(1);
+        assertThat(a.congestion().pct()).isEqualTo(92);   // whole number like the route API (92.5 from the fake lookup is cut by intValue, as RouteSearchService does)
+        assertThat(a.departureAt()).isEqualTo("2026-11-12T18:45:00+09:00");   // appointment − 15 minutes
         assertThat(b.nickname()).isEqualTo("인준");
         assertThat(b.departureStation().id()).isEqualTo(2L);
-        assertThat(b.travelMinutes()).isEqualTo(10);
-        assertThat(b.fareWon()).isEqualTo(1500);
-        assertThat(b.distanceM()).isEqualTo(6500);
-        assertThat(b.departureAt()).isEqualTo("2026-11-12T18:50:00+09:00");    // appointment − 10 minutes
-        assertThat(b.congestion().pct()).isEqualTo(92);   // whole number like the route API (92.5 from the fake lookup is cut by intValue, as RouteSearchService does)
+        assertThat(b.travelMinutes()).isEqualTo(20);
+        assertThat(b.fareWon()).isEqualTo(600);
+        assertThat(b.distanceM()).isEqualTo(4000);
+        assertThat(b.departureAt()).isEqualTo("2026-11-12T18:40:00+09:00");    // appointment − 20 minutes
+        assertThat(b.congestion().pct()).isEqualTo(92);
         assertThat(b.segments()).hasSize(1);
         assertThat(b.segments().get(0).lineName()).isEqualTo("2호선");
         assertThat(b.segments().get(0).stationCount()).isEqualTo(3);
-        // nearby: station 2 only (99 cannot be reached by everyone)
+        // nearby: only station 4 (1 and 2 are departures, 99 cannot be reached by everyone)
         assertThat(time.nearbyAlternatives()).hasSize(1);
-        assertThat(time.nearbyAlternatives().get(0).station().id()).isEqualTo(2L);
+        assertThat(time.nearbyAlternatives().get(0).station().id()).isEqualTo(4L);
         assertThat(time.nearbyAlternatives().get(0).relation()).isEqualTo("NEXT");
         assertThat(time.nearbyAlternatives().get(0).relationLabel()).isEqualTo("최적역에서 1정거장");
-        assertThat(time.nearbyAlternatives().get(0).maxMinutes()).isEqualTo(10);
-        assertThat(time.nearbyAlternatives().get(0).totalFareWon()).isEqualTo(1500);
+        assertThat(time.nearbyAlternatives().get(0).maxMinutes()).isEqualTo(25);
+        assertThat(time.nearbyAlternatives().get(0).totalFareWon()).isEqualTo(3000);
+        assertThat(response.appliedConstraints().excludeStationIds()).isEmpty();
+        assertThat(response.results()).allSatisfy(result -> {
+            assertThat(result.recommendedStation().id()).isNotIn(1L, 2L);
+            assertThat(result.nearbyAlternatives()).extracting(n -> n.station().id()).doesNotContain(1L, 2L);
+        });
 
         // the departure of someone without an appointment is the request time
         assertThat(routes.shortestPathsFromCalls).isEqualTo(2);
@@ -315,15 +324,35 @@ class RecommendationServiceTest {
 
     @Test
     void conditionTextIsInterpretedAndEchoedWithTheAppliedConstraints() {
-        RecommendationResponse response = create(new RecommendationRequest("12분 이내로 가자", null));
-        assertThat(response.conditionText()).isEqualTo("12분 이내로 가자");
-        assertThat(response.appliedConstraints().maxMinutes()).isEqualTo(12);
-        // st3 (20 min) and st4 (25 min) are out, so FARE falls back from st3 to st1/st2
-        assertThat(response.results()).extracting(result -> result.recommendedStation().id()).containsExactly(1L, 1L, 2L);
-        assertThat(service.latest(USER_A, roomId).appliedConstraints().maxMinutes()).isEqualTo(12);
+        RecommendationResponse response = create(new RecommendationRequest("22분 이내로 가자", null));
+        assertThat(response.conditionText()).isEqualTo("22분 이내로 가자");
+        assertThat(response.appliedConstraints().maxMinutes()).isEqualTo(22);
+        // st4 (25 min) is out; st1/st2 are departures, so every criterion keeps st3.
+        assertThat(response.results()).extracting(result -> result.recommendedStation().id()).containsExactly(3L, 3L, 3L);
+        assertThat(service.latest(USER_A, roomId).appliedConstraints().maxMinutes()).isEqualTo(22);
+    }
+
+    @Test
+    void departureExclusionIsNotWrittenIntoAppliedExcludeStationIds() {
+        RecommendationResponse response = create(new RecommendationRequest(null, new Filter(null, null, null, List.of(4L), null)));
+        assertThat(response.appliedConstraints().excludeStationIds()).containsExactly(4L);
+        assertThat(response.results()).isNotEmpty().allSatisfy(result ->
+                assertThat(result.recommendedStation().id()).isEqualTo(3L));
     }
 
     // ---------------------------------------------------------------- no candidates
+
+    @Test
+    void noCandidateWhenDepartureExclusionLeavesNothingUsesTheSameMessage() {
+        // 10 minutes would have left the two departure stations under the old rule; with them excluded nothing remains.
+        RecommendationResponse response = create(new RecommendationRequest(null, new Filter(10, null, null, null, null)));
+        assertThat(response.results()).isEmpty();
+        assertThat(response.message()).isEqualTo("조건에 맞는 중간역이 없습니다. 조건을 완화해 보세요.");
+        assertThat(response.appliedConstraints().maxMinutes()).isEqualTo(10);
+        assertThat(response.appliedConstraints().excludeStationIds()).isEmpty();
+        assertThat(repository.runs).hasSize(1);
+        assertThat(repository.results).isEmpty();
+    }
 
     @Test
     void noCandidateIsASuccessWithAnEmptyListAndKeepsTheRun() {
@@ -378,10 +407,10 @@ class RecommendationServiceTest {
         var captor = org.mockito.ArgumentCaptor.forClass(com.mju.linkro.ai.api.ExplanationRequest.class);
         verify(ai, times(1)).explainRecommendation(captor.capture());
         assertThat(captor.getValue().items()).extracting(item -> item.criterion()).containsExactly("TIME", "FARE", "DISTANCE");
-        assertThat(captor.getValue().items()).extracting(item -> item.stationName()).containsExactly("역1", "역3", "역2");
+        assertThat(captor.getValue().items()).extracting(item -> item.stationName()).containsExactly("역3", "역3", "역3");
         // the condition is interpreted separately (only when there is a conditionText), also exactly once
         verify(ai, times(0)).interpretCondition(any());
-        create(new RecommendationRequest("12분 이내", null));
+        create(new RecommendationRequest("22분 이내", null));
         verify(ai, times(1)).interpretCondition(any());
         verify(ai, times(2)).explainRecommendation(any());
     }
@@ -392,9 +421,9 @@ class RecommendationServiceTest {
         RecommendationResponse response = create(null);
         assertThat(response.results()).extracting(Result::explanationSource).containsOnly("TEMPLATE");
         assertThat(response.results()).extracting(Result::explanation).containsExactly(
-                "가장 오래 걸리는 사람이 10분으로 모두에게 가장 공평한 역입니다.",
+                "가장 오래 걸리는 사람이 20분으로 모두에게 가장 공평한 역입니다.",
                 "참여자 총요금이 1,200원으로 가장 저렴한 역입니다.",
-                "참여자 이동거리 합이 5.0km로 가장 짧은 역입니다.");
+                "참여자 이동거리 합이 7.0km로 가장 짧은 역입니다.");
         verify(ai, times(1)).explainRecommendation(any());
         assertThat(repository.results).extracting(RecommendationRepository.ResultRow::reasonSource).containsOnly("TEMPLATE");
     }
@@ -406,7 +435,7 @@ class RecommendationServiceTest {
                 "TIME", "가장 오래 걸리는 사람이 99분입니다.", "FARE", "총요금이 1,200원입니다.")));
         RecommendationResponse response = build(wrong).create(USER_A, roomId, null);
         assertThat(response.results()).extracting(Result::explanationSource).containsExactly("TEMPLATE", "AI", "TEMPLATE");
-        assertThat(response.results().get(0).explanation()).isEqualTo("가장 오래 걸리는 사람이 10분으로 모두에게 가장 공평한 역입니다.");
+        assertThat(response.results().get(0).explanation()).isEqualTo("가장 오래 걸리는 사람이 20분으로 모두에게 가장 공평한 역입니다.");
         assertThat(response.results().get(1).explanation()).isEqualTo("총요금이 1,200원입니다.");
         assertThat(response.results().get(2).explanation()).startsWith("참여자 이동거리 합이");   // the AI left DISTANCE out
         verify(wrong, times(1)).explainRecommendation(any());
