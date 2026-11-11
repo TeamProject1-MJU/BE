@@ -5,6 +5,7 @@ import com.mju.linkro.common.response.ApiResponse;
 import com.mju.linkro.room.dto.RoomResponses;
 import com.mju.linkro.subway.arrival.dto.ArrivalResponse;
 import com.mju.linkro.route.dto.RouteSearchResponse;
+import com.mju.linkro.sign.dto.SignCheckResponse;
 import com.mju.linkro.subway.congestion.dto.CongestionResponse;
 import com.mju.linkro.subway.station.dto.StationResponses;
 import com.mju.linkro.user.dto.*;
@@ -47,6 +48,8 @@ public final class ApiDocumentation {
     public record StationPageResponse(@Schema(description = "항상 true", example = "true") boolean success, StationResponses.StationPage data) {}
     @Schema(name = "RouteSearchResponse", requiredProperties = {"success", "data"})
     public record RouteSearch(@Schema(description = "항상 true", example = "true") boolean success, RouteSearchResponse data) {}
+    @Schema(name = "SignCheckResponseEnvelope", requiredProperties = {"success", "data"})
+    public record SignCheck(@Schema(description = "항상 true", example = "true") boolean success, SignCheckResponse data) {}
     @Schema(name = "CongestionResponse", requiredProperties = {"success", "data"})
     public record Congestion(@Schema(description = "항상 true", example = "true") boolean success, CongestionResponse data) {}
     @Schema(name = "ArrivalResponse", requiredProperties = {"success", "data"})

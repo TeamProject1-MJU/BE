@@ -19,6 +19,11 @@ public class StationReadRepository {
                 (rs, n) -> new Line(rs.getLong("id"), rs.getString("line_code"), rs.getString("name"), rs.getString("color")));
     }
 
+    public Optional<String> lineName(long lineId) {
+        return jdbc.queryForList("select name from subway_lines where id = :id", Map.of("id", lineId), String.class)
+                .stream().findFirst();
+    }
+
     /** stations table only, so callers inside a room transaction touch no other table. */
     public Optional<StationInfo> info(long stationId) {
         return jdbc.query("select id, name, latitude, longitude, is_supported from stations where id = :id",

@@ -9,6 +9,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -78,6 +79,14 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
             result.getResolvableErrors().forEach(error -> addReason(details, key, error.getDefaultMessage()));
         });
         return new ResponseEntity<>(body(ErrorCode.VALIDATION_ERROR, details), headers, status);
+    }
+
+    /** The only multipart endpoint is the sign photo (9.1), whose size error is IMAGE_INVALID (400). */
+    @Override
+    protected ResponseEntity<Object> handleMaxUploadSizeExceededException(
+            MaxUploadSizeExceededException exception, HttpHeaders headers,
+            HttpStatusCode status, WebRequest request) {
+        return failure(ErrorCode.IMAGE_INVALID, Map.of());
     }
 
     /** Duplicate reasons use the lexicographically smallest message, independent of iteration order. */

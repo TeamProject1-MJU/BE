@@ -61,6 +61,11 @@ class GlobalExceptionHandlerTest {
         assertThat(result.getResponse().getContentAsString()).isEqualTo("{\"data\":null,\"success\":true}");
     }
 
+    @Test
+    void uploadOverTheSizeLimitIsImageInvalid400() throws Exception {
+        failure(mvc.perform(get("/test/too-large")), 400, "IMAGE_INVALID");
+    }
+
     @ParameterizedTest
     @EnumSource(ErrorCode.class)
     void businessExceptionsPreserveEveryCodeAndStatus(ErrorCode code) throws Exception {
@@ -255,6 +260,9 @@ class GlobalExceptionHandlerTest {
         ApiResponse<Void> cause(@RequestParam("code") ErrorCode code) {
             throw new BusinessException(code, new IllegalStateException("private upstream secret"));
         }
+
+        @GetMapping("/too-large")
+        ApiResponse<Void> tooLarge() { throw new org.springframework.web.multipart.MaxUploadSizeExceededException(5L * 1024 * 1024); }
 
         @GetMapping("/unexpected")
         ApiResponse<Void> unexpected() { throw new RuntimeException("secret SQL information"); }
