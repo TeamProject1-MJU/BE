@@ -61,6 +61,24 @@ public class StationProposalRepository {
                 Map.of("id", proposalId, "room", roomId), (rs,n) -> rs.getObject(1, UUID.class)).stream().findFirst();
     }
 
+    public Optional<UUID> voteByUser(UUID roomId, UUID userId) {
+        return jdbc.query("select proposal_id from station_proposal_votes where room_id=:room and user_id=:user",
+                Map.of("room", roomId, "user", userId), (rs,n) -> rs.getObject(1, UUID.class)).stream().findFirst();
+    }
+
+    public void insertVote(UUID id, UUID roomId, UUID proposalId, UUID userId) {
+        jdbc.update("insert into station_proposal_votes(id,room_id,proposal_id,user_id) values (:id,:room,:proposal,:user)",
+                Map.of("id", id, "room", roomId, "proposal", proposalId, "user", userId));
+    }
+
+    public Vote voteState(UUID roomId, UUID proposalId, UUID userId) {
+        return jdbc.queryForObject("""
+                select count(*) as vote_count,coalesce(bool_or(user_id=:user),false) as voted_by_me
+                from station_proposal_votes where room_id=:room and proposal_id=:proposal
+                """, Map.of("room", roomId, "proposal", proposalId, "user", userId),
+                (rs,n) -> new Vote(proposalId, rs.getLong("vote_count"), rs.getBoolean("voted_by_me")));
+    }
+
     public void delete(UUID roomId, UUID proposalId) {
         jdbc.update("delete from station_proposals where id=:id and room_id=:room", Map.of("id", proposalId, "room", roomId));
     }
