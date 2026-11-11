@@ -63,6 +63,8 @@ public class RecommendationService {
     static final String PARSE_FAILED_MESSAGE = "자연어 조건을 해석하지 못해 적용하지 못했습니다";
     /** %d: stations left out because a member cannot arrive by the appointment on the timetable's trains (#96). */
     static final String UNREACHABLE_BY_TRAIN_MESSAGE = "약속 시각까지 열차로 도착할 수 없는 역 %d곳을 제외했습니다";
+    /** Empty results only because the first trains arrive too late (#115); replaces the two sentences above and below. */
+    static final String BEFORE_FIRST_TRAIN_MESSAGE = "첫차 시각이 가까워 약속 시각까지 도착할 수 있는 역이 없습니다. 약속 시간을 늦춰 주세요.";
 
     private static final DateTimeFormatter OFFSET_TIME = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
     private static final TypeReference<List<StoredTrip>> TRIPS = new TypeReference<>() {};
@@ -182,7 +184,7 @@ public class RecommendationService {
             RunCriteria criteria = new RunCriteria(request.text(), request.filter(), resolved.applied(),
                     resolved.parseFailed(), room.getAppointmentAt() == null ? null : room.getAppointmentAt().toString(),
                     rows.stream().map(row -> new RunCriteria.Participant(row.userId(), row.stationId())).toList(),
-                    evaluation.unreachableByTrain());
+                    evaluation.unreachableByTrain(), evaluation.beforeFirstTrain());
             RunRow run = new RunRow(runId, roomId, userId, write(criteria), now);
             mark = System.nanoTime();
             repository.save(run, results);
@@ -248,7 +250,9 @@ public class RecommendationService {
         if (extraMessage != null) {
             messages.add(extraMessage);
         }
-        if (results.isEmpty()) {
+        if (results.isEmpty() && Boolean.TRUE.equals(criteria.beforeFirstTrain())) {
+            messages.add(BEFORE_FIRST_TRAIN_MESSAGE);
+        } else if (results.isEmpty()) {
             if (criteria.unreachableByTrain() != null && criteria.unreachableByTrain() > 0) {
                 messages.add(UNREACHABLE_BY_TRAIN_MESSAGE.formatted(criteria.unreachableByTrain()));
             }

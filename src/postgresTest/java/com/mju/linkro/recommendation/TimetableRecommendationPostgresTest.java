@@ -68,6 +68,7 @@ class TimetableRecommendationPostgresTest {
     @Autowired RecommendationEngine engine;
     @Autowired TimetableRouteFinder timetable;
     @Autowired JdbcTemplate jdbc;
+    @Autowired com.mju.linkro.subway.api.StationFareLookup stationFares;
     @Autowired WebApplicationContext context;
     @Autowired JsonMapper mapper;
 
@@ -262,6 +263,31 @@ class TimetableRecommendationPostgresTest {
     }
 
     @Test
+    void justAfterTheFirstTrainsTheEmptyResultSaysSo() {
+        // #115: 강남·노원 at 05:29~05:45 (first trains arrive from about 05:13): no station is reachable, every one because of
+        // the first trains. Weekday, Saturday and Sunday service days.
+        String firstTrain = "첫차 시각이 가까워 약속 시각까지 도착할 수 있는 역이 없습니다. 약속 시간을 늦춰 주세요.";
+        for (LocalDate date : List.of(THURSDAY.plusDays(1), SATURDAY, SATURDAY.plusDays(1))) {
+            for (int[] time : new int[][]{{5, 29}, {5, 30}, {5, 45}}) {
+                Instant appointment = at(date, time[0], time[1]);
+                UUID[] users = room(appointment, "강남", "노원");
+                RecommendationResponse response = service.create(users[1], users[0], null);
+                assertThat(response.results()).as("%s", appointment).isEmpty();
+                assertThat(response.message()).as("%s", appointment).isEqualTo(firstTrain);
+                // GET builds it again from the stored criteria.
+                assertThat(service.latest(users[1], users[0]).message()).as("%s", appointment).isEqualTo(firstTrain);
+            }
+        }
+        // Other empty results keep their message: at 06:30 some stations are left out by the trains, the rest by 1 minute.
+        UUID[] users = room(at(THURSDAY, 6, 30), "강남", "노원");
+        RecommendationResponse response = service.create(users[1], users[0],
+                new com.mju.linkro.recommendation.dto.RecommendationRequest(null,
+                        new com.mju.linkro.recommendation.dto.RecommendationRequest.Filter(1, null, null, null, null)));
+        assertThat(response.results()).isEmpty();
+        assertThat(response.message()).matches("약속 시각까지 열차로 도착할 수 없는 역 \\d+곳을 제외했습니다\\. 조건에 맞는 중간역이 없습니다\\. 조건을 완화해 보세요\\.");
+    }
+
+    @Test
     void aPastAppointmentIsRefusedBeforeTheNoServiceCheck() {
         // Tuesday 04:00 (a NO_SERVICE_TIME hour) is before the fixed "now" (Wednesday 09:00): APPOINTMENT_PASSED comes first.
         UUID[] users = room(at(THURSDAY.minusDays(2), 4, 0), "강남", "사당");
@@ -315,6 +341,38 @@ class TimetableRecommendationPostgresTest {
         long saejeol = station("새절");
         var mainToLoop = timetable.latestDepartures(station("역촌"), at(THURSDAY, 9, 0), Set.of(saejeol), 0).get(saejeol);
         assertThat(legs(mainToLoop)).containsExactly("6072 새절 08:52:40 -> 응암 08:54:00 (0)", "6085 응암 08:54:30 -> 역촌 08:56:10 (30)");
+    }
+
+    @Test
+    void faresComeFromTheFareTableByStationPair() {
+        // #109: 불광 -> 합정 1,550원 and 노원 -> 사당 1,850원 whatever route is ridden (map app and fare table agree).
+        long bulgwang = station("불광");
+        long hapjeong = station("합정");
+        long nowon = station("노원");
+        long sadang = station("사당");
+        assertThat(stationFares.fareBetween(bulgwang, hapjeong)).hasValue(1550);
+        assertThat(stationFares.fareBetween(nowon, sadang)).hasValue(1850);
+        List<Member> members = List.of(new Member(UUID.randomUUID(), "a", bulgwang), new Member(UUID.randomUUID(), "b", nowon));
+        Evaluation evaluation = engine.evaluate(members, AppliedConstraints.none(), at(THURSDAY, 13, 0), Instant.now());
+        assertThat(evaluation.candidates().get(hapjeong).trips().get(0).fareWon()).isEqualTo(1550);
+        assertThat(evaluation.candidates().get(sadang).trips().get(1).fareWon()).isEqualTo(1850);
+        // Every trip: the table fare for (departure, candidate); distance and legs stay the route's.
+        evaluation.candidates().values().forEach(candidate -> candidate.trips().forEach(trip -> {
+            assertThat(trip.fareWon()).isEqualTo(stationFares.fareBetween(trip.member().departureStationId(), candidate.stationId()).orElseThrow());
+            assertThat(trip.path()).isSameAs(trip.timed().path());
+        }));
+
+        // All ordered pairs of the 240 supported stations are in the table (까치산 2호선 code 200 is not in the file, but
+        // 까치산's 5호선 code covers the station).
+        List<Long> ids = jdbc.queryForList("select id from stations where is_supported order by id", Long.class);
+        assertThat(ids).hasSize(240);
+        long missing = ids.stream().flatMap(from -> ids.stream().filter(to -> !to.equals(from))
+                .filter(to -> stationFares.fareBetween(from, to).isEmpty())).count();
+        assertThat(missing).isZero();
+        // Pairs with several code combinations keep the lowest fare.
+        assertThat(stationFares.fareBetween(station("남태령"), station("삼각지"))).hasValue(1550);
+        assertThat(stationFares.fareBetween(station("종로3가"), station("연신내"))).hasValue(1550);
+        assertThat(stationFares.fareBetween(station("청량리"), station("연신내"))).hasValue(1650);
     }
 
     @Test

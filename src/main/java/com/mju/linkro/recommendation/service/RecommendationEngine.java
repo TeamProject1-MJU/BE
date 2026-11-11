@@ -6,12 +6,14 @@ import com.mju.linkro.recommendation.dto.RecommendationResponse.MemberLimit;
 import com.mju.linkro.recommendation.service.Candidate.Member;
 import com.mju.linkro.recommendation.service.Candidate.Trip;
 import com.mju.linkro.subway.api.FareCalculator;
+import com.mju.linkro.subway.api.StationFareLookup;
 import com.mju.linkro.subway.api.RoutePath;
 import com.mju.linkro.subway.api.ShortestPathTree;
 import com.mju.linkro.subway.api.SubwayRouteFinder;
 import com.mju.linkro.subway.api.TimedRoute;
 import com.mju.linkro.subway.api.TimetableRouteFinder;
 import com.mju.linkro.subway.api.TimetableRouteFinder.TimedTree;
+import com.mju.linkro.subway.fare.StationPairFare;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -51,14 +53,22 @@ public class RecommendationEngine {
     private final FareCalculator fares;
     private final RecommendationProperties properties;
     private final TimetableRouteFinder timetable;
+    private final StationPairFare pairFare;
 
     @Autowired
     public RecommendationEngine(SubwayRouteFinder finder, FareCalculator fares, RecommendationProperties properties,
-                                Optional<TimetableRouteFinder> timetable) {
+                                Optional<TimetableRouteFinder> timetable, Optional<StationFareLookup> stationFares) {
         this.finder = finder;
         this.fares = fares;
         this.properties = properties;
         this.timetable = timetable.orElse(null);
+        this.pairFare = new StationPairFare(fares, stationFares);
+    }
+
+    /** Fares from the ridden distance only (no fare table). */
+    public RecommendationEngine(SubwayRouteFinder finder, FareCalculator fares, RecommendationProperties properties,
+                                Optional<TimetableRouteFinder> timetable) {
+        this(finder, fares, properties, timetable, Optional.empty());
     }
 
     /** Fixed-cost engine without a timetable. */
@@ -73,12 +83,19 @@ public class RecommendationEngine {
      * @param source              TIMETABLE or ESTIMATE for every trip of this evaluation
      * @param unreachableByTrain  stations dropped because a member cannot arrive in time on the timetable's trains
      * @param fallbackMembers     members whose times came from fixed costs (0 in timetable mode)
+     * @param beforeFirstTrain    every station was dropped because the first trains of the appointment's service day
+     *                            arrive too late (#115); false otherwise
      */
     public record Evaluation(Map<Long, Candidate> candidates, RecommendationProperties properties, String source,
-                             int unreachableByTrain, int fallbackMembers) {
+                             int unreachableByTrain, int fallbackMembers, boolean beforeFirstTrain) {
 
         public Evaluation(Map<Long, Candidate> candidates, RecommendationProperties properties) {
             this(candidates, properties, ESTIMATE, 0, 0);
+        }
+
+        public Evaluation(Map<Long, Candidate> candidates, RecommendationProperties properties, String source,
+                          int unreachableByTrain, int fallbackMembers) {
+            this(candidates, properties, source, unreachableByTrain, fallbackMembers, false);
         }
 
         /** TIME: slowest person, then spread (max − min), then total minutes (same order as the average). */
@@ -196,7 +213,7 @@ public class RecommendationEngine {
                 // Time on the way: leaving until the train arrives. Waiting at the destination for the appointment is
                 // not travel (it is slackSeconds in the response).
                 int minutes = minutes((int) Duration.between(route.leaveAt(), route.arriveAt()).toSeconds());
-                Trip trip = trip(member, route.path(), minutes, route, TIMETABLE, constraints, personalLimits);
+                Trip trip = trip(member, stationId, route.path(), minutes, route, TIMETABLE, constraints, personalLimits);
                 if (trip == null) {
                     trips = null;
                     break;
@@ -207,7 +224,28 @@ public class RecommendationEngine {
                 candidates.put(stationId, new Candidate(stationId, trips));
             }
         }
-        return new Evaluation(candidates, properties, TIMETABLE, unreachable, 0);
+        boolean beforeFirstTrain = appointmentAt != null && !stations.isEmpty() && unreachable == stations.size()
+                && firstTrainsArriveTooLate(stations, origins, appointmentAt);
+        return new Evaluation(candidates, properties, TIMETABLE, unreachable, 0, beforeFirstTrain);
+    }
+
+    /**
+     * #115: no station can be reached because the day's trains start too late for the appointment. True when, for every
+     * station, some member's earliest arrival on the first trains of the appointment's service day (the day
+     * latestDepartures searches) is after the appointment. A station no train reaches from a member that day is not
+     * explained by the first trains, so a station without such a member makes this false.
+     */
+    private boolean firstTrainsArriveTooLate(Set<Long> stations, Set<Long> origins, Instant appointmentAt) {
+        List<Map<Long, Instant>> earliest = origins.stream()
+                .map(origin -> timetable.earliestArrivalsOfServiceDay(origin, appointmentAt)).toList();
+        for (long station : stations) {
+            boolean late = earliest.stream().anyMatch(arrivals -> {
+                Instant first = arrivals.get(station);
+                return first != null && first.isAfter(appointmentAt);
+            });
+            if (!late) return false;
+        }
+        return true;
     }
 
     // ---- fixed costs ----
@@ -246,7 +284,8 @@ public class RecommendationEngine {
             if (path.isEmpty()) {
                 return null;
             }
-            Trip trip = trip(members.get(i), path.get(), minutes(path.get().totalSeconds()), null, ESTIMATE, constraints, personalLimits);
+            Trip trip = trip(members.get(i), stationId, path.get(), minutes(path.get().totalSeconds()), null, ESTIMATE, constraints,
+                    personalLimits);
             if (trip == null) {
                 return null;
             }
@@ -256,9 +295,10 @@ public class RecommendationEngine {
     }
 
     /** The trip, or null when it breaks a constraint (the same checks for both sources). */
-    private Trip trip(Member member, RoutePath path, int minutes, TimedRoute timed, String source,
+    private Trip trip(Member member, long stationId, RoutePath path, int minutes, TimedRoute timed, String source,
                       AppliedConstraints constraints, Map<UUID, Integer> personalLimits) {
-        int fare = fares.fareOf(path);
+        // The fare-table fare of (departure, candidate), whatever route is ridden (#109); only the fare, not the distance.
+        int fare = pairFare.fareOf(member.departureStationId(), stationId, path);
         if (exceeds(constraints.maxMinutes(), minutes) || exceeds(constraints.maxTransfers(), path.transferCount())
                 || exceeds(constraints.maxFareWon(), fare) || exceeds(personalLimits.get(member.userId()), minutes)) {
             return null;

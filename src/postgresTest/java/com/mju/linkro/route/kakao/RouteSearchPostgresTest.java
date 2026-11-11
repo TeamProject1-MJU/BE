@@ -86,6 +86,8 @@ class RouteSearchPostgresTest {
     @Autowired UserRepository users;
     @Autowired JdbcTemplate jdbc;
     @Autowired SwitchableKakaoRouteClient kakao;
+    @Autowired com.mju.linkro.recommendation.service.RecommendationEngine engine;
+    @Autowired com.mju.linkro.subway.api.StationFareLookup fareTable;
     private final JsonMapper mapper = JsonMapper.builder().build();
     MockMvc mvc;
     MockRestServiceServer server;
@@ -250,6 +252,33 @@ class RouteSearchPostgresTest {
         useKakao("", Duration.ofSeconds(3), Duration.ofSeconds(5));
         assertInternal(ok(search(gangnam, sadang, "2026-11-06T08:00:00+09:00", null), member));
         server.verify(); // no expectations: any request would have failed
+    }
+
+    @Test void internalFaresAreTheFareTableFaresRecommendationsUse() throws Exception {
+        // #109: /routes/search (INTERNAL, no Kakao key) and recommendations charge the same fare-table fare for a pair.
+        useKakao("", Duration.ofSeconds(3), Duration.ofSeconds(5));
+        long bulgwang = id("불광");
+        long hapjeong = id("합정");
+        long nowon = id("노원");
+        long sadang = id("사당");
+        var members = List.of(new com.mju.linkro.recommendation.service.Candidate.Member(UUID.randomUUID(), "a", bulgwang),
+                new com.mju.linkro.recommendation.service.Candidate.Member(UUID.randomUUID(), "b", nowon));
+        var evaluation = engine.evaluate(members, com.mju.linkro.recommendation.dto.RecommendationResponse.AppliedConstraints.none(),
+                java.time.Instant.parse("2026-11-12T04:00:00Z"), java.time.Instant.parse("2026-11-12T03:00:00Z"));
+        int recommendedToHapjeong = evaluation.candidates().get(hapjeong).trips().get(0).fareWon();
+        int recommendedToSadang = evaluation.candidates().get(sadang).trips().get(1).fareWon();
+        JsonNode toHapjeong = ok(search(bulgwang, hapjeong, "2026-11-12T13:00:00+09:00", null), member);
+        JsonNode toSadang = ok(search(nowon, sadang, "2026-11-12T13:00:00+09:00", null), member);
+        assertThat(toHapjeong.get("routeSource").asString()).isEqualTo("INTERNAL");
+        assertThat(toSadang.get("routeSource").asString()).isEqualTo("INTERNAL");
+        assertThat(toHapjeong.get("routes").get(0).get("summary").get("fare").asInt()).isEqualTo(recommendedToHapjeong).isEqualTo(1550);
+        assertThat(toSadang.get("routes").get(0).get("summary").get("fare").asInt()).isEqualTo(recommendedToSadang).isEqualTo(1850);
+        assertThat(fareTable.fareBetween(bulgwang, hapjeong)).hasValue(1550);
+        server.verify();
+    }
+
+    private long id(String name) {
+        return jdbc.queryForObject("select id from stations where name = ?", Long.class, name);
     }
 
     @Test void roomMembersUseTheAppointmentAndOthersAreRejected() throws Exception {
