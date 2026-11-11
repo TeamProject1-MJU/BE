@@ -29,7 +29,7 @@ public final class ChatResponses {
     @JsonInclude(JsonInclude.Include.ALWAYS)
     @Schema(name = "ChatMessageSent", requiredProperties = {"message", "aiPending"})
     public record Sent(Message message,
-                       @Schema(description = "@linkro가 있어 AI 답변을 만드는 중이면 true. 답변(또는 실패 안내 SYSTEM 메시지)은 WS MESSAGE_CREATED로 와요.") boolean aiPending) {}
+                       @Schema(description = "@링크로가 있어 AI 답변을 만드는 중이면 true. 답변(또는 실패 안내 SYSTEM 메시지)은 WS MESSAGE_CREATED로 와요.") boolean aiPending) {}
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
     @Schema(name = "ChatMessagePage", requiredProperties = {"items", "nextCursor", "hasMore"})

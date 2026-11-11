@@ -53,7 +53,7 @@ public class ChatService {
             try {
                 aiExecutor.execute(() -> responder.reply(roomId, saved));
             } catch (RejectedExecutionException busy) {
-                log.warn("@linkro answer queue is full; room {}", roomId);
+                log.warn("@링크로 answer queue is full; room {}", roomId);
                 responder.notifyFailure(roomId, ErrorCode.AI_UNAVAILABLE);
             }
         }

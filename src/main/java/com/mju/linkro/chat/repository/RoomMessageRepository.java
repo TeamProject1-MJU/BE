@@ -64,7 +64,7 @@ public class RoomMessageRepository {
                 new MapSqlParameterSource().addValue("room", roomId).addValue("before", before).addValue("limit", limit), rows);
     }
 
-    /** USER and AI messages sent before {@code before}, oldest first: the conversation an @linkro question is part of. */
+    /** USER and AI messages sent before {@code before}, oldest first: the conversation an @링크로 question is part of. */
     public List<Message> conversationBefore(UUID roomId, UUID before, int limit) {
         if (limit <= 0) return List.of();
         List<Message> newestFirst = jdbc.query(SELECT + " where m.room_id = :room and m.id < :before"

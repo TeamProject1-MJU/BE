@@ -9,8 +9,8 @@ import tools.jackson.databind.JsonNode;
 /** Body of POST /rooms/{roomId}/messages. A JsonNode keeps "content": 123 or null a VALIDATION_ERROR, not a coercion. */
 public record ChatMessageRequest(
         @Schema(implementation = String.class, type = "string", requiredMode = Schema.RequiredMode.REQUIRED, maxLength = 1000,
-                description = "1~1000자(유니코드 코드포인트). 공백만 있는 메시지와 NUL 문자는 거절해요. @linkro가 있으면 AI가 답해요.",
-                example = "@linkro 사당역에서 갈만한 곳 알려줘") JsonNode content) {
+                description = "1~1000자(유니코드 코드포인트). 공백만 있는 메시지와 NUL 문자는 거절해요. @링크로가 있으면 AI가 답해요.",
+                example = "@링크로 사당역에서 갈만한 곳 알려줘") JsonNode content) {
     public static final int MAX_LENGTH = 1000;
 
     /** The text as sent: nothing is trimmed or rewritten, so what a member typed is what the room shows. */

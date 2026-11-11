@@ -113,7 +113,7 @@ class ChatServiceTest {
     void aNonMemberSavesNothingAndCallsNothing() {
         when(access.requireMember(room, user)).thenThrow(new BusinessException(ErrorCode.NOT_ROOM_MEMBER));
 
-        assertThatThrownBy(() -> service.send(room, user, body("@linkro 안녕")))
+        assertThatThrownBy(() -> service.send(room, user, body("@링크로 안녕")))
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.NOT_ROOM_MEMBER));
 
         verify(messages, never()).insert(any(), any(), any(), any(), any());
@@ -158,7 +158,7 @@ class ChatServiceTest {
                 new Message(UUID.randomUUID(), SenderType.AI, null, null, "사당은 어때요?", Instant.EPOCH, null)));
         when(ai.replyToChat(any())).thenReturn(new GeneratedText(" 사당역 근처를 추천해요. "));
 
-        Sent sent = service.send(room, user, body("@linkro 사당역에서 갈만한 곳 알려줘"));
+        Sent sent = service.send(room, user, body("@링크로 사당역에서 갈만한 곳 알려줘"));
 
         // Answered before the AI ran: only the question exists so far.
         assertThat(sent.aiPending()).isTrue();
@@ -171,7 +171,7 @@ class ChatServiceTest {
         verify(ai).replyToChat(request.capture());
         assertThat(request.getValue().question()).isEqualTo("사당역에서 갈만한 곳 알려줘");
         assertThat(request.getValue().recentMessages()).extracting("nickname", "content")
-                .containsExactly(org.assertj.core.groups.Tuple.tuple("철수", "어디서 볼까?"), org.assertj.core.groups.Tuple.tuple("linkro", "사당은 어때요?"));
+                .containsExactly(org.assertj.core.groups.Tuple.tuple("철수", "어디서 볼까?"), org.assertj.core.groups.Tuple.tuple("링크로", "사당은 어때요?"));
         assertThat(request.getValue().roomContext()).contains("금요일 저녁", "2026-11-13 19:00", "민지(출발역: 사당)", "철수(출발역: 미설정)", "시간 기준 강남");
         verify(messages).conversationBefore(eq(room), eq(sent.message().id()), eq(10));
 
@@ -185,12 +185,12 @@ class ChatServiceTest {
     void aFailedAiLeavesTheUserMessageAndAddsAnUnavailableNotice() {
         when(ai.replyToChat(any())).thenThrow(new BusinessException(ErrorCode.AI_UNAVAILABLE));
 
-        service.send(room, user, body("@linkro 안녕"));
+        service.send(room, user, body("@링크로 안녕"));
         runQueued();
 
         List<Message> all = savedMessages();
         assertThat(all).extracting(Message::senderType).containsExactly(SenderType.USER, SenderType.SYSTEM);
-        assertThat(all.get(0).content()).isEqualTo("@linkro 안녕");
+        assertThat(all.get(0).content()).isEqualTo("@링크로 안녕");
         assertThat(all.get(1).content()).isEqualTo(ChatAiResponder.UNAVAILABLE_NOTICE);
         assertThat(all.get(1).senderId()).isNull();
     }
@@ -199,21 +199,21 @@ class ChatServiceTest {
     void aQuotaFailureSaysSo() {
         when(ai.replyToChat(any())).thenThrow(new BusinessException(ErrorCode.AI_QUOTA_EXCEEDED));
 
-        service.send(room, user, body("@linkro 안녕"));
+        service.send(room, user, body("@링크로 안녕"));
         runQueued();
 
-        assertThat(savedMessages()).extracting(Message::content).containsExactly("@linkro 안녕", ChatAiResponder.QUOTA_NOTICE);
+        assertThat(savedMessages()).extracting(Message::content).containsExactly("@링크로 안녕", ChatAiResponder.QUOTA_NOTICE);
     }
 
     @Test
     void anUnexpectedAiErrorOrAnEmptyAnswerIsTheUnavailableNotice() {
         when(ai.replyToChat(any())).thenThrow(new IllegalStateException("boom")).thenReturn(new GeneratedText("   "));
 
-        service.send(room, user, body("@linkro 하나"));
-        service.send(room, user, body("@linkro 둘"));
+        service.send(room, user, body("@링크로 하나"));
+        service.send(room, user, body("@링크로 둘"));
         runQueued();
 
-        assertThat(savedMessages()).extracting(Message::content).containsExactly("@linkro 하나", "@linkro 둘",
+        assertThat(savedMessages()).extracting(Message::content).containsExactly("@링크로 하나", "@링크로 둘",
                 ChatAiResponder.UNAVAILABLE_NOTICE, ChatAiResponder.UNAVAILABLE_NOTICE);
     }
 
@@ -221,10 +221,10 @@ class ChatServiceTest {
     void aFullAiQueueStillSavesTheMessageAndTellsTheRoom() {
         Executor full = task -> { throw new RejectedExecutionException("full"); };
 
-        Sent sent = build(full).send(room, user, body("@linkro 안녕"));
+        Sent sent = build(full).send(room, user, body("@링크로 안녕"));
 
-        assertThat(sent.message().content()).isEqualTo("@linkro 안녕");
-        assertThat(savedMessages()).extracting(Message::content).containsExactly("@linkro 안녕", ChatAiResponder.UNAVAILABLE_NOTICE);
+        assertThat(sent.message().content()).isEqualTo("@링크로 안녕");
+        assertThat(savedMessages()).extracting(Message::content).containsExactly("@링크로 안녕", ChatAiResponder.UNAVAILABLE_NOTICE);
         verifyNoInteractions(ai);
     }
 
@@ -236,7 +236,7 @@ class ChatServiceTest {
         when(messages.insert(any(), eq(room), eq(SenderType.SYSTEM), any(), any()))
                 .thenThrow(new org.springframework.dao.DataIntegrityViolationException("room gone"));
 
-        service.send(room, user, body("@linkro 안녕"));
+        service.send(room, user, body("@링크로 안녕"));
         runQueued();
 
         assertThat(savedMessages()).extracting(Message::senderType).containsExactly(SenderType.USER);

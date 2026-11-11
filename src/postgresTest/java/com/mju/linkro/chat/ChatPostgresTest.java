@@ -50,7 +50,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** Chat on a real PostgreSQL 16: the cursor query, the HTTP flow, @linkro answers and the SYSTEM messages of room events. */
+/** Chat on a real PostgreSQL 16: the cursor query, the HTTP flow, @링크로 answers and the SYSTEM messages of room events. */
 @Testcontainers
 @SpringBootTest(properties = {
         "spring.config.import=", "spring.jpa.hibernate.ddl-auto=validate", "spring.jpa.open-in-view=false",
@@ -197,7 +197,7 @@ class ChatPostgresTest {
     }
 
     @Test void aMentionIsAnsweredByAnAiMessageWithNoSender() throws Exception {
-        send(member, "@linkro 사당역에서 갈만한 곳 알려줘").andExpect(status().isCreated())
+        send(member, "@링크로 사당역에서 갈만한 곳 알려줘").andExpect(status().isCreated())
                 .andExpect(jsonPath("$.data.aiPending").value(true));
         waitFor(() -> !texts("AI").isEmpty());
         assertThat(jdbc.queryForObject("select sender_id is null from room_messages where sender_type = 'AI' and room_id = ?",
@@ -211,7 +211,7 @@ class ChatPostgresTest {
     }
 
     @Test void aFailedAiLeavesTheQuestionAndAddsASystemNotice() throws Exception {
-        send(member, "@linkro " + MockAiClient.FAIL_MARKER).andExpect(status().isCreated())
+        send(member, "@링크로 " + MockAiClient.FAIL_MARKER).andExpect(status().isCreated())
                 .andExpect(jsonPath("$.data.aiPending").value(true));
         waitFor(() -> !texts("SYSTEM").isEmpty());
         assertThat(texts("USER")).hasSize(1);

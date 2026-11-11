@@ -8,25 +8,25 @@ import org.junit.jupiter.api.Test;
 
 class LinkroMentionTest {
     @ParameterizedTest
-    @ValueSource(strings = {"@linkro 사당역에서 갈만한 곳 알려줘", "사당역 맛집 @linkro", "@linkro가 알려줘", "@LinkRo 안녕", "얘들아 @linkro, 도와줘", "a\n@linkro\nb"})
+    @ValueSource(strings = {"@링크로 사당역에서 갈만한 곳 알려줘", "사당역 맛집 @링크로", "@링크로가 알려줘", "@링크로야 안녕", "얘들아 @링크로, 도와줘", "a\n@링크로\nb"})
     void aMentionCallsTheAi(String content) {
         assertThat(LinkroMention.in(content)).isTrue();
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"링크로 알려줘", "linkro 알려줘", "@linkrobot 안녕", "me@linkro.com 으로 보내줘", "@link ro", "@ linkro"})
+    @ValueSource(strings = {"링크로 알려줘", "@linkro 알려줘", "@LinkRo 안녕", "me@링크로 으로 보내줘", "@링 크로", "@ 링크로"})
     void otherTextDoesNot(String content) {
         assertThat(LinkroMention.in(content)).isFalse();
     }
 
     @Test
     void theQuestionDropsTheMention() {
-        assertThat(LinkroMention.question("@linkro 사당역에서 갈만한 곳 알려줘")).isEqualTo("사당역에서 갈만한 곳 알려줘");
-        assertThat(LinkroMention.question("사당역 맛집 @linkro 알려줘")).isEqualTo("사당역 맛집 알려줘");
+        assertThat(LinkroMention.question("@링크로 사당역에서 갈만한 곳 알려줘")).isEqualTo("사당역에서 갈만한 곳 알려줘");
+        assertThat(LinkroMention.question("사당역 맛집 @링크로 알려줘")).isEqualTo("사당역 맛집 알려줘");
     }
 
     @Test
     void aMessageThatIsOnlyTheMentionIsAskedAsWritten() {
-        assertThat(LinkroMention.question("  @linkro ")).isEqualTo("@linkro");
+        assertThat(LinkroMention.question("  @링크로 ")).isEqualTo("@링크로");
     }
 }

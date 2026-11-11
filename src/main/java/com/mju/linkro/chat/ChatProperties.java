@@ -12,10 +12,10 @@ import org.springframework.validation.annotation.Validated;
 @Validated
 @ConfigurationProperties(prefix = "linkro.chat")
 public class ChatProperties {
-    /** How many earlier USER/AI messages of the room go to the AI with an @linkro question. */
+    /** How many earlier USER/AI messages of the room go to the AI with an @링크로 question. */
     @Min(0)
     private int aiContextMessages = 10;
-    /** Threads answering @linkro questions at the same time. */
+    /** Threads answering @링크로 questions at the same time. */
     @Min(1)
     private int aiThreads = 4;
     /** Questions waiting for a free thread; beyond this the asker gets the "AI unavailable" SYSTEM message. */

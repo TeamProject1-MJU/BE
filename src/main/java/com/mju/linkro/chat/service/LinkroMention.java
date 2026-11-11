@@ -3,12 +3,11 @@ package com.mju.linkro.chat.service;
 import java.util.regex.Pattern;
 
 /**
- * The {@code @linkro} mention that calls the AI (API 10.1). Case-insensitive. It may be followed by a Korean particle
- * ("@linkro가", "@linkro야") or punctuation, but not by more word characters ("@linkrobot") and not preceded by one
- * ("me@linkro.com").
+ * The {@code @링크로} mention that calls the AI (API 10.1). Anything may follow it, so Korean particles work
+ * ("@링크로야", "@링크로가"), but it must not be preceded by a letter or digit ("me@링크로").
  */
 final class LinkroMention {
-    private static final Pattern MENTION = Pattern.compile("(?<![A-Za-z0-9_])@linkro(?![A-Za-z0-9_])", Pattern.CASE_INSENSITIVE);
+    private static final Pattern MENTION = Pattern.compile("(?<![\\p{L}\\p{N}_])@링크로");
 
     private LinkroMention() {}
 

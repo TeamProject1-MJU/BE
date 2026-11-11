@@ -11,7 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
- * Answers one @linkro question (API 10.1): AI reply as an AI message, or a SYSTEM notice when the AI fails. The
+ * Answers one @링크로 question (API 10.1): AI reply as an AI message, or a SYSTEM notice when the AI fails. The
  * asker's USER message is already committed when this runs, so no failure here can lose it. Never throws.
  */
 @Slf4j
@@ -35,7 +35,7 @@ class ChatAiResponder {
         } catch (BusinessException failure) {
             notifyFailure(roomId, failure.getErrorCode());
         } catch (RuntimeException failure) {
-            log.warn("@linkro answer failed in room {}", roomId, failure);
+            log.warn("@링크로 answer failed in room {}", roomId, failure);
             notifyFailure(roomId, ErrorCode.AI_UNAVAILABLE);
         }
     }

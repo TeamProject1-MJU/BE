@@ -25,7 +25,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /**
- * Builds what the AI gets with an @linkro question (API 10.1): the earlier conversation and the room context
+ * Builds what the AI gets with an @링크로 question (API 10.1): the earlier conversation and the room context
  * (participants, departures, appointment, selected station, latest recommendation). Facts only, no numbers the AI
  * could repeat wrongly. Runs without a transaction: the caller holds no database connection during the AI call.
  */
@@ -33,7 +33,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 class ChatRoomContext {
     /** The name the AI's own earlier answers carry in the conversation. */
-    static final String AI_NAME = "linkro";
+    static final String AI_NAME = "링크로";
     private static final DateTimeFormatter APPOINTMENT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.of("Asia/Seoul"));
 
     private final ChatProperties properties;
