@@ -31,6 +31,7 @@ public enum ErrorCode {
     STATION_UNSUPPORTED(HttpStatus.UNPROCESSABLE_CONTENT, "STATION_UNSUPPORTED", "지원하지 않는 역입니다."),
     DEPARTURE_MISSING(HttpStatus.UNPROCESSABLE_CONTENT, "DEPARTURE_MISSING", "출발지가 설정되지 않았습니다."),
     TOO_FEW_MEMBERS(HttpStatus.UNPROCESSABLE_CONTENT, "TOO_FEW_MEMBERS", "참여 인원이 부족합니다."),
+    NO_SERVICE_TIME(HttpStatus.UNPROCESSABLE_CONTENT, "NO_SERVICE_TIME", "해당 시간대에는 지하철이 운행하지 않습니다. 약속 시간을 바꿔 주세요."),
     PROPOSAL_LIMIT_EXCEEDED(HttpStatus.UNPROCESSABLE_CONTENT, "PROPOSAL_LIMIT_EXCEEDED", "약속역 후보 최대 개수를 초과했습니다."),
     AI_QUOTA_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "AI_QUOTA_EXCEEDED", "AI 사용 한도를 초과했습니다."),
     EXTERNAL_API_ERROR(HttpStatus.BAD_GATEWAY, "EXTERNAL_API_ERROR", "외부 서비스 호출에 실패했습니다."),

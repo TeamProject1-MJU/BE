@@ -27,6 +27,8 @@ import com.mju.linkro.subway.api.RoutePath;
 import com.mju.linkro.subway.api.StationInfo;
 import com.mju.linkro.subway.api.StationLookup;
 import com.mju.linkro.subway.api.StepType;
+import com.mju.linkro.subway.api.TimedLeg;
+import com.mju.linkro.subway.api.TimedRoute;
 import com.mju.linkro.subway.congestion.ServiceSlots;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -58,6 +60,8 @@ import tools.jackson.databind.json.JsonMapper;
 public class RecommendationService {
     static final String NO_RESULT_MESSAGE = "조건에 맞는 중간역이 없습니다. 조건을 완화해 보세요.";
     static final String PARSE_FAILED_MESSAGE = "자연어 조건을 해석하지 못해 적용하지 못했습니다";
+    /** %d: stations left out because a member cannot arrive by the appointment on the timetable's trains (#96). */
+    static final String UNREACHABLE_BY_TRAIN_MESSAGE = "약속 시각까지 열차로 도착할 수 없는 역 %d곳을 제외했습니다";
 
     private static final DateTimeFormatter OFFSET_TIME = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
     private static final TypeReference<List<StoredTrip>> TRIPS = new TypeReference<>() {};
@@ -118,10 +122,15 @@ public class RecommendationService {
         }
         List<Member> members = rows.stream()
                 .map(row -> new Member(row.userId(), row.nickname(), row.stationId())).toList();
+        // No train of any line arrives in the window before the appointment (default 60 min, e.g. 04:00): refuse before
+        // the AI call and save nothing.
+        if (engine.noServiceBefore(room.getAppointmentAt())) {
+            throw new BusinessException(ErrorCode.NO_SERVICE_TIME);
+        }
 
         Resolved resolved = constraints.resolve(request, members);
-        Evaluation evaluation = engine.evaluate(members, resolved.applied());
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        Evaluation evaluation = engine.evaluate(members, resolved.applied(), room.getAppointmentAt(), now);
         UUID runId = UuidCreator.getTimeOrderedEpoch();
         // Everything is computed first, then one AI call explains all criteria of this recommendation.
         record Drafted(Criterion criterion, Candidate best, StationInfo station, List<ParticipantTime> trips,
@@ -149,7 +158,8 @@ public class RecommendationService {
 
         RunCriteria criteria = new RunCriteria(request.text(), request.filter(), resolved.applied(),
                 resolved.parseFailed(), room.getAppointmentAt() == null ? null : room.getAppointmentAt().toString(),
-                rows.stream().map(row -> new RunCriteria.Participant(row.userId(), row.stationId())).toList());
+                rows.stream().map(row -> new RunCriteria.Participant(row.userId(), row.stationId())).toList(),
+                evaluation.unreachableByTrain());
         RunRow run = new RunRow(runId, roomId, userId, write(criteria), now);
         repository.save(run, results);
         publish(new RecommendationCreatedEvent(roomId, runId, userId, now));
@@ -203,6 +213,9 @@ public class RecommendationService {
             messages.add(extraMessage);
         }
         if (results.isEmpty()) {
+            if (criteria.unreachableByTrain() != null && criteria.unreachableByTrain() > 0) {
+                messages.add(UNREACHABLE_BY_TRAIN_MESSAGE.formatted(criteria.unreachableByTrain()));
+            }
             messages.add(NO_RESULT_MESSAGE);
         }
         // Each message is a sentence of its own; only the last one is returned without the joining period.
@@ -226,16 +239,49 @@ public class RecommendationService {
         List<ParticipantTime> times = new ArrayList<>();
         for (Trip trip : best.trips()) {
             RoutePath path = trip.path();
-            // 8.1: departure = appointment − travel minutes; without an appointment the request time is the departure.
-            Instant departAt = appointmentAt == null ? now : appointmentAt.minus(trip.minutes(), ChronoUnit.MINUTES);
-            CongestionResult result = congestion.congestionOf(path, departAt);
+            TimedRoute timed = trip.timed();
+            Instant departAt;
+            Instant firstStop;
+            Instant arriveAt;
+            if (timed != null) {
+                // Real trains: leave in time for the first train; stop offsets count from its departure.
+                departAt = timed.leaveAt();
+                firstStop = timed.boardAt();
+                arriveAt = timed.arriveAt();
+            } else {
+                // 8.1: departure = appointment − travel minutes; without an appointment the request time is the departure.
+                departAt = appointmentAt == null ? now : appointmentAt.minus(trip.minutes(), ChronoUnit.MINUTES);
+                firstStop = departAt;
+                arriveAt = departAt.plusSeconds(path.totalSeconds());
+            }
+            Integer slack = appointmentAt == null ? null : (int) ChronoUnit.SECONDS.between(arriveAt, appointmentAt);
+            CongestionResult result = congestion.congestionOf(path, firstStop);
             Congestion shown = result.supported() ? new Congestion(result.pct().intValue(), result.level(), result.levelLabel()) : null;
             StationInfo origin = stations.require(trip.member().departureStationId());
             times.add(new ParticipantTime(trip.member().userId(), trip.member().nickname(),
                     new StationRef(origin.id(), origin.name()), trip.minutes(), path.transferCount(), trip.fareWon(),
-                    path.rideDistanceM(), time(departAt), shown, segments(path)));
+                    path.rideDistanceM(), time(departAt), shown, segments(path), boardingTrain(timed), legs(timed), trip.source(),
+                    time(arriveAt), slack));
         }
         return times;
+    }
+
+    private static BoardingTrain boardingTrain(TimedRoute timed) {
+        if (timed == null) {
+            return null;
+        }
+        TimedLeg first = timed.legs().get(0);
+        return new BoardingTrain(first.lineId(), first.lineName(), first.fromStationId(), first.fromStationName(),
+                first.direction().name(), time(first.boardAt()), first.terminal(), first.trainCode());
+    }
+
+    private static List<Leg> legs(TimedRoute timed) {
+        if (timed == null) {
+            return List.of();
+        }
+        return timed.legs().stream().map(leg -> new Leg(leg.lineId(), leg.lineName(), leg.trainCode(), leg.terminal(),
+                leg.direction().name(), leg.fromStationName(), leg.toStationName(), time(leg.boardAt()), time(leg.alightAt()),
+                leg.stationCount(), leg.walkSec(), leg.waitSec())).toList();
     }
 
     private static List<Segment> segments(RoutePath path) {
