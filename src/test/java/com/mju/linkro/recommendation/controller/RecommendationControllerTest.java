@@ -125,6 +125,14 @@ class RecommendationControllerTest {
     }
 
     @Test
+    void noServiceTimeIsA422WithItsMessage() throws Exception {
+        when(service.create(any(), any(), any())).thenThrow(new BusinessException(ErrorCode.NO_SERVICE_TIME));
+        mvc.perform(auth(post(base))).andExpect(status().isUnprocessableContent())
+                .andExpect(content().json("{\"success\":false,\"error\":{\"code\":\"NO_SERVICE_TIME\","
+                        + "\"message\":\"해당 시간대에는 지하철이 운행하지 않습니다. 약속 시간을 바꿔 주세요.\"}}"));
+    }
+
+    @Test
     void latestWithoutARunIsDataNull() throws Exception {
         when(service.latest(user.getId(), roomId)).thenReturn(null);
         mvc.perform(auth(get(base + "/latest"))).andExpect(status().isOk())

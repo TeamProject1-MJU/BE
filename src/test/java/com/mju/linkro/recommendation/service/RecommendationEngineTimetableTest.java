@@ -61,8 +61,10 @@ class RecommendationEngineTimetableTest {
     void maxMinutesFiltersOnTimetableMinutes() {
         AppliedConstraints fourMinutes = new AppliedConstraints(4, null, null, List.of(), List.of());
         Evaluation evaluation = engine(true).evaluate(MEMBERS, fourMinutes, at(THURSDAY, 32390), Instant.EPOCH);
-        // 다 needs 5 minutes from 마; 나: 가 leaves 32200 for 32290 is 190 s, 마 leaves 32100 is 290 s (5 min).
-        assertThat(evaluation.candidates()).isEmpty();
+        // Minutes are leaving -> arrival, without the wait for the appointment. 나 (arrival 32290): 가 90 s, 마 190 s
+        // (2 and 4 min). 다 (32390): 마 leaves 32100, 290 s (5 min).
+        assertThat(evaluation.candidates()).containsOnlyKeys(2L);
+        assertThat(evaluation.candidates().get(2L).trips()).extracting(Trip::minutes).containsExactly(2, 4);
         assertThat(evaluation.unreachableByTrain()).isEqualTo(5);
     }
 
@@ -74,6 +76,20 @@ class RecommendationEngineTimetableTest {
         assertThat(evaluation.candidates()).isEmpty();
         assertThat(evaluation.unreachableByTrain()).isEqualTo(7);
         assertThat(evaluation.fallbackMembers()).isZero();
+    }
+
+    @Test
+    void noServiceMeansNoTrainOfAnyLineInTheThreeHoursBefore() {
+        RecommendationEngine engine = engine(true);
+        // Thursday's last train arrives at Friday 00:03:10; Friday's first leaves at 08:20.
+        assertThat(engine.noServiceBefore(at(THURSDAY.plusDays(1), 14400))).isTrue();   // Friday 04:00
+        assertThat(engine.noServiceBefore(at(THURSDAY.plusDays(1), 7200))).isFalse();   // Friday 02:00: Thursday's last train
+        assertThat(engine.noServiceBefore(at(THURSDAY.plusDays(1), 3 * 3600 + 190))).isFalse(); // 00:03:10 is exactly 3 h before
+        assertThat(engine.noServiceBefore(at(THURSDAY.plusDays(1), 3 * 3600 + 191))).isTrue();
+        assertThat(engine.noServiceBefore(at(THURSDAY, 32390))).isFalse();
+        assertThat(engine.noServiceBefore(null)).isFalse();
+        // Without the timetable nothing is refused.
+        assertThat(engine(false).noServiceBefore(at(THURSDAY.plusDays(1), 14400))).isFalse();
     }
 
     @Test

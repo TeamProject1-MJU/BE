@@ -6,7 +6,7 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
 
 1. `RoomAccess.requireMember`로 방 멤버 확인(ROOM_NOT_FOUND 404 / NOT_ROOM_MEMBER 403).
 2. 요청 검사(`RecommendationRequest.validate`): 범위·`memberLimits.userId`가 방 멤버인지. 틀리면 VALIDATION_ERROR 400.
-3. 사전 검사(계산 전, run을 남기지 않음): 멤버 2명 미만 `TOO_FEW_MEMBERS`(422) → 출발역 없는 멤버가 있으면 `DEPARTURE_MISSING`(422, `error.details.missingUserIds`).
+3. 사전 검사(계산 전, run을 남기지 않음): 멤버 2명 미만 `TOO_FEW_MEMBERS`(422) → 출발역 없는 멤버가 있으면 `DEPARTURE_MISSING`(422, `error.details.missingUserIds`) → 약속 시각 전 3시간 동안 어느 노선도 운행하지 않으면 `NO_SERVICE_TIME`(422, #96, 아래 "운행하지 않는 시간대").
 4. `ConstraintResolver`: `conditionText`가 있으면 `AiClient.interpretCondition` 1회. 서버가 범위를 검증하고 역 이름→stationId(`stations.name`, 끝의 "역" 무시, 같은 이름의 역이 여럿이면 버림), 닉네임→userId(방 멤버, 중복 닉네임이면 버림)로 매핑. 매핑 못 한 항목은 버리고 POST `message`에 알린다. 같은 항목이 `filter`에도 있으면 filter 값이 우선(항목 단위). AI 실패(어떤 예외든)는 filter만 적용하고 `conditionParseFailed=true`.
 5. `RecommendationEngine`: 이동 시간은 열차 시각표로 계산한다(#96, 아래 "열차 시각표 기반 이동 시간"). 시각표가 없을 때만 참여자당 `shortestPathsFrom` 1회(고정 소요시간)이고, 전원이 도달 가능한 역 = 후보. 방 멤버의 출발역은 후보에서 뺀다(어느 기준으로도 추천하지 않고, nearbyAlternatives에도 넣지 않는다). 이 출발역 제외는 서버 규칙이라 `appliedConstraints.excludeStationIds`에는 넣지 않는다. 그 필드는 사용자가 조건으로 뺀 역만 담는다(명세 v1.12 §8.1). 제약(참여자 **한 명당** 최대 시간·환승·요금, 개인별 한도, 제외 역)을 모두 통과한 역만 남긴다. 요금은 `FareCalculator.fareOf`(경로 API와 같은 `GraphFareCalculator`)로 계산한다.
 6. 기준별 최적역(TIME / FARE / DISTANCE, 명세 8.1 표). 허용 폭은 설정 `linkro.recommendation.fare-tolerance-won`(100), `distance-tolerance-m`(1000).
@@ -57,10 +57,13 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
 ### 계산
 
 - **약속 시각 T가 있을 때**: 후보역 c마다 "T까지 c에 도착"을 조건으로 거꾸로(latest-departure) 시간 의존 다익스트라를 한 번 돌려, 각 멤버 출발역의 최늦 출발 시각을 구한다.
-  - 이동 시간 = T − (첫 열차 출발 − 역 접근 시간), 분 단위 올림. T 전에 도착해서 기다리는 시간도 포함한다.
+  - 그 출발 시각에 나서서 앞으로(earliest-arrival) 다시 탐색해 가장 일찍 도착하는 경로를 쓴다. 단, 거꾸로 경로보다 환승이 많지 않을 때만 쓴다. 1분 빠르려고 두 번 갈아타지 않게 하기 위해서다(강남→홍대입구 22시는 2호선 직행).
+    - 예: 장암→모란 22시는 같은 7호선 열차로 군자에서 더 이른 5호선·8호선에 이어져 21:41에 도착한다.
+  - **이동 시간 = 실제 도착 − (첫 열차 출발 − 역 접근 시간)**, 분 단위 올림. T 전에 도착해서 기다리는 시간은 이동 시간이 아니라 `slackSeconds`다.
+  - 후보 점수·`maxMinutes` 필터·정렬은 이 이동 시간을 쓴다.
   - 후보 탐색은 서로 독립이라 병렬로 돌리고, 결과는 역 id 순으로 모은다.
 - **약속 시각이 없을 때**: 멤버마다 요청 시각에 출발하는 앞으로(earliest-arrival) 탐색을 한 번 돌린다.
-  - 이동 시간 = 도착 − (첫 열차 출발 − 역 접근 시간). 첫 승강장 대기는 빼고, 그 열차를 타는 시점부터 센다.
+  - 이동 시간 = 도착 − (첫 열차 출발 − 역 접근 시간). 첫 승강장 대기는 빼고, 그 열차를 타는 시점부터 센다. `slackSeconds`는 null이다.
   - 그 운행일의 막차가 지났으면 다음 운행일 첫차부터 탄다.
 - **승차 간선**: 실제 열차 한 대를 탄다.
   - 거꾸로는 다음 정차역에 제때 닿는 가장 늦은 열차(`lastDepartureArriving`), 앞으로는 다음 열차(`nextDeparture`)다.
@@ -73,12 +76,24 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
 - **되돌아가기 금지**: A→B를 탄 뒤 바로 B→A를 타는 경로는 만들지 않는다. 기다리는 동안 반대 방향 열차로 왕복해서 분기점 환승을 피하는 경로를 막기 위해서다.
 - **같은 열차 유지**: 탐색이 같은 출발 시각을 주는 다른 열차를 고른 경우가 있다(마천→여의도: 마천 열차가 방화까지 가는데 강동에서 다음 열차로 갈아탐). 그래서 경로를 만들 때, 타고 있던 열차가 다음 구간을 달리고 더 늦지 않게 도착하면 그 열차를 그대로 탄다.
 - **운행일**: 03:00 경계(`TimetableClock`, #94)다.
-  - 약속 시각 00:00~02:59는 전날 운행일이다. 예: 01:30 약속은 전날 막차(01:15쯤까지)로 도착해서 기다리는 경로로 계산된다.
-  - 03:00 이후 첫차 전(예: 04:00) 약속은 그날 열차로 도착할 수 없다.
+  - 약속 시각 00:00~02:59는 전날 운행일이다. 예: 01:30 약속은 전날 막차(평일 01:14까지)로 도착해서 기다리는 경로로 계산되고, 기다림은 `slackSeconds`다.
+  - 03:00 이후 첫차(05:11:30) 전 약속은 그날 열차로 도착할 수 없다. 3시간 안에 운행이 전혀 없으면 `NO_SERVICE_TIME`이고, 그렇지 않으면(평일 밤 다음 날 04:00 등) 모든 역이 도착 불가로 빠진다.
 - **RoutePath**: 시각표 경로도 같은 `RoutePath`로 만든다. 요금·거리·환승 수·segments·혼잡도는 기존과 같은 방식으로 계산된다.
   - TRANSFER step은 하차부터 다음 승차까지(도보 + 대기)다.
   - step 합 = 첫 승차부터 마지막 하차까지 = `totalSeconds`(불변식 유지)다.
   - 정차역 `offsetSec`은 첫 열차 출발 기준이고, 혼잡도는 첫 열차 출발 시각으로 조회한다.
+
+### 운행하지 않는 시간대 (`NO_SERVICE_TIME`)
+
+- **조건**: 약속 시각 T 전 3시간 [T−3h, T] 동안 어느 노선도 운행하지 않으면 계산하지 않고 거절한다.
+  - 운행은 그 운행일 첫 출발부터 마지막 도착까지로 본다. T의 운행일과 그 전날 운행일을 모두 본다.
+- **응답**: 422 `NO_SERVICE_TIME`, "해당 시간대에는 지하철이 운행하지 않습니다. 약속 시간을 바꿔 주세요."
+  - run을 남기지 않고 AI도 호출하지 않는다.
+  - 시각표가 없을 때(mock, `enabled=false`)는 판단할 수 없어 거절하지 않는다.
+- **시각표 경계**: 첫 출발은 모든 요일 05:11:30이다. 마지막 도착은 평일 25:14(2호선 도림천 5907), 토·일·공휴일 24:18:30(1호선 청량리 K212)이다. 그래서 다음과 같이 된다.
+  - 평일 밤 다음 날(화~토) 04:00: 01:14 막차가 3시간 안이라 거절하지 않는다. 그 대신 모든 역이 도착 불가로 빠진다.
+  - 04:15 이후 첫차 전: 거절한다.
+  - 토·일·공휴일 밤 다음 날 03:19 이후 첫차 전(예: 일요일 04:00): 거절한다.
 
 ### 도착할 수 없을 때와 폴백
 
@@ -96,9 +111,13 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
 | 필드 | TIMETABLE | ESTIMATE / 이전 실행 |
 | --- | --- | --- |
 | `departureAt` | 첫 열차 출발 − 역 접근 시간 | 약속 시각 − travelMinutes(없으면 요청 시각) |
+| `arriveAt` | 마지막 열차 도착(travelMinutes = arriveAt − departureAt, 분 올림) | departureAt + 그래프 경로 초 |
+| `slackSeconds` | 약속 시각 − arriveAt. 약속이 없으면 null | 약속 시각 − arriveAt(0~59초). 약속이 없으면 null |
 | `boardingTrain` | `{lineId, lineName, stationId, stationName, direction, departureAt, terminal, trainCode}` | null |
 | `legs[]` | 열차별 `{lineId, lineName, trainCode, terminal, direction, fromStationName, toStationName, boardAt, alightAt, stationCount, walkSec, transferWaitSec}` | [] |
 | `source` | `TIMETABLE` | `ESTIMATE`(이전 실행은 null) |
+
+- 이전 실행에는 `arriveAt`·`slackSeconds`가 없다(null).
 
 - `direction`은 `segments.direction`과 같은 UP/DOWN/INNER/OUTER/LOOP다.
 - `terminal`·`trainCode`는 시각표 표기다.
@@ -124,11 +143,12 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
   - 평일 08·13·22시와 토요일 14시에 네 그룹(2~3명)으로 추천을 만든다.
   - 모든 멤버가 TIMETABLE이고 폴백 0인지 확인한다.
   - 모든 열차 구간이 시각표 파일의 같은 열차 번호·출발·도착 시각과 일치하는지 확인한다.
-  - 01:30·04:00 처리, 저장 후 다시 읽기, OpenAPI도 확인한다.
+  - 이동 시간 = 도착 − 출발, 여유 = 약속 − 도착인지 확인한다.
+  - 01:30, `NO_SERVICE_TIME`(금 04:30, 일 04:00), 평일 밤 다음 날 04:00(도착 불가 제외), 저장 후 다시 읽기, OpenAPI도 확인한다.
 - `TimetableDisabledRecommendationPostgresTest`: `enabled=false`이면 시각표 빈이 없고, travelMinutes = 최단경로 초 올림, departureAt = 약속 − 분, ESTIMATE다.
 - `RecommendationTimetableReportPostgresTest`: 10개 구간 × 4개 시간대 리포트와 소요 시간이다(`build/reports/recommendation-96.md`).
 - **소요 시간**(엔진만, 후보 234~238곳, 멤버 2~6명, 로컬 측정이라 실행마다 다름)
-  - 시각표 5~16 ms, 고정 소요시간 2~7 ms
-  - `create` 전체(mock AI) 11~15 ms
+  - 시각표 14~24 ms(앞으로 다시 탐색 포함), 고정 소요시간 2~7 ms
+  - `create` 전체(mock AI) 17~35 ms
   - 추천은 카카오를 호출하지 않는다.
 

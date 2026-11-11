@@ -82,7 +82,11 @@ public record RecommendationResponse(
             @Schema(description = "처음 타는 열차. TIMETABLE일 때만 있고 ESTIMATE와 이전 실행은 null", types = {"object", "null"}) BoardingTrain boardingTrain,
             @Schema(description = "열차별 승차·하차 시각과 환승 대기. ESTIMATE는 []") List<Leg> legs,
             @Schema(description = "TIMETABLE(열차 시각표로 계산) / ESTIMATE(고정 소요시간 추정). 이전 실행은 null",
-                    example = "TIMETABLE", types = {"string", "null"}) String source) {}
+                    example = "TIMETABLE", types = {"string", "null"}) String source,
+            @Schema(description = "도착 예정 시각(마지막 열차 도착). travelMinutes = arriveAt − departureAt(분 올림). 이전 실행은 null",
+                    types = {"string", "null"}) String arriveAt,
+            @Schema(description = "도착 뒤 약속 시각까지 남는 초 = 약속 시각 − arriveAt. 약속 시각이 없거나 이전 실행이면 null",
+                    types = {"integer", "null"}) Integer slackSeconds) {}
 
     @Schema(name = "RecommendationBoardingTrain")
     public record BoardingTrain(

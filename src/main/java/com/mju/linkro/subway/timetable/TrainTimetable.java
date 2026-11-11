@@ -139,6 +139,9 @@ public final class TrainTimetable {
     private final LoadReport report;
     /** Latest departure of any ride per day type; missing when the day type has no train. */
     private final Map<DayType, Integer> lastDepartures;
+    /** First departure and last arrival of any ride per day type. */
+    private final Map<DayType, Integer> firstDepartures;
+    private final Map<DayType, Integer> lastArrivals;
 
     private TrainTimetable(Map<Long, Map<DayType, Series>> series, Map<Long, Map<Long, Long>> rideEdges,
                            Map<List<Long>, Long> nodesByStationLine, LoadReport report) {
@@ -147,10 +150,17 @@ public final class TrainTimetable {
         this.nodesByStationLine = nodesByStationLine;
         this.report = report;
         Map<DayType, Integer> last = new EnumMap<>(DayType.class);
+        Map<DayType, Integer> first = new EnumMap<>(DayType.class);
+        Map<DayType, Integer> lastArrival = new EnumMap<>(DayType.class);
         series.values().forEach(byDay -> byDay.forEach((day, s) -> {
-            if (s.depart.length > 0) last.merge(day, s.depart[s.depart.length - 1], Math::max);
+            if (s.depart.length == 0) return;
+            last.merge(day, s.depart[s.depart.length - 1], Math::max);
+            first.merge(day, s.depart[0], Math::min);
+            lastArrival.merge(day, s.arriveSorted[s.arriveSorted.length - 1], Math::max);
         }));
         this.lastDepartures = Collections.unmodifiableMap(last);
+        this.firstDepartures = Collections.unmodifiableMap(first);
+        this.lastArrivals = Collections.unmodifiableMap(lastArrival);
     }
 
     /** Reads the gzip CSV and maps it onto the graph data. Fails on a wrong header or a malformed row. */
@@ -384,6 +394,18 @@ public final class TrainTimetable {
     public OptionalInt lastDepartureSec(DayType dayType) {
         Integer last = lastDepartures.get(dayType);
         return last == null ? OptionalInt.empty() : OptionalInt.of(last);
+    }
+
+    /** First departure of any train on the day type, or empty when none runs. */
+    public OptionalInt firstDepartureSec(DayType dayType) {
+        Integer value = firstDepartures.get(dayType);
+        return value == null ? OptionalInt.empty() : OptionalInt.of(value);
+    }
+
+    /** Last arrival of any train on the day type, or empty when none runs. */
+    public OptionalInt lastArrivalSec(DayType dayType) {
+        Integer value = lastArrivals.get(dayType);
+        return value == null ? OptionalInt.empty() : OptionalInt.of(value);
     }
 
     /** RIDE edges with at least one train. */

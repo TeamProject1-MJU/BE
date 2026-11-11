@@ -17,6 +17,13 @@ public interface TimetableRouteFinder {
     /** False only when the timetable has no train at all for the service day of {@code at}. */
     boolean covers(Instant at);
 
+    /**
+     * Whether any train of any line runs (from the day's first departure to its last arrival) at some moment between
+     * the two instants. Both the service day of {@code to} and the one before are checked, since a night can belong to
+     * either.
+     */
+    boolean runsBetween(Instant from, Instant to);
+
     /** Supported stations of the graph. */
     Set<Long> stationIds();
 

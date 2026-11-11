@@ -122,6 +122,10 @@ public class RecommendationService {
         }
         List<Member> members = rows.stream()
                 .map(row -> new Member(row.userId(), row.nickname(), row.stationId())).toList();
+        // No train of any line in the 3 hours before the appointment (e.g. 04:00): refuse before the AI call and save nothing.
+        if (engine.noServiceBefore(room.getAppointmentAt())) {
+            throw new BusinessException(ErrorCode.NO_SERVICE_TIME);
+        }
 
         Resolved resolved = constraints.resolve(request, members);
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
@@ -237,21 +241,26 @@ public class RecommendationService {
             TimedRoute timed = trip.timed();
             Instant departAt;
             Instant firstStop;
+            Instant arriveAt;
             if (timed != null) {
                 // Real trains: leave in time for the first train; stop offsets count from its departure.
                 departAt = timed.leaveAt();
                 firstStop = timed.boardAt();
+                arriveAt = timed.arriveAt();
             } else {
                 // 8.1: departure = appointment − travel minutes; without an appointment the request time is the departure.
                 departAt = appointmentAt == null ? now : appointmentAt.minus(trip.minutes(), ChronoUnit.MINUTES);
                 firstStop = departAt;
+                arriveAt = departAt.plusSeconds(path.totalSeconds());
             }
+            Integer slack = appointmentAt == null ? null : (int) ChronoUnit.SECONDS.between(arriveAt, appointmentAt);
             CongestionResult result = congestion.congestionOf(path, firstStop);
             Congestion shown = result.supported() ? new Congestion(result.pct().intValue(), result.level(), result.levelLabel()) : null;
             StationInfo origin = stations.require(trip.member().departureStationId());
             times.add(new ParticipantTime(trip.member().userId(), trip.member().nickname(),
                     new StationRef(origin.id(), origin.name()), trip.minutes(), path.transferCount(), trip.fareWon(),
-                    path.rideDistanceM(), time(departAt), shown, segments(path), boardingTrain(timed), legs(timed), trip.source()));
+                    path.rideDistanceM(), time(departAt), shown, segments(path), boardingTrain(timed), legs(timed), trip.source(),
+                    time(arriveAt), slack));
         }
         return times;
     }

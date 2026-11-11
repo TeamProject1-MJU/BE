@@ -1,5 +1,7 @@
 package com.mju.linkro.recommendation;
 
+import com.mju.linkro.common.exception.BusinessException;
+import com.mju.linkro.common.exception.ErrorCode;
 import com.mju.linkro.recommendation.dto.RecommendationResponse;
 import com.mju.linkro.recommendation.dto.RecommendationResponse.Leg;
 import com.mju.linkro.recommendation.dto.RecommendationResponse.ParticipantTime;
@@ -173,10 +175,13 @@ class TimetableRecommendationPostgresTest {
                         // No station access time is configured: leave when the first train leaves.
                         assertThat(trip.departureAt()).isEqualTo(trip.boardingTrain().departureAt());
                         assertThat(trip.legs().get(0).trainCode()).isEqualTo(trip.boardingTrain().trainCode());
-                        // Arrival by the appointment, travel = appointment − departure.
+                        // Arrival by the appointment; travel = arrival − departure, the rest is slack.
                         Instant leave = OffsetDateTime.parse(trip.departureAt()).toInstant();
-                        assertThat(OffsetDateTime.parse(trip.legs().get(trip.legs().size() - 1).alightAt()).toInstant()).isBeforeOrEqualTo(time);
-                        assertThat(trip.travelMinutes()).isEqualTo((int) ((time.getEpochSecond() - leave.getEpochSecond() + 59) / 60));
+                        Instant arrive = OffsetDateTime.parse(trip.arriveAt()).toInstant();
+                        assertThat(arrive).isEqualTo(OffsetDateTime.parse(trip.legs().get(trip.legs().size() - 1).alightAt()).toInstant())
+                                .isBeforeOrEqualTo(time);
+                        assertThat(trip.travelMinutes()).isEqualTo((int) ((arrive.getEpochSecond() - leave.getEpochSecond() + 59) / 60));
+                        assertThat(trip.slackSeconds()).isEqualTo((int) (time.getEpochSecond() - arrive.getEpochSecond()));
                         assertLegsMatchTheFile(trip.legs(), serviceDate);
                     }
                 }
@@ -210,7 +215,7 @@ class TimetableRecommendationPostgresTest {
     @Test
     void afterTheLastTrainMembersArriveOnTheLastTrainsAndWait() {
         // Friday 01:30 still belongs to Thursday's service day: members take trains that arrive before the last ones
-        // stop (about 01:15) and wait; the wait is part of their travel minutes. Nothing falls back.
+        // stop (about 01:15) and wait; the wait is slack, not travel. Nothing falls back.
         Instant late = at(THURSDAY.plusDays(1), 1, 30);
         List<Member> members = List.of(new Member(UUID.randomUUID(), "a", station("강남")), new Member(UUID.randomUUID(), "b", station("노원")));
         Evaluation evaluation = engine.evaluate(members, AppliedConstraints.none(), late, Instant.now());
@@ -220,14 +225,32 @@ class TimetableRecommendationPostgresTest {
         for (Candidate candidate : evaluation.candidates().values()) {
             assertThat(candidate.trips()).allSatisfy(trip -> {
                 assertThat(trip.timed().arriveAt()).isBeforeOrEqualTo(at(THURSDAY.plusDays(1), 1, 15));
-                assertThat(trip.minutes() * 60L).isGreaterThanOrEqualTo(late.getEpochSecond() - trip.timed().leaveAt().getEpochSecond());
+                // Minutes are the ride itself, not the wait until 01:30.
+                assertThat(trip.minutes()).isEqualTo((int) ((trip.timed().arriveAt().getEpochSecond() - trip.timed().leaveAt().getEpochSecond() + 59) / 60));
             });
         }
     }
 
     @Test
-    void beforeTheFirstTrainNothingCanArriveAndTheMessageSaysWhy() {
-        // Friday 04:00 is Friday's service day, before its first train.
+    void noTrainInTheThreeHoursBeforeIsRefusedWithoutARun() {
+        // Last arrivals: weekday nights 25:14 (2호선 도림천), Saturday and Sunday nights 24:18:30; first departure 05:11:30.
+        // Friday 04:30 (01:30~04:30) and Sunday 04:00 (01:00~04:00, after Saturday's 00:18:30) have no train at all.
+        for (Instant appointment : List.of(at(THURSDAY.plusDays(1), 4, 30), at(SATURDAY.plusDays(1), 4, 0))) {
+            UUID[] users = room(appointment, "강남", "사당");
+            assertThatThrownBy(() -> service.create(users[1], users[0], null)).as("%s", appointment)
+                    .isInstanceOfSatisfying(BusinessException.class, exception -> {
+                        assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.NO_SERVICE_TIME);
+                        assertThat(exception.getErrorCode().getStatus().value()).isEqualTo(422);
+                        assertThat(exception.getErrorCode().getMessage()).isEqualTo("해당 시간대에는 지하철이 운행하지 않습니다. 약속 시간을 바꿔 주세요.");
+                    });
+        }
+        assertThat(jdbc.queryForObject("select count(*) from recommendation_runs", Integer.class)).isZero();
+    }
+
+    @Test
+    void aWeekdayNightTrainInTheWindowLeavesFourOClockToTheExclusionRule() {
+        // Friday 04:00: Thursday's last train arrives at 01:14, inside 01:00~04:00, so it is not NO_SERVICE_TIME.
+        // 04:00 is Friday's service day, before its first train, so every station is left out with the reason.
         UUID[] users = room(at(THURSDAY.plusDays(1), 4, 0), "강남", "사당");
         RecommendationResponse response = service.create(users[1], users[0], null);
         assertThat(response.results()).isEmpty();
@@ -245,6 +268,7 @@ class TimetableRecommendationPostgresTest {
         JsonNode trip = schemas.get("RecommendationParticipantTime").get("properties");
         assertThat(trip.has("departureAt") && trip.has("segments") && trip.has("travelMinutes")).isTrue();
         assertThat(trip.has("boardingTrain") && trip.has("legs") && trip.has("source")).isTrue();
+        assertThat(trip.has("arriveAt") && trip.has("slackSeconds")).isTrue();
         assertThat(schemas.get("RecommendationBoardingTrain").get("properties").has("trainCode")).isTrue();
         assertThat(schemas.get("RecommendationLeg").get("properties").has("transferWaitSec")).isTrue();
     }

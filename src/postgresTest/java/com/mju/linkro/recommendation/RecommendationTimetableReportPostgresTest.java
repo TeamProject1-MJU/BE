@@ -115,10 +115,10 @@ class RecommendationTimetableReportPostgresTest {
                 new Slot("평일 13:00", at(THURSDAY, 13), THURSDAY, "평일"), new Slot("평일 22:00", at(THURSDAY, 22), THURSDAY, "평일"),
                 new Slot("토 14:00", at(SATURDAY, 14), SATURDAY, "토요일"));
         StringBuilder out = new StringBuilder("# Timetable routing report (#96)\n\n");
-        out.append("Appointment = arrival deadline. minutes = ceil((appointment − leave) / 60). ESTIMATE = fixed-cost graph ")
+        out.append("Appointment = arrival deadline. minutes = ceil((arrival − leave) / 60), slack = appointment − arrival. ESTIMATE = fixed-cost graph ")
                 .append("(travel_seconds + dwell 30 + transfer wait 120, V15).\n\n");
-        out.append("| pair | slot | boarding train | legs (board → alight, wait) | transfers | minutes | ESTIMATE | file | ms |\n");
-        out.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
+        out.append("| pair | slot | boarding train | legs (board → alight, wait) | transfers | minutes | slack s | ESTIMATE | file | ms |\n");
+        out.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
         StringBuilder csv = new StringBuilder("pair,slot,from,to,from_lat,from_lon,to_lat,to_lon,minutes,transfers\n");
         int checked = 0;
         int matched = 0;
@@ -131,7 +131,8 @@ class RecommendationTimetableReportPostgresTest {
                 TimedRoute route = timetable.latestDepartures(to, slot.at(), Set.of(from), 0).get(from);
                 long micros = (System.nanoTime() - started) / 1000;
                 assertThat(route).as("%s -> %s at %s", pair[0], pair[1], slot.label()).isNotNull();
-                int minutes = (int) ((slot.at().getEpochSecond() - route.leaveAt().getEpochSecond() + 59) / 60);
+                int minutes = (int) ((route.arriveAt().getEpochSecond() - route.leaveAt().getEpochSecond() + 59) / 60);
+                long slack = slot.at().getEpochSecond() - route.arriveAt().getEpochSecond();
                 boolean ok = matchesFile(route, slot.serviceDate(), slot.day(), raw);
                 checked++;
                 if (ok) matched++;
@@ -149,7 +150,7 @@ class RecommendationTimetableReportPostgresTest {
                 out.append("| ").append(pair[0]).append("→").append(pair[1]).append(" | ").append(slot.label()).append(" | ")
                         .append(first.lineName()).append(' ').append(first.trainCode()).append(' ').append(HMS.format(first.boardAt()))
                         .append(' ').append(first.terminal()).append("행 | ").append(legs).append(" | ")
-                        .append(route.path().transferCount()).append(" | ").append(minutes).append(" | ").append(estimate)
+                        .append(route.path().transferCount()).append(" | ").append(minutes).append(" | ").append(slack).append(" | ").append(estimate)
                         .append(" | ").append(ok ? "일치" : "불일치").append(" | ").append(String.format(Locale.ROOT, "%.1f", micros / 1000.0))
                         .append(" |\n");
                 var a = jdbc.queryForMap("select latitude, longitude from stations where id = ?", from);

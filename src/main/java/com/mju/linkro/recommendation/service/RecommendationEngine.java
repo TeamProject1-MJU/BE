@@ -34,9 +34,9 @@ import org.springframework.stereotype.Component;
  * Candidate set and best station per criterion (API 8.1). It holds no state between calls and touches no database.
  *
  * <p>With the timetable (#96) every member's time comes from real trains: with an appointment, one latest-departure
- * search per candidate gives the last moment each member can leave and still arrive by the appointment
- * (minutes = appointment − leaving); without one, one earliest-arrival search per member from the request time gives
- * minutes = arrival − leaving for the first train. A member who cannot arrive in time on that service day's trains
+ * search per candidate gives the last moment each member can leave and still arrive by the appointment; without one,
+ * one earliest-arrival search per member from the request time gives the first train. Either way minutes = arrival −
+ * leaving, so time spent waiting at the destination for the appointment is not counted. A member who cannot arrive in time on that service day's trains
  * removes the candidate; nothing falls back to fixed costs. Only when there is no timetable (module mock,
  * {@code linkro.subway.timetable.enabled=false}) or it has no train for that day type is the fixed-cost graph used
  * ({@code shortestPathsFrom}, every member ESTIMATE, one WARN per request).
@@ -106,6 +106,18 @@ public class RecommendationEngine {
             return candidates.values().stream().filter(candidate -> metric.applyAsInt(candidate) <= lowest + tolerance)
                     .min(BY_TIME);
         }
+    }
+
+    /** How far before an appointment some train must run for {@link #noServiceBefore} to be false. */
+    static final Duration NO_SERVICE_WINDOW = Duration.ofHours(3);
+
+    /**
+     * True when the timetable shows no train of any line in the {@link #NO_SERVICE_WINDOW} before the appointment
+     * (for example 04:00). Without a timetable it cannot tell and returns false.
+     */
+    public boolean noServiceBefore(Instant appointmentAt) {
+        return timetable != null && appointmentAt != null
+                && !timetable.runsBetween(appointmentAt.minus(NO_SERVICE_WINDOW), appointmentAt);
     }
 
     /** Without an appointment, leaving now. */
@@ -184,8 +196,9 @@ public class RecommendationEngine {
             List<Trip> trips = new ArrayList<>(members.size());
             for (Member member : members) {
                 TimedRoute route = routes.get(member.departureStationId());
-                Instant end = appointmentAt != null ? appointmentAt : route.arriveAt();
-                int minutes = minutes((int) Duration.between(route.leaveAt(), end).toSeconds());
+                // Time on the way: leaving until the train arrives. Waiting at the destination for the appointment is
+                // not travel (it is slackSeconds in the response).
+                int minutes = minutes((int) Duration.between(route.leaveAt(), route.arriveAt()).toSeconds());
                 Trip trip = trip(member, route.path(), minutes, route, TIMETABLE, constraints, personalLimits);
                 if (trip == null) {
                     trips = null;

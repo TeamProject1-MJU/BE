@@ -111,6 +111,22 @@ public class TimetableRouter implements TimetableRouteFinder {
     }
 
     @Override
+    public boolean runsBetween(Instant from, Instant to) {
+        LocalDate serviceDate = serviceTime(to).serviceDate();
+        for (LocalDate date : List.of(serviceDate.minusDays(1), serviceDate)) {
+            DayType day = clock.dayTypeOf(date);
+            OptionalInt first = timetable.firstDepartureSec(day);
+            OptionalInt last = timetable.lastArrivalSec(day);
+            if (first.isEmpty()) continue;
+            Instant midnight = date.atStartOfDay(ZONE).toInstant();
+            Instant start = midnight.plusSeconds(first.getAsInt());
+            Instant end = midnight.plusSeconds(last.getAsInt());
+            if (!start.isAfter(to) && !end.isBefore(from)) return true;
+        }
+        return false;
+    }
+
+    @Override
     public Set<Long> stationIds() {
         Set<Long> ids = new TreeSet<>();
         graph.stations().stream().filter(Station::supported).filter(station -> !graph.nodesOf(station.id()).isEmpty())
@@ -245,7 +261,14 @@ public class TimetableRouter implements TimetableRouteFinder {
         resolved.forEach((origin, state) -> {
             List<Label> moves = new ArrayList<>();
             for (Label cursor = state; cursor.edge() != null; cursor = cursor.link()) moves.add(cursor);
-            routes.put(origin, build(stayOnBoard(moves, day), service.serviceDate(), origin, destinationStationId));
+            TimedRoute latest = build(stayOnBoard(moves, day), service.serviceDate(), origin, destinationStationId);
+            // The backward search fixes when to leave; from then on the member takes the earliest way there
+            // (장암 -> 모란: an earlier 5호선 and 8호선 connection). Only when it needs no more transfers: one minute is not
+            // worth two extra changes (강남 -> 홍대입구 at 22:00 stays on 2호선).
+            TimedRoute replayed = forward(origin, latest.leaveAt(), destinationStationId).routeTo(destinationStationId).orElse(latest);
+            boolean better = replayed.arriveAt().isBefore(latest.arriveAt())
+                    && replayed.path().transferCount() <= latest.path().transferCount();
+            routes.put(origin, better ? replayed : latest);
         });
         return routes;
     }
@@ -268,6 +291,11 @@ public class TimetableRouter implements TimetableRouteFinder {
     @Override
     public TimedTree departingAt(long originStationId, Instant leaveAt) {
         requireStation(originStationId);
+        return forward(originStationId, leaveAt, null);
+    }
+
+    /** Earliest arrivals; with a {@code target} station it stops once that station is reached. */
+    private TimedTree forward(long originStationId, Instant leaveAt, Long target) {
         ServiceTime service = serviceTime(leaveAt);
         LocalDate date = service.serviceDate();
         DayType day = service.dayType();
@@ -314,6 +342,7 @@ public class TimetableRouter implements TimetableRouteFinder {
                 settledRide[node] = true;
                 long station = graph.node(nodeIds[node]).stationId();
                 if (station != originStationId) arrivals.putIfAbsent(station, state);
+                if (target != null && station == target) break;
             }
             for (int e : outgoing[node]) {
                 Edge edge = edges[e];
