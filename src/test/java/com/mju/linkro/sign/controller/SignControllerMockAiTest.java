@@ -1,6 +1,7 @@
 package com.mju.linkro.sign.controller;
 
 import com.mju.linkro.auth.jwt.JwtProvider;
+import com.mju.linkro.sign.SignTestImages;
 import com.mju.linkro.auth.repository.RefreshTokenRepository;
 import com.mju.linkro.subway.api.LineLookup;
 import com.mju.linkro.subway.api.StationInfo;
@@ -48,7 +49,7 @@ class SignControllerMockAiTest {
 
         mvc.perform(multipart(SignControllerTest.URL)
                         .file(new MockMultipartFile("image", "sign.png", "image/png",
-                                new byte[] {(byte) 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 1}))
+                                SignTestImages.png()))
                         .file(new MockMultipartFile("route", "", "text/plain", SignControllerTest.ROUTE.getBytes(java.nio.charset.StandardCharsets.UTF_8)))
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtProvider.createAccessToken(user.getId())))
                 .andExpect(status().isOk())

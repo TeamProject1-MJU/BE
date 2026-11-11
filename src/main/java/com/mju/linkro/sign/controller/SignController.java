@@ -43,7 +43,7 @@ public class SignController {
             + "route: {\"stationId\":105,\"lineId\":2,\"direction\":\"INNER\",\"headsign\":\"사당 방면\"} (direction은 생략 가능). 응답 목표 5초 이내.")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "판정 결과",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.SignCheck.class)))
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "IMAGE_INVALID: 이미지 없음·JPG/PNG 아님·5MB 초과 / VALIDATION_ERROR: route 없음·형식 오류, 존재하지 않는 lineId",
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "IMAGE_INVALID: 이미지 없음·JPG/PNG 아님·5MB 초과·손상되어 열 수 없는 파일 / VALIDATION_ERROR: route 없음·형식 오류, 존재하지 않는 lineId",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "STATION_NOT_FOUND",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))

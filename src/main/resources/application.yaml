@@ -16,6 +16,8 @@ spring:
       # Sign photo (API 9.1): 5MB. Spring's default is 1MB. Over the limit is IMAGE_INVALID (GlobalExceptionHandler).
       max-file-size: 5MB
       max-request-size: 6MB
+      # Above max-request-size, so an accepted upload stays in memory and is never written to the temp dir (spec 9.1: images are not stored). Default 0 writes every upload to disk.
+      file-size-threshold: 6MB
   jpa:
     open-in-view: false
     hibernate:

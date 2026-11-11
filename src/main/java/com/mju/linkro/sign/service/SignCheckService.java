@@ -11,7 +11,16 @@ import com.mju.linkro.sign.dto.SignCheckResponse.Place;
 import com.mju.linkro.sign.dto.SignRouteRequest;
 import com.mju.linkro.subway.api.LineLookup;
 import com.mju.linkro.subway.api.StationLookup;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.util.Iterator;
 import java.util.Map;
+import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.event.IIOReadWarningListener;
+import javax.imageio.stream.ImageInputStream;
+import javax.imageio.stream.MemoryCacheImageInputStream;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -25,6 +34,8 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class SignCheckService {
     static final int MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+    /** A small file can still declare a huge canvas; decoding that would exhaust memory. */
+    static final long MAX_IMAGE_PIXELS = 50_000_000L;
 
     private final AiClient ai;
     private final StationLookup stations;
@@ -32,6 +43,7 @@ public class SignCheckService {
 
     public SignCheckResponse check(byte[] image, SignRouteRequest route) {
         SignImage signImage = new SignImage(image, contentType(image));
+        requireDecodable(image);
         SignRouteRequest.Valid request = route.validate();
         String stationName = stations.require(request.stationId()).name();
         String lineName = lines.name(request.lineId()).orElseThrow(() -> new BusinessException(ErrorCode.VALIDATION_ERROR,
@@ -55,6 +67,35 @@ public class SignCheckService {
         if (startsWith(image, 0xFF, 0xD8, 0xFF)) return "image/jpeg";
         if (startsWith(image, 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A)) return "image/png";
         throw new BusinessException(ErrorCode.IMAGE_INVALID);
+    }
+
+    /**
+     * The first bytes alone pass a corrupt file, which the AI call would then turn into AI_UNAVAILABLE. Decode it fully,
+     * in memory (MemoryCacheImageInputStream, so ImageIO never writes a cache file), and treat decoder warnings such as
+     * a truncated JPEG as corrupt.
+     */
+    static void requireDecodable(byte[] image) {
+        try (ImageInputStream input = new MemoryCacheImageInputStream(new ByteArrayInputStream(image))) {
+            Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
+            if (!readers.hasNext()) throw new BusinessException(ErrorCode.IMAGE_INVALID);
+            ImageReader reader = readers.next();
+            try {
+                boolean[] warned = {false};
+                IIOReadWarningListener listener = (source, warning) -> warned[0] = true;
+                reader.addIIOReadWarningListener(listener);
+                reader.setInput(input, true, true);
+                if ((long) reader.getWidth(0) * reader.getHeight(0) > MAX_IMAGE_PIXELS) {
+                    throw new BusinessException(ErrorCode.IMAGE_INVALID);
+                }
+                BufferedImage decoded = reader.read(0);
+                if (decoded == null || warned[0]) throw new BusinessException(ErrorCode.IMAGE_INVALID);
+            } finally {
+                reader.dispose();
+            }
+        } catch (IOException | RuntimeException exception) {
+            if (exception instanceof BusinessException business) throw business;
+            throw new BusinessException(ErrorCode.IMAGE_INVALID);
+        }
     }
 
     private static boolean startsWith(byte[] bytes, int... prefix) {

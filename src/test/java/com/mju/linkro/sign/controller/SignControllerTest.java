@@ -7,6 +7,7 @@ import com.mju.linkro.ai.api.SignReading;
 import com.mju.linkro.ai.api.SignReason;
 import com.mju.linkro.ai.api.SignResult;
 import com.mju.linkro.auth.jwt.JwtProvider;
+import com.mju.linkro.sign.SignTestImages;
 import com.mju.linkro.auth.repository.RefreshTokenRepository;
 import com.mju.linkro.common.exception.BusinessException;
 import com.mju.linkro.common.exception.ErrorCode;
@@ -49,7 +50,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ActiveProfiles("test")
 class SignControllerTest {
     static final String URL = "/api/v1/ai/direction-check";
-    static final byte[] JPEG = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 1, 2, 3};
+    static final byte[] JPEG = SignTestImages.jpeg();
     static final String ROUTE = "{\"stationId\":105,\"lineId\":2,\"direction\":\"INNER\",\"headsign\":\"사당 방면\"}";
 
     @Autowired WebApplicationContext context;
@@ -134,7 +135,9 @@ class SignControllerTest {
     void badImagesAreImageInvalid400WithoutCallingTheAi() throws Exception {
         for (MockMultipartFile bad : new MockMultipartFile[] {
                 null, image("image/jpeg", new byte[0]), image("image/jpeg", "GIF89a....".getBytes(StandardCharsets.UTF_8)),
-                image("text/plain", "hello".getBytes(StandardCharsets.UTF_8))}) {
+                image("text/plain", "hello".getBytes(StandardCharsets.UTF_8)),
+                image("image/jpeg", SignTestImages.jpegHeaderOnly()), image("image/png", SignTestImages.truncated(SignTestImages.png())),
+                image("image/jpeg", SignTestImages.corrupt(JPEG))}) {
             post(bad, ROUTE, true).andExpect(status().isBadRequest())
                     .andExpect(content().json("{\"success\":false,\"error\":{\"code\":\"IMAGE_INVALID\"}}", JsonCompareMode.LENIENT));
         }

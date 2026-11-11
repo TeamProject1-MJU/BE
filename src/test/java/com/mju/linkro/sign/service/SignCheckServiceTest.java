@@ -8,6 +8,7 @@ import com.mju.linkro.ai.api.SignReason;
 import com.mju.linkro.ai.api.SignResult;
 import com.mju.linkro.common.exception.BusinessException;
 import com.mju.linkro.common.exception.ErrorCode;
+import com.mju.linkro.sign.SignTestImages;
 import com.mju.linkro.sign.dto.SignCheckResponse;
 import com.mju.linkro.sign.dto.SignRouteRequest;
 import com.mju.linkro.subway.api.DirectionCode;
@@ -23,13 +24,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class SignCheckServiceTest {
-    static final byte[] JPEG = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0, 1, 2, 3};
-    static final byte[] PNG = {(byte) 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2};
+    static final byte[] JPEG = SignTestImages.jpeg();
+    static final byte[] PNG = SignTestImages.png();
 
     StationLookup stations = mock(StationLookup.class);
     LineLookup lines = mock(LineLookup.class);
@@ -95,16 +97,55 @@ class SignCheckServiceTest {
     @Test
     void invalidImageIsRejectedBeforeAnyLookupOrAiCall() {
         byte[] gif = {'G', 'I', 'F', '8', '9', 'a'};
-        byte[] tooBig = new byte[SignCheckService.MAX_IMAGE_BYTES + 1];
-        System.arraycopy(JPEG, 0, tooBig, 0, JPEG.length);
+        byte[] tooBig = SignTestImages.padded(JPEG, SignCheckService.MAX_IMAGE_BYTES + 1);
         for (byte[] bad : new byte[][] {null, new byte[0], gif, new byte[] {(byte) 0xFF, (byte) 0xD8}, tooBig}) {
             assertThatThrownBy(() -> service.check(bad, route(null)))
                     .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.IMAGE_INVALID));
         }
-        byte[] exactlyFive = new byte[SignCheckService.MAX_IMAGE_BYTES];
-        System.arraycopy(PNG, 0, exactlyFive, 0, PNG.length);
+        verifyNoInteractions(ai, stations, lines);
+        byte[] exactlyFive = SignTestImages.padded(PNG, SignCheckService.MAX_IMAGE_BYTES);
         when(ai.readSign(any(), any())).thenReturn(new SignReading(SignResult.CORRECT, null, null, null, null));
         assertThat(service.check(exactlyFive, route(null)).result()).isEqualTo(SignResult.CORRECT);
+    }
+
+    @Test
+    void realJpegAndPngReachTheAi() {
+        when(ai.readSign(any(), any())).thenReturn(new SignReading(SignResult.CORRECT, null, null, null, null));
+        assertThat(service.check(JPEG, route(null)).result()).isEqualTo(SignResult.CORRECT);
+        assertThat(service.check(PNG, route(null)).result()).isEqualTo(SignResult.CORRECT);
+        verify(ai, times(2)).readSign(any(), any());
+    }
+
+    @Test
+    void headerOnlyTruncatedAndCorruptFilesAreImageInvalidAndTheAiIsNeverCalled() {
+        for (byte[] bad : new byte[][] {
+                SignTestImages.jpegHeaderOnly(), SignTestImages.pngHeaderOnly(),
+                SignTestImages.truncated(JPEG), SignTestImages.truncated(PNG),
+                SignTestImages.corrupt(JPEG), SignTestImages.corrupt(PNG)}) {
+            assertThatThrownBy(() -> service.check(bad, route(null)))
+                    .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.IMAGE_INVALID));
+        }
+        verifyNoInteractions(ai);
+    }
+
+    @Test
+    void decodingNeverTouchesTheImageIoDiskCache() throws Exception {
+        // ImageIO would put a plain InputStream into a cache file when the cache is on. Point that directory at a place
+        // that no longer exists: if decoding used it, the real images below would fail instead of reaching the AI.
+        boolean cacheBefore = javax.imageio.ImageIO.getUseCache();
+        java.io.File dirBefore = javax.imageio.ImageIO.getCacheDirectory();
+        when(ai.readSign(any(), any())).thenReturn(new SignReading(SignResult.CORRECT, null, null, null, null));
+        javax.imageio.ImageIO.setUseCache(true);
+        java.nio.file.Path gone = java.nio.file.Files.createTempDirectory("imageio-cache-test");
+        javax.imageio.ImageIO.setCacheDirectory(gone.toFile());
+        java.nio.file.Files.delete(gone);
+        try {
+            assertThat(service.check(JPEG, route(null)).result()).isEqualTo(SignResult.CORRECT);
+            assertThat(service.check(PNG, route(null)).result()).isEqualTo(SignResult.CORRECT);
+        } finally {
+            javax.imageio.ImageIO.setUseCache(cacheBefore);
+            javax.imageio.ImageIO.setCacheDirectory(dirBefore);
+        }
     }
 
     @Test

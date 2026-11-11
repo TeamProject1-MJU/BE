@@ -43,6 +43,9 @@ class SignCheckPostgresTest {
         registry.add("spring.datasource.password", POSTGRES::getPassword);
     }
 
+    /** A real 8x8 PNG (the sign service decodes the upload before calling the AI). */
+    static final String PNG = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAbElEQVR4XhXNQRUAUQhCUZOYhCQmeUlIQhISzR+XXA7ODDtouIHBQ4YOM8suWm5h8ZKl+0CskDiBsIioHhx76LiDw0eO3oN/4FVf+J8h0PduzBqZ8x/bxNQPwgaFy192SGgelC0q13/CJaXlA+odUoED3fDeAAAAAElFTkSuQmCC";
+
     @Autowired WebApplicationContext context;
     @Autowired JwtProvider jwt;
     @Autowired UserRepository users;
@@ -58,7 +61,7 @@ class SignCheckPostgresTest {
 
     private org.springframework.test.web.servlet.ResultActions post(String route) throws Exception {
         return mvc.perform(multipart("/api/v1/ai/direction-check")
-                .file(new MockMultipartFile("image", "sign.jpg", "image/jpeg", new byte[] {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, 1}))
+                .file(new MockMultipartFile("image", "sign.png", "image/png", java.util.Base64.getDecoder().decode(PNG)))
                 .file(new MockMultipartFile("route", "", "text/plain", route.getBytes(StandardCharsets.UTF_8)))
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwt.createAccessToken(user)));
     }
