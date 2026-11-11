@@ -16,7 +16,8 @@ class RoomMembershipServiceTest {
     private final RoomAccess access = mock(RoomAccess.class);
     private final MeetingMemberRepository members = mock(MeetingMemberRepository.class);
     private final RoomReadRepository reads = mock(RoomReadRepository.class);
-    private final RoomMembershipService service = new RoomMembershipService(access, mock(com.mju.linkro.user.service.UserAccess.class), members, reads);
+    private final com.mju.linkro.chat.service.ChatSystemMessages systemMessages = mock(com.mju.linkro.chat.service.ChatSystemMessages.class);
+    private final RoomMembershipService service = new RoomMembershipService(access, mock(com.mju.linkro.user.service.UserAccess.class), members, reads, systemMessages);
     private final UUID room = UUID.randomUUID(), user = UUID.randomUUID();
 
     @Test void locksBeforeDuplicateCountAndSave() {
@@ -25,12 +26,13 @@ class RoomMembershipServiceTest {
         when(entity.getId()).thenReturn(room);
         when(entity.getMaxMembers()).thenReturn(4);
         service.join(user, "ABC123");
-        var order = inOrder(access, members);
+        var order = inOrder(access, members, systemMessages);
         order.verify(access).lockByCode("ABC123");
         order.verify(members).findCurrentRole(room, user);
         order.verify(members).countByRoomId(room);
         order.verify(members).saveAndFlush(argThat(m -> m.getRoomId().equals(room) && m.getUserId().equals(user)
                 && m.getRole() == RoomRole.MEMBER && m.getDepartureStationId() == null));
+        order.verify(systemMessages).joined(room, user);
     }
 
     @Test void locksBeforeValidationAndChangesOnlyOwnMember() {

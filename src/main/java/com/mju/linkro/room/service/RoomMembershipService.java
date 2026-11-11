@@ -1,5 +1,6 @@
 package com.mju.linkro.room.service;
 
+import com.mju.linkro.chat.service.ChatSystemMessages;
 import com.mju.linkro.common.exception.*;
 import com.mju.linkro.room.domain.*;
 import com.mju.linkro.room.dto.RoomMembershipRequests.*;
@@ -24,6 +25,7 @@ public class RoomMembershipService {
     private final UserAccess users;
     private final MeetingMemberRepository members;
     private final RoomReadRepository reads;
+    private final ChatSystemMessages systemMessages;
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Joined join(UUID userId, String code) {
@@ -32,6 +34,7 @@ public class RoomMembershipService {
         if (members.findCurrentRole(room.getId(), userId).isPresent()) throw new BusinessException(ErrorCode.ALREADY_JOINED);
         if (members.countByRoomId(room.getId()) >= room.getMaxMembers()) throw new BusinessException(ErrorCode.ROOM_FULL);
         members.saveAndFlush(new MeetingMember(room.getId(), userId, RoomRole.MEMBER));
+        systemMessages.joined(room.getId(), userId);
         // #43: register MEMBER_JOINED for delivery after successful commit here.
         return new Joined(room.getId());
     }

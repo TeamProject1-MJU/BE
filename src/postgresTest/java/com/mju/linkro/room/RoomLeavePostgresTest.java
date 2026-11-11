@@ -137,16 +137,17 @@ class RoomLeavePostgresTest {
         UUID other=room(); records(other,owner);
         Map<String,List<Map<String,Object>>> historyBefore=new HashMap<>();
         for(String table:List.of("recommendation_runs","recommendation_results","station_proposals","room_messages"))
-            historyBefore.put(table,jdbc.queryForList("select * from "+table+" order by id"));
+            historyBefore.put(table,jdbc.queryForList("select * from "+table+(table.equals("room_messages")?" where sender_type<>'SYSTEM'":"")+" order by id"));
         Map<String,List<Map<String,Object>>> otherBefore=new HashMap<>();
         for(String table:List.of("meeting_rooms","meeting_members","recommendation_runs","station_proposals","station_proposal_votes","room_messages")) {
             otherBefore.put(table,jdbc.queryForList("select * from "+table+" where "+(table.equals("meeting_rooms")?"id":"room_id")+"=?",other));
         }
         leaving.leave(room,owner);
-        historyBefore.forEach((table,before)->assertThat(jdbc.queryForList("select * from "+table+" order by id")).isEqualTo(before));
+        // SYSTEM messages (#76) are new rows by design; the history that must stay is everything else.
+        historyBefore.forEach((table,before)->assertThat(jdbc.queryForList("select * from "+table+(table.equals("room_messages")?" where sender_type<>'SYSTEM'":"")+" order by id")).isEqualTo(before));
         assertThat(jdbc.queryForObject("select count(*) from station_proposal_votes where room_id=?",Long.class,room)).isZero();
         for(String table:List.of("recommendation_runs","station_proposals","room_messages"))
-            assertThat(jdbc.queryForObject("select count(*) from "+table+" where room_id=?",Long.class,room)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("select count(*) from "+table+" where room_id=?"+(table.equals("room_messages")?" and sender_type<>'SYSTEM'":""),Long.class,room)).isEqualTo(1);
         assertThat(count("recommendation_results")).isEqualTo(2);
         mvc.perform(auth(delete(departurePath(room)),member)).andExpect(status().isOk())
                 .andExpect(content().json("{\"success\":true,\"data\":{\"roomDeleted\":true,\"newOwnerId\":null}}"));

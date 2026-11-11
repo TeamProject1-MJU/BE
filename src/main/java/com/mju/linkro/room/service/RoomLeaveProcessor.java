@@ -1,5 +1,6 @@
 package com.mju.linkro.room.service;
 
+import com.mju.linkro.chat.service.ChatSystemMessages;
 import com.mju.linkro.common.exception.*;
 import com.mju.linkro.room.domain.*;
 import com.mju.linkro.room.dto.RoomResponses.Left;
@@ -15,6 +16,7 @@ import org.springframework.transaction.annotation.*;
 public class RoomLeaveProcessor {
     private final MeetingMemberRepository members;
     private final MeetingRoomRepository rooms;
+    private final ChatSystemMessages systemMessages;
 
     @Transactional(propagation = Propagation.MANDATORY)
     public Left leaveLocked(MeetingRoom room, UUID userId) {
@@ -38,7 +40,8 @@ public class RoomLeaveProcessor {
             successor.promoteToOwner();
             newOwnerId = successor.getUserId();
         }
-        // #43: transactional SYSTEM persistence here; MEMBER_LEFT / OWNER_CHANGED after commit.
+        systemMessages.left(room.getId(), userId, newOwnerId);
+        // #43: MEMBER_LEFT / OWNER_CHANGED after commit.
         // Register immutable payloads with the OUTERMOST transaction; rollback must emit nothing.
         return new Left(false, newOwnerId);
     }

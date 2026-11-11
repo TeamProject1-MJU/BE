@@ -4,6 +4,7 @@ import com.mju.linkro.common.exception.*;
 import com.mju.linkro.room.domain.*;
 import com.mju.linkro.room.dto.SelectedStationRequest;
 import com.mju.linkro.room.service.*;
+import com.mju.linkro.subway.api.StationInfo;
 import com.mju.linkro.subway.api.StationLookup;
 import java.time.Instant;
 import java.util.UUID;
@@ -17,7 +18,8 @@ import static org.mockito.Mockito.*;
 class SelectedStationServiceTest {
     final RoomAccess access = mock(RoomAccess.class);
     final StationLookup stations = mock(StationLookup.class);
-    final SelectedStationService service = new SelectedStationService(access, stations);
+    final com.mju.linkro.chat.service.ChatSystemMessages systemMessages = mock(com.mju.linkro.chat.service.ChatSystemMessages.class);
+    final SelectedStationService service = new SelectedStationService(access, stations, systemMessages);
     final UUID id = UUID.randomUUID(), user = UUID.randomUUID();
     final MeetingRoom room = spy(new MeetingRoom("ABC123", "room", user));
     final JsonMapper mapper = JsonMapper.builder().build();
@@ -35,6 +37,7 @@ class SelectedStationServiceTest {
         assertThat(room.getSelectedStationId()).isNull();
         assertThat(room.getConfirmedAt()).isNull();
         verifyNoInteractions(stations);
+        verify(systemMessages,times(1)).stationCleared(id,user);
     }
 
     @Test void locksValidatesThenConfirmsAndReconfirmsSameStation() {
@@ -49,6 +52,18 @@ class SelectedStationServiceTest {
         assertThat(room.getSelectedStationId()).isEqualTo(112L);
         assertThat(room.getConfirmedAt()).isAfter(Instant.EPOCH);
         assertThat(room.getStatus()).isEqualTo(RoomStatus.CONFIRMED);
+        verifyNoInteractions(systemMessages);
+    }
+
+    @Test void systemMessageSaysSetThenChanged() {
+        when(access.lockOwner(id,user)).thenReturn(room);
+        when(stations.requireSupported(112L)).thenReturn(new StationInfo(112L,"사당",0,0,true));
+        when(stations.requireSupported(113L)).thenReturn(new StationInfo(113L,"강남",0,0,true));
+        service.select(id,user,request("{\"stationId\":112}"));
+        service.select(id,user,request("{\"stationId\":113}"));
+        var order=inOrder(systemMessages);
+        order.verify(systemMessages).stationSelected(id,user,"사당",false);
+        order.verify(systemMessages).stationSelected(id,user,"강남",true);
     }
 
     @ParameterizedTest @ValueSource(strings={"{}","{\"stationId\":null}","{\"stationId\":\"112\"}","{\"stationId\":1.0}",

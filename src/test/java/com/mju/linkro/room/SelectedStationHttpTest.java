@@ -35,6 +35,7 @@ class SelectedStationHttpTest {
     @Autowired UserRepository users;
     @MockitoBean RoomAccess access;
     @MockitoBean StationLookup stations;
+    @MockitoBean com.mju.linkro.chat.service.ChatSystemMessages systemMessages;
     MockMvc mvc;
     UUID user,id;
     String path;
@@ -43,6 +44,7 @@ class SelectedStationHttpTest {
         user=users.saveAndFlush(new User(UUID.randomUUID().toString(),"owner")).getId();
         id=UUID.randomUUID(); path="/api/v1/rooms/"+id+"/selected-station";
         when(access.lockOwner(id,user)).thenReturn(new MeetingRoom("H12345","room",user));
+        when(stations.requireSupported(112L)).thenReturn(new com.mju.linkro.subway.api.StationInfo(112L,"사당",0,0,true));
     }
     MockHttpServletRequestBuilder auth(MockHttpServletRequestBuilder request) {
         return request.header("Authorization","Bearer "+jwt.createAccessToken(user));

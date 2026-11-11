@@ -1,6 +1,7 @@
 package com.mju.linkro.room.service;
 
 import com.github.f4b6a3.uuid.UuidCreator;
+import com.mju.linkro.chat.service.ChatSystemMessages;
 import com.mju.linkro.common.exception.*;
 import com.mju.linkro.room.RoomProperties;
 import com.mju.linkro.room.domain.RoomRole;
@@ -23,6 +24,7 @@ public class StationProposalService {
     private final MeetingMemberRepository members;
     private final RoomReadRepository reads;
     private final RoomProperties properties;
+    private final ChatSystemMessages systemMessages;
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Created create(UUID roomId, UUID userId, StationProposalRequest request) {
@@ -45,7 +47,8 @@ public class StationProposalService {
             }
             throw failure;
         }
-        // #43: capture immutable created payload; persist SYSTEM here and publish WS only after outer commit.
+        systemMessages.proposalCreated(roomId, created.proposedBy().nickname(), created.station().name());
+        // #43: capture immutable created payload; publish WS only after outer commit.
         return created;
     }
 
@@ -63,8 +66,10 @@ public class StationProposalService {
         UUID author = proposals.author(roomId, proposalId).orElseThrow(() -> error(ErrorCode.PROPOSAL_NOT_FOUND));
         if (!author.equals(userId) && members.findCurrentRole(roomId, userId).orElseThrow(() -> error(ErrorCode.NOT_ROOM_MEMBER)) != RoomRole.OWNER)
             throw error(ErrorCode.NOT_PROPOSAL_OWNER);
+        String stationName = proposals.stationName(roomId, proposalId).orElseThrow(() -> error(ErrorCode.PROPOSAL_NOT_FOUND));
         proposals.delete(roomId, proposalId);
-        // #43: capture deleted proposal ID; persist SYSTEM here and publish WS only after outer commit.
+        systemMessages.proposalDeleted(roomId, userId, stationName);
+        // #43: capture deleted proposal ID; publish WS only after outer commit.
     }
 
     private static BusinessException error(ErrorCode code) { return new BusinessException(code); }
