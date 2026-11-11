@@ -60,13 +60,17 @@ class TrainTimetableTest {
     }
 
     static TrainTimetable load(String... rows) {
+        return load(DATA, rows);
+    }
+
+    static TrainTimetable load(SubwayGraphData data, String... rows) {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         try (GZIPOutputStream gzip = new GZIPOutputStream(bytes)) {
             gzip.write((HEADER + "\n" + String.join("\n", rows) + "\n").getBytes(StandardCharsets.UTF_8));
         } catch (IOException exception) {
             throw new IllegalStateException(exception);
         }
-        return TrainTimetable.load(new ByteArrayInputStream(bytes.toByteArray()), DATA);
+        return TrainTimetable.load(new ByteArrayInputStream(bytes.toByteArray()), data);
     }
 
     /** Three 2호선 trains 뚝섬 -> 성수 -> 건대입구 on weekdays (뚝섬 departs 21600, 22200, 22800). */
@@ -285,6 +289,99 @@ class TrainTimetableTest {
             var reader = new java.io.BufferedReader(new java.io.InputStreamReader(new java.util.zip.GZIPInputStream(in), StandardCharsets.UTF_8));
             assertThat(reader.readLine()).isEqualTo(TrainTimetable.HEADER);
         }
+    }
+
+    // Stations the first timetable file lacked, named as in our DB. 총신대입구(이수) is one station on lines 4 and 7.
+    static final SubwayGraphData NAMED = new SubwayGraphData(
+            List.of(new Line(1, "1", "1호선", "#0052A4", 1), new Line(4, "4", "4호선", "#00A5DE", 4),
+                    new Line(7, "7", "7호선", "#747F00", 7), new Line(8, "8", "8호선", "#E6186C", 8)),
+            List.of(station(1, "서울역"), station(2, "시청"), station(3, "숙대입구"), station(4, "회현"), station(5, "동작"),
+                    station(6, "총신대입구(이수)"), station(7, "사당"), station(8, "남성"), station(9, "내방"),
+                    station(10, "건대입구"), station(11, "자양"), station(12, "청담"), station(13, "암사역사공원"),
+                    station(14, "암사"), station(15, "불암산"), station(16, "상계")),
+            List.of(new Node(201, 1, 1, "150", 1, "MAIN"), new Node(202, 2, 1, "151", 2, "MAIN"),
+                    new Node(203, 3, 4, "427", 19, "MAIN"), new Node(204, 1, 4, "426", 18, "MAIN"),
+                    new Node(205, 4, 4, "425", 17, "MAIN"), new Node(206, 5, 4, "431", 23, "MAIN"),
+                    new Node(207, 6, 4, "432", 24, "MAIN"), new Node(208, 7, 4, "433", 25, "MAIN"),
+                    new Node(209, 8, 7, "2739", 29, "MAIN"), new Node(210, 6, 7, "2738", 28, "MAIN"),
+                    new Node(211, 9, 7, "2737", 27, "MAIN"), new Node(212, 10, 7, "2729", 19, "MAIN"),
+                    new Node(213, 11, 7, "2730", 20, "MAIN"), new Node(214, 12, 7, "2731", 21, "MAIN"),
+                    new Node(215, 13, 8, "2810", 1, "MAIN"), new Node(216, 14, 8, "2811", 2, "MAIN"),
+                    new Node(217, 15, 4, "409", 1, "MAIN"), new Node(218, 16, 4, "410", 2, "MAIN")),
+            List.of(ride(21, 201, 202, DirectionCode.DOWN), ride(22, 202, 201, DirectionCode.UP),
+                    ride(23, 203, 204, DirectionCode.UP), ride(24, 204, 205, DirectionCode.UP),
+                    ride(25, 206, 207, DirectionCode.DOWN), ride(26, 207, 208, DirectionCode.DOWN),
+                    ride(27, 209, 210, DirectionCode.UP), ride(28, 210, 211, DirectionCode.UP),
+                    ride(29, 212, 213, DirectionCode.DOWN), ride(30, 213, 214, DirectionCode.DOWN),
+                    ride(31, 215, 216, DirectionCode.DOWN), ride(32, 216, 215, DirectionCode.UP),
+                    ride(33, 217, 218, DirectionCode.DOWN),
+                    new Edge(34, 207, 210, StepType.TRANSFER, null, 120, 150)));
+
+    @Test
+    void stationsNamedAsInOurDbAreLookedUp() {
+        TrainTimetable timetable = load(NAMED,
+                row("1호선", "서울역", "평일", "일반", "K1", 30000, 30000, "서울역", "청량리"),
+                row("1호선", "시청", "평일", "일반", "K1", 30120, 30150, "서울역", "청량리"),
+                row("4호선", "숙대입구", "토요일", "일반", "4101", 40000, 40030, "오이도", "불암산"),
+                row("4호선", "서울역", "토요일", "일반", "4101", 40120, 40150, "오이도", "불암산"),
+                row("4호선", "회현", "토요일", "일반", "4101", 40240, 40270, "오이도", "불암산"),
+                row("7호선", "건대입구", "일요일·공휴일", "일반", "7101", 50000, 50030, "장암", "석남"),
+                row("7호선", "자양", "일요일·공휴일", "일반", "7101", 50120, 50150, "장암", "석남"),
+                row("7호선", "청담", "일요일·공휴일", "일반", "7101", 50300, 50330, "장암", "석남"),
+                row("8호선", "암사역사공원", "평일", "일반", "8101", 60000, 60030, "별내", "모란"),
+                row("8호선", "암사", "평일", "일반", "8101", 60120, 60150, "별내", "모란"),
+                row("4호선", "불암산", "평일", "일반", "4001", 20000, 20000, "불암산", "오이도"),
+                row("4호선", "상계", "평일", "일반", "4001", 20090, 20120, "불암산", "오이도"));
+        assertThat(timetable.report().unmappedRows()).isZero();
+        assertThat(timetable.report().pairsNotInGraph()).isEmpty();
+
+        // 1호선 서울역 -> 시청 (stations 1 -> 2 on line 1).
+        assertThat(timetable.nextDeparture(1, 1, 2, DayType.WEEKDAY, 30000)).get()
+                .extracting(Departure::departSec, Departure::arriveSec).containsExactly(30000, 30120);
+        assertThat(timetable.nextDeparture(1, 1, 2, DayType.WEEKDAY, 30001)).isEmpty();
+        assertThat(timetable.lastDepartureArriving(21, DayType.WEEKDAY, 30120)).get().extracting(Departure::departSec).isEqualTo(30000);
+        assertThat(timetable.lastDepartureArriving(21, DayType.WEEKDAY, 30119)).isEmpty();
+        // 4호선 숙대입구 -> 서울역 -> 회현.
+        assertThat(timetable.nextDeparture(23, DayType.SATURDAY, 39000)).get().extracting(Departure::arriveSec).isEqualTo(40120);
+        assertThat(timetable.nextDeparture(4, 1, 4, DayType.SATURDAY, 40150)).get()
+                .extracting(Departure::departSec, Departure::arriveSec).containsExactly(40150, 40240);
+        assertThat(timetable.lastDepartureArriving(4, 1, 4, DayType.SATURDAY, 40240)).get().extracting(Departure::departSec).isEqualTo(40150);
+        // 7호선 건대입구 -> 자양 -> 청담.
+        assertThat(timetable.nextDeparture(7, 10, 11, DayType.SUNDAY, 0)).get().extracting(Departure::arriveSec).isEqualTo(50120);
+        assertThat(timetable.lastDepartureArriving(30, DayType.SUNDAY, 50300)).get().extracting(Departure::departSec).isEqualTo(50150);
+        assertThat(timetable.lastDepartureArriving(30, DayType.SUNDAY, 50299)).isEmpty();
+        // 8호선 암사역사공원 -> 암사.
+        assertThat(timetable.nextDeparture(8, 13, 14, DayType.WEEKDAY, 59999)).get()
+                .extracting(Departure::departSec, Departure::arriveSec).containsExactly(60030, 60120);
+        assertThat(timetable.lastDepartureArriving(8, 13, 14, DayType.WEEKDAY, 60120)).get().extracting(Departure::departSec).isEqualTo(60030);
+        // 4호선 불암산 -> 상계.
+        assertThat(timetable.nextDeparture(33, DayType.WEEKDAY, 0)).get().extracting(Departure::arriveSec).isEqualTo(20090);
+    }
+
+    @Test
+    void chongshinOnLines4And7IsMatchedPerLine() {
+        // Both lines write 총신대입구(이수); normalizing drops "(이수)" but the key keeps the line, so each row goes to
+        // its own line's node and no train jumps between 4호선 and 7호선.
+        TrainTimetable timetable = load(NAMED,
+                row("4호선", "동작", "평일", "일반", "4201", 30000, 30030, "불암산", "오이도"),
+                row("4호선", "총신대입구(이수)", "평일", "일반", "4201", 30180, 30210, "불암산", "오이도"),
+                row("4호선", "사당", "평일", "일반", "4201", 30300, 30330, "불암산", "오이도"),
+                row("7호선", "남성", "평일", "일반", "7201", 31000, 31030, "석남", "장암"),
+                row("7호선", "총신대입구(이수)", "평일", "일반", "7201", 31110, 31140, "석남", "장암"),
+                row("7호선", "내방", "평일", "일반", "7201", 31230, 31260, "석남", "장암"));
+        assertThat(timetable.report().unmappedRows()).isZero();
+        assertThat(timetable.report().pairsNotInGraph()).isEmpty();
+        assertThat(timetable.edgesWithTrains()).containsExactlyInAnyOrder(25L, 26L, 27L, 28L);
+        // Station 6 is 총신대입구(이수): its 4호선 and 7호선 edges are told apart by the line.
+        assertThat(timetable.rideEdgeId(4, 5, 6)).hasValue(25);
+        assertThat(timetable.rideEdgeId(7, 8, 6)).hasValue(27);
+        assertThat(timetable.rideEdgeId(4, 8, 6)).isEmpty();
+        assertThat(timetable.nextDeparture(4, 6, 7, DayType.WEEKDAY, 0)).get()
+                .extracting(d -> d.train().lineCode(), Departure::departSec).containsExactly("4", 30210);
+        assertThat(timetable.nextDeparture(7, 6, 9, DayType.WEEKDAY, 0)).get()
+                .extracting(d -> d.train().lineCode(), Departure::departSec).containsExactly("7", 31140);
+        // The TRANSFER edge between the two nodes gets nothing.
+        assertThat(timetable.departures(34, DayType.WEEKDAY)).isEmpty();
     }
 
     static byte[] gzip(String text) throws IOException {

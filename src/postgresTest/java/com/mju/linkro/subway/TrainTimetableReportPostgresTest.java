@@ -108,6 +108,10 @@ class TrainTimetableReportPostgresTest {
         table(out, mapped.stream().sorted(Comparator.comparingInt((EdgeStat s) -> -Math.abs(s.diff())).thenComparing(EdgeStat::name))
                 .limit(10).toList());
 
+        section(out, "새 파일로 채워진 구간", stats, s -> (s.line().equals("1") && touches(s, "서울역"))
+                || (s.line().equals("4") && (touches(s, "서울역") || touches(s, "총신대입구(이수)") || touches(s, "불암산")))
+                || (s.line().equals("7") && (touches(s, "자양") || touches(s, "총신대입구(이수)")))
+                || (s.line().equals("8") && touches(s, "암사역사공원")));
         section(out, "5호선 마천지선·강동·방화", stats, s -> s.line().equals("5")
                 && (s.branch().equals("MACHEON") || touches(s, "강동") || touches(s, "방화")));
         section(out, "2호선 지선(성수·신정)", stats, s -> s.line().equals("2") && (s.branch().equals("SEONGSU") || s.branch().equals("SINJEONG")));
@@ -119,16 +123,13 @@ class TrainTimetableReportPostgresTest {
         Files.writeString(file, out, StandardCharsets.UTF_8);
         System.out.println(out);
 
+        assertThat(load.rows()).isEqualTo(281_244);
         assertThat(load.unmappedRows()).as("every timetable station is one of ours").isZero();
-        assertThat(load.expressSkipped()).isEqualTo(1260);
+        assertThat(load.expressSkipped()).isEqualTo(1403);
         assertThat(stats).hasSize(536);
-        assertThat(unmapped).extracting(EdgeStat::name).containsExactlyInAnyOrder(
-                "1호선 서울역->시청", "1호선 시청->서울역", "4호선 불암산->상계", "4호선 상계->불암산",
-                "4호선 서울역->숙대입구", "4호선 숙대입구->서울역", "4호선 서울역->회현", "4호선 회현->서울역",
-                "7호선 건대입구->자양", "7호선 자양->건대입구", "7호선 자양->청담", "7호선 청담->자양",
-                "7호선 남성->총신대입구(이수)", "7호선 총신대입구(이수)->남성", "7호선 내방->총신대입구(이수)",
-                "7호선 총신대입구(이수)->내방", "8호선 암사->암사역사공원", "8호선 암사역사공원->암사");
-        assertThat(load.pairsNotInGraph()).hasSize(16).containsEntry("4호선 숙대입구->회현", 621).containsEntry("7호선 남성->내방", 519);
+        assertThat(unmapped).as("RIDE edges without trains").isEmpty();
+        // Only 5호선 trains that skip stops of ours remain (see docs/timetable-94.md).
+        assertThat(load.pairsNotInGraph()).hasSize(10).allSatisfy((pair, count) -> assertThat(pair).startsWith("5호선 "));
         // Every branch edge has trains on all three day types.
         assertThat(stats).filteredOn(s -> !s.branch().equals("MAIN"))
                 .allSatisfy(s -> assertThat(s.trains().values()).as(s.name()).allMatch(n -> n > 0));
