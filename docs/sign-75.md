@@ -24,4 +24,7 @@ API 명세 v1.12 9.1(`POST /api/v1/ai/direction-check`, multipart), 상세설계
 
 ## 응답 시간
 
-AI 호출 시간은 로그 `Sign check: result=… ai=…ms`로 본다. 읽기 타임아웃은 `OPENAI_VISION_READ_TIMEOUT`(기본 4s)이며, 실제 모델 호출은 이 값보다 오래 걸릴 수 있다.
+AI 호출 시간은 로그 `Sign check: result=… ai=…ms`로 본다. 표지판 판독 설정(표지판 경로에만 적용):
+
+- `OPENAI_VISION_READ_TIMEOUT` 기본 10s (예전 4s). 실제 모델 호출이 4s를 넘겨 `AI_UNAVAILABLE`이 났기 때문이다. 응답 목표 5초는 이 값보다 짧으며, 실측 지연은 모델·추론 강도에 따라 다르다.
+- `OPENAI_VISION_REASONING_EFFORT` 기본 `low`. 추론 강도를 낮춰 지연을 줄인다. 비어 있으면 `low`, 추론을 끄려면 `none`. 정확도는 낮은 강도에서 RETAKE가 늘 수 있다(정답 사진을 다시 찍으라고 하는 쪽으로 틀린다).
