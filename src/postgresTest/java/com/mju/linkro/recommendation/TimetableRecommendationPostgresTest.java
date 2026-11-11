@@ -294,12 +294,21 @@ class TimetableRecommendationPostgresTest {
     }
 
     @Test
+    void forwardRoutesTakeTheSameTrainWithoutTheExtraTransfer() {
+        // #107: the forward search alone took 3068K to 연신내 and walked 151 s to 6057 (1 transfer). 6057 also leaves 불광
+        // and arrives at the same 08:16:10, so the route is 6057 straight from 불광.
+        long bulgwang = station("불광");
+        long dmc = station("디지털미디어시티");
+        var forward = timetable.departingAt(bulgwang, at(THURSDAY, 8, 0)).routeTo(dmc).orElseThrow();
+        assertThat(legs(forward)).containsExactly("6057 불광 08:02:30 -> 디지털미디어시티 08:16:10 (0)");
+        assertThat(forward.path().transferCount()).isZero();
+    }
+
+    @Test
     void routesAwayFromTheEungamLoopChangeAreUnchanged() {
         // Same results as before #104 (checked on the same seed and timetable).
         long bulgwang = station("불광");
         long dmc = station("디지털미디어시티");
-        var forward = timetable.departingAt(bulgwang, at(THURSDAY, 8, 0)).routeTo(dmc).orElseThrow();
-        assertThat(legs(forward)).containsExactly("3068K 불광 08:01:00 -> 연신내 08:02:30 (0)", "6057 연신내 08:07:10 -> 디지털미디어시티 08:16:10 (129)");
         var backward = timetable.latestDepartures(dmc, at(THURSDAY, 9, 0), Set.of(bulgwang), 0).get(bulgwang);
         assertThat(legs(backward)).containsExactly("6077 불광 08:42:30 -> 디지털미디어시티 08:56:10 (0)");
         // 새절 -> 응암 (응암행) -> 역촌 is main -> loop, not affected: still a 30 s wait.

@@ -306,8 +306,7 @@ public class TimetableRouter implements TimetableRouteFinder {
             // (장암 -> 모란: an earlier 5호선 and 8호선 connection). Only when it needs no more transfers: one minute is not
             // worth two extra changes (강남 -> 홍대입구 at 22:00 stays on 2호선).
             TimedRoute replayed = forward(origin, latest.leaveAt(), destinationStationId).routeTo(destinationStationId).orElse(latest);
-            boolean better = replayed.arriveAt().isBefore(latest.arriveAt())
-                    && replayed.path().transferCount() <= latest.path().transferCount();
+            boolean better = replayed.arriveAt().isBefore(latest.arriveAt()) && noWorse(replayed, latest);
             routes.put(origin, better ? replayed : latest);
         });
         return routes;
@@ -331,7 +330,42 @@ public class TimetableRouter implements TimetableRouteFinder {
     @Override
     public TimedTree departingAt(long originStationId, Instant leaveAt) {
         requireStation(originStationId);
-        return forward(originStationId, leaveAt, null);
+        TimedTree earliest = forward(originStationId, leaveAt, null);
+        return new TimedTree() {
+            @Override
+            public Set<Long> reachableStationIds() {
+                return earliest.reachableStationIds();
+            }
+
+            @Override
+            public Optional<TimedRoute> routeTo(long stationId) {
+                return earliest.routeTo(stationId).map(route -> withFewerTransfers(route, originStationId, stationId, leaveAt));
+            }
+        };
+    }
+
+    /**
+     * The forward search keeps only the earliest state at ordinary nodes, so of two ways arriving at the same time it can
+     * keep the one with more transfers (불광 -> 디지털미디어시티: 3호선 to 연신내 and a walk to the very 6호선 train that
+     * left 불광 a minute later). Searching backwards from that arrival, as {@link #latestDepartures} does, finds the
+     * latest way to make it; it is used when it needs no more transfers, arrives no later and leaves no earlier than
+     * asked (#107), and only when it is better: fewer transfers, or as many and leaving later. An equally good route
+     * keeps the forward one, so results do not move between equivalent routes. The mirror of the forward replay in
+     * latestDepartures.
+     */
+    private TimedRoute withFewerTransfers(TimedRoute earliest, long originStationId, long stationId, Instant leaveAt) {
+        int maxTravel = (int) Duration.between(leaveAt, earliest.arriveAt()).toSeconds();
+        TimedRoute backward = latestDepartures(stationId, earliest.arriveAt(), Set.of(originStationId), Math.max(maxTravel, 1))
+                .get(originStationId);
+        if (backward == null || !noWorse(backward, earliest) || backward.leaveAt().isBefore(leaveAt)) return earliest;
+        boolean fewerTransfers = backward.path().transferCount() < earliest.path().transferCount();
+        return fewerTransfers || backward.leaveAt().isAfter(earliest.leaveAt()) ? backward : earliest;
+    }
+
+    /** Needs no more transfers and arrives no later. */
+    private static boolean noWorse(TimedRoute candidate, TimedRoute current) {
+        return candidate.path().transferCount() <= current.path().transferCount()
+                && !candidate.arriveAt().isAfter(current.arriveAt());
     }
 
     /** Earliest arrivals; with a {@code target} station it stops once that station is reached. */
