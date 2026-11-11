@@ -107,6 +107,11 @@ public final class FareTable implements StationFareLookup {
         return fare < 0 ? OptionalInt.empty() : OptionalInt.of(fare);
     }
 
+    @Override
+    public boolean loaded() {
+        return report.stationPairs() > 0;
+    }
+
     public LoadReport report() {
         return report;
     }

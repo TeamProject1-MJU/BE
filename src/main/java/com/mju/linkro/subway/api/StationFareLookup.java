@@ -10,4 +10,9 @@ public interface StationFareLookup {
 
     /** Empty when the pair is not in the table (or the table could not be loaded). */
     OptionalInt fareBetween(long fromStationId, long toStationId);
+
+    /** False for a table that failed to load or has no pair: callers then use their own estimate without per-pair logs. */
+    default boolean loaded() {
+        return true;
+    }
 }

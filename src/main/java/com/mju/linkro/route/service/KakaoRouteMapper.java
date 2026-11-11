@@ -11,7 +11,7 @@ import com.mju.linkro.subway.graph.SubwayGraphData.Station;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import lombok.RequiredArgsConstructor;
+import com.mju.linkro.subway.fare.StationPairFare;
 import org.springframework.stereotype.Component;
 
 /**
@@ -23,12 +23,22 @@ import org.springframework.stereotype.Component;
  * route is left the caller falls back to INTERNAL.
  */
 @Component
-@RequiredArgsConstructor
 public class KakaoRouteMapper {
     private static final Pattern LINE = Pattern.compile("([1-8])호선");
 
     private final RouteReference reference;
-    private final FareCalculator fares;
+    private final StationPairFare fares;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public KakaoRouteMapper(RouteReference reference, FareCalculator fares, Optional<StationFareLookup> fareTable) {
+        this.reference = reference;
+        this.fares = new StationPairFare(fares, fareTable);
+    }
+
+    /** Without a fare table: Kakao routes without a fare use our ridden distance. */
+    public KakaoRouteMapper(RouteReference reference, FareCalculator fares) {
+        this(reference, fares, Optional.empty());
+    }
 
     public List<RouteDraft> map(KakaoRouteResponse body, long originStationId, long destinationStationId) {
         if (body == null || !"OK".equals(body.status()) || body.routes() == null) return List.of();
@@ -90,8 +100,9 @@ public class KakaoRouteMapper {
             fare = kakaoFare;
             fareSource = FareSource.KAKAO;
         } else {
-            // A subway-only route without fare.value was not seen (#58); estimate it from our RIDE distances.
-            fare = fares.fareOf(new RoutePath(List.of(), stops, total, transfers, rideMeters, origin, destination));
+            // A subway-only route without fare.value was not seen (#58): the fare-table fare of the station pair (#109),
+            // else an estimate from our RIDE distances.
+            fare = fares.fareOf(origin, destination, new RoutePath(List.of(), stops, total, transfers, rideMeters, origin, destination));
             fareSource = FareSource.ESTIMATED;
         }
         return Optional.of(new RouteDraft(steps, total, fare, fareSource, transfers, origin, destination));

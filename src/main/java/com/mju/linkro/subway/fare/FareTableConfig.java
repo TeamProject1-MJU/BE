@@ -37,12 +37,15 @@ public class FareTableConfig {
                             + "fares, lowest kept) in {} ms (~{} KB)", r.rows(), r.stationPairs(), r.multiCodePairs(),
                     r.multiCodePairsWithDifferentFares(), (System.nanoTime() - started) / 1_000_000,
                     String.format(Locale.ROOT, "%.0f", r.approxBytes() / 1024.0));
+            if (!table.loaded()) {
+                log.warn("Fare table {} has no station pairs; recommendation and route fares use the ridden distance", RESOURCE);
+            }
             if (r.unmappedRows() > 0) {
                 log.warn("Fare table: {} rows with station codes not in our graph were skipped: {}", r.unmappedRows(), r.unmappedCodes());
             }
             return table;
         } catch (Exception exception) {
-            log.warn("Fare table {} could not be loaded ({}); recommendation fares use the ridden distance", RESOURCE,
+            log.warn("Fare table {} could not be loaded ({}); recommendation and route fares use the ridden distance", RESOURCE,
                     exception.getClass().getSimpleName());
             return FareTable.empty();
         }
