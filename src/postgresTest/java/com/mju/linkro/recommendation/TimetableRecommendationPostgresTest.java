@@ -263,6 +263,31 @@ class TimetableRecommendationPostgresTest {
     }
 
     @Test
+    void justAfterTheFirstTrainsTheEmptyResultSaysSo() {
+        // #115: 강남·노원 at 05:29~05:45 (first trains arrive from about 05:13): no station is reachable, every one because of
+        // the first trains. Weekday, Saturday and Sunday service days.
+        String firstTrain = "첫차 시각이 가까워 약속 시각까지 도착할 수 있는 역이 없습니다. 약속 시간을 늦춰 주세요.";
+        for (LocalDate date : List.of(THURSDAY.plusDays(1), SATURDAY, SATURDAY.plusDays(1))) {
+            for (int[] time : new int[][]{{5, 29}, {5, 30}, {5, 45}}) {
+                Instant appointment = at(date, time[0], time[1]);
+                UUID[] users = room(appointment, "강남", "노원");
+                RecommendationResponse response = service.create(users[1], users[0], null);
+                assertThat(response.results()).as("%s", appointment).isEmpty();
+                assertThat(response.message()).as("%s", appointment).isEqualTo(firstTrain);
+                // GET builds it again from the stored criteria.
+                assertThat(service.latest(users[1], users[0]).message()).as("%s", appointment).isEqualTo(firstTrain);
+            }
+        }
+        // Other empty results keep their message: at 06:30 some stations are left out by the trains, the rest by 1 minute.
+        UUID[] users = room(at(THURSDAY, 6, 30), "강남", "노원");
+        RecommendationResponse response = service.create(users[1], users[0],
+                new com.mju.linkro.recommendation.dto.RecommendationRequest(null,
+                        new com.mju.linkro.recommendation.dto.RecommendationRequest.Filter(1, null, null, null, null)));
+        assertThat(response.results()).isEmpty();
+        assertThat(response.message()).matches("약속 시각까지 열차로 도착할 수 없는 역 \\d+곳을 제외했습니다\\. 조건에 맞는 중간역이 없습니다\\. 조건을 완화해 보세요\\.");
+    }
+
+    @Test
     void aPastAppointmentIsRefusedBeforeTheNoServiceCheck() {
         // Tuesday 04:00 (a NO_SERVICE_TIME hour) is before the fixed "now" (Wednesday 09:00): APPOINTMENT_PASSED comes first.
         UUID[] users = room(at(THURSDAY.minusDays(2), 4, 0), "강남", "사당");

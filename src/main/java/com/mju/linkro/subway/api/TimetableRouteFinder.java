@@ -39,6 +39,13 @@ public interface TimetableRouteFinder {
     Map<Long, TimedRoute> latestDepartures(long destinationStationId, Instant arriveBy, Set<Long> originStationIds,
                                            int maxTravelSeconds);
 
+    /**
+     * Earliest arrival at each station from {@code originStationId} on the first trains of the service day of {@code at}
+     * (the same service day {@link #latestDepartures} searches). A station missing from the map has no train from the
+     * origin that day (#115).
+     */
+    Map<Long, Instant> earliestArrivalsOfServiceDay(long originStationId, Instant at);
+
     /** Earliest-arrival routes leaving {@code originStationId} at {@code leaveAt}. */
     TimedTree departingAt(long originStationId, Instant leaveAt);
 

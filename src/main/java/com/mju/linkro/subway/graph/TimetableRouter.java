@@ -368,6 +368,18 @@ public class TimetableRouter implements TimetableRouteFinder {
                 && !candidate.arriveAt().isAfter(current.arriveAt());
     }
 
+    @Override
+    public Map<Long, Instant> earliestArrivalsOfServiceDay(long originStationId, Instant at) {
+        requireStation(originStationId);
+        ServiceTime service = serviceTime(at);
+        // Leaving at second 0 of the service day: every train of the day can be taken, so these are the first trains.
+        Forward search = search(originStationId, service.serviceDate(), service.dayType(), accessSeconds, null);
+        Instant midnight = service.serviceDate().atStartOfDay(ZONE).toInstant();
+        Map<Long, Instant> arrivals = new HashMap<>();
+        search.arrivals().forEach((station, label) -> arrivals.put(station, midnight.plusSeconds(label.time())));
+        return arrivals;
+    }
+
     /** Earliest arrivals; with a {@code target} station it stops once that station is reached. */
     private TimedTree forward(long originStationId, Instant leaveAt, Long target) {
         ServiceTime service = serviceTime(leaveAt);
@@ -381,6 +393,13 @@ public class TimetableRouter implements TimetableRouteFinder {
             day = clock.dayTypeOf(date);
             start -= 86_400;
         }
+        return tree(search(originStationId, date, day, start, target), originStationId);
+    }
+
+    /** Earliest state at each station reached on a ride, from {@code start} (second of the service day) on. */
+    private record Forward(LocalDate serviceDate, DayType day, Map<Long, Label> arrivals) {}
+
+    private Forward search(long originStationId, LocalDate date, DayType day, int start, Long target) {
         TrainTimetable.Rides[] dayRides = rides[day.ordinal()];
         PriorityQueue<Label> queue = new PriorityQueue<>(EARLIEST_FIRST);
         Label[] best = new Label[edges.length + nodeIds.length];
@@ -444,8 +463,11 @@ public class TimetableRouter implements TimetableRouteFinder {
                 }
             }
         }
-        LocalDate serviceDate = date;
-        DayType serviceDay = day;
+        return new Forward(date, day, arrivals);
+    }
+
+    private TimedTree tree(Forward search, long originStationId) {
+        Map<Long, Label> arrivals = search.arrivals();
         return new TimedTree() {
             @Override
             public Set<Long> reachableStationIds() {
@@ -458,7 +480,7 @@ public class TimetableRouter implements TimetableRouteFinder {
                 if (end == null) return Optional.empty();
                 List<Label> moves = new ArrayList<>();
                 for (Label cursor = end; cursor.edge() != null; cursor = cursor.link()) moves.add(0, cursor);
-                return Optional.of(build(stayOnBoard(moves, serviceDay), serviceDate, originStationId, stationId));
+                return Optional.of(build(stayOnBoard(moves, search.day()), search.serviceDate(), originStationId, stationId));
             }
         };
     }

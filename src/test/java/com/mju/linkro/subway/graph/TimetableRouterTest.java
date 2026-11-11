@@ -256,6 +256,22 @@ public class TimetableRouterTest {
     }
 
     @Test
+    void earliestArrivalsOfTheServiceDayUseItsFirstTrains() {
+        TimetableRouter router = router();
+        // From 가 on Thursday: L1 reaches 나 30090 and 다 30210, 라 via T1 30390, 마 via R1 (다 32000) 32090.
+        Map<Long, Instant> earliest = router.earliestArrivalsOfServiceDay(1, at(THURSDAY, 40000));
+        assertThat(earliest).containsOnlyKeys(2L, 3L, 4L, 5L);   // 5호선 is not reachable from 가
+        assertThat(earliest.get(2L)).isEqualTo(at(THURSDAY, 30090));
+        assertThat(earliest.get(3L)).isEqualTo(at(THURSDAY, 30210));
+        assertThat(earliest.get(4L)).isEqualTo(at(THURSDAY, 30390));
+        assertThat(earliest.get(5L)).isEqualTo(at(THURSDAY, 32090));
+        // Whatever the time of day: Friday 01:00 is still Thursday's service day.
+        assertThat(router.earliestArrivalsOfServiceDay(1, at(THURSDAY.plusDays(1), 3600))).isEqualTo(earliest);
+        // A day without trains has none.
+        assertThat(router.earliestArrivalsOfServiceDay(1, at(LocalDate.of(2026, 11, 14), 30000))).isEmpty();
+    }
+
+    @Test
     void stationsAreValidatedAndCoverageFollowsTheDayType() {
         TimetableRouter router = router();
         assertThatThrownBy(() -> router.requireStation(999)).isInstanceOf(BusinessException.class);

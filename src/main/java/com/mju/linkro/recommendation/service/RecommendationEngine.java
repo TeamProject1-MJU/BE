@@ -83,12 +83,19 @@ public class RecommendationEngine {
      * @param source              TIMETABLE or ESTIMATE for every trip of this evaluation
      * @param unreachableByTrain  stations dropped because a member cannot arrive in time on the timetable's trains
      * @param fallbackMembers     members whose times came from fixed costs (0 in timetable mode)
+     * @param beforeFirstTrain    every station was dropped because the first trains of the appointment's service day
+     *                            arrive too late (#115); false otherwise
      */
     public record Evaluation(Map<Long, Candidate> candidates, RecommendationProperties properties, String source,
-                             int unreachableByTrain, int fallbackMembers) {
+                             int unreachableByTrain, int fallbackMembers, boolean beforeFirstTrain) {
 
         public Evaluation(Map<Long, Candidate> candidates, RecommendationProperties properties) {
             this(candidates, properties, ESTIMATE, 0, 0);
+        }
+
+        public Evaluation(Map<Long, Candidate> candidates, RecommendationProperties properties, String source,
+                          int unreachableByTrain, int fallbackMembers) {
+            this(candidates, properties, source, unreachableByTrain, fallbackMembers, false);
         }
 
         /** TIME: slowest person, then spread (max − min), then total minutes (same order as the average). */
@@ -217,7 +224,28 @@ public class RecommendationEngine {
                 candidates.put(stationId, new Candidate(stationId, trips));
             }
         }
-        return new Evaluation(candidates, properties, TIMETABLE, unreachable, 0);
+        boolean beforeFirstTrain = appointmentAt != null && !stations.isEmpty() && unreachable == stations.size()
+                && firstTrainsArriveTooLate(stations, origins, appointmentAt);
+        return new Evaluation(candidates, properties, TIMETABLE, unreachable, 0, beforeFirstTrain);
+    }
+
+    /**
+     * #115: no station can be reached because the day's trains start too late for the appointment. True when, for every
+     * station, some member's earliest arrival on the first trains of the appointment's service day (the day
+     * latestDepartures searches) is after the appointment. A station no train reaches from a member that day is not
+     * explained by the first trains, so a station without such a member makes this false.
+     */
+    private boolean firstTrainsArriveTooLate(Set<Long> stations, Set<Long> origins, Instant appointmentAt) {
+        List<Map<Long, Instant>> earliest = origins.stream()
+                .map(origin -> timetable.earliestArrivalsOfServiceDay(origin, appointmentAt)).toList();
+        for (long station : stations) {
+            boolean late = earliest.stream().anyMatch(arrivals -> {
+                Instant first = arrivals.get(station);
+                return first != null && first.isAfter(appointmentAt);
+            });
+            if (!late) return false;
+        }
+        return true;
     }
 
     // ---- fixed costs ----

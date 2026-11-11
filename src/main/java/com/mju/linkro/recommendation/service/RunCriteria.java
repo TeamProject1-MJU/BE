@@ -12,14 +12,16 @@ import java.util.UUID;
  * @param participants  the room's members at that time, for the MEMBERS_CHANGED comparison
  * @param unreachableByTrain stations left out because a member cannot arrive in time on the timetable's trains (#96);
  *                      null in older runs
+ * @param beforeFirstTrain   every station was left out because the first trains arrive too late for the appointment
+ *                      (#115); null in older runs
  */
 public record RunCriteria(String conditionText, Filter filter, AppliedConstraints appliedConstraints,
                           boolean conditionParseFailed, String appointmentAt, List<Participant> participants,
-                          Integer unreachableByTrain) {
+                          Integer unreachableByTrain, Boolean beforeFirstTrain) {
 
     public RunCriteria(String conditionText, Filter filter, AppliedConstraints appliedConstraints,
                        boolean conditionParseFailed, String appointmentAt, List<Participant> participants) {
-        this(conditionText, filter, appliedConstraints, conditionParseFailed, appointmentAt, participants, null);
+        this(conditionText, filter, appliedConstraints, conditionParseFailed, appointmentAt, participants, null, null);
     }
 
     public record Participant(UUID userId, Long departureStationId) {}
