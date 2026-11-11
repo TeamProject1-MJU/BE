@@ -40,7 +40,7 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
   - 조건 문구, 닉네임, 키는 넣지 않는다.
   - 실패한 요청은 이 줄을 남기지 않는다.
 - **조건 해석 호출 조건**: `conditionText`가 없거나 공백이면 `RecommendationRequest.text()`가 null이고, `ConstraintResolver`는 `interpretCondition`을 부르지 않는다(parse≈0ms).
-- **설명 AI 읽기 타임아웃**: `OPENAI_EXPLAIN_READ_TIMEOUT`(`linkro.ai.openai.explain-read-timeout`, 기본 4s)은 `explainRecommendation`에만 적용한다.
+- **설명 AI 읽기 타임아웃**: `OPENAI_EXPLAIN_READ_TIMEOUT`(`linkro.ai.openai.explain-read-timeout`, 기본 6s)은 `explainRecommendation`에만 적용한다. 실제 응답 시간은 타이밍 로그의 explain 값을 보고 조정한다.
   - 넘으면 `AI_UNAVAILABLE` → 기준마다 템플릿 문장(`explanationSource: TEMPLATE`)이고, 응답은 정상(200)이다.
   - 조건 해석·채팅은 `OPENAI_READ_TIMEOUT`(8s), 표지판은 `OPENAI_VISION_READ_TIMEOUT`(4s) 그대로다.
 - **응답 뒤 비동기 설명 갱신은 검토했으나 제외했다.** 설명이 늦게 채워지면 결과 행 갱신(스키마·상태 필드)과 클라이언트 알림(WebSocket 이벤트)이 새로 필요하다.

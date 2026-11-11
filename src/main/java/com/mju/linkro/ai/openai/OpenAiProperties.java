@@ -8,7 +8,12 @@ import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
-/** {@code linkro.ai.openai.*}. Bound only with {@code linkro.ai.module=openai}; a blank key or model fails startup. */
+/**
+ * {@code linkro.ai.openai.*}. Bound only with {@code linkro.ai.module=openai}; a blank key or model fails startup.
+ *
+ * <p>An empty timeout (docker-compose passes OPENAI_*_TIMEOUT as {@code ${VAR:-}}, so an unset server value is an empty
+ * variable) is not bound and leaves the field default below, so these defaults must stay equal to application.yaml's.
+ */
 @Getter
 @Setter
 @Validated
@@ -27,7 +32,7 @@ public class OpenAiProperties {
     private Duration visionReadTimeout = Duration.ofSeconds(4);
     /** explainRecommendation only (#99): past it the recommendation uses template sentences. */
     @NotNull
-    private Duration explainReadTimeout = Duration.ofSeconds(4);
+    private Duration explainReadTimeout = Duration.ofSeconds(6);
 
     @Override
     public String toString() {

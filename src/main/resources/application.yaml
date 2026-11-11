@@ -81,9 +81,11 @@ logging:
 # AI module (#73). Unset or blank means mock, which logs a WARN at startup.
 # - module: mock | openai (production: LINKRO_AI_MODULE=openai).
 # - openai with a blank OPENAI_API_KEY or OPENAI_MODEL fails startup. There is no default model id.
-# - explain-read-timeout (OPENAI_EXPLAIN_READ_TIMEOUT, default 4s) applies only to recommendation explanations (#99);
+# - explain-read-timeout (OPENAI_EXPLAIN_READ_TIMEOUT, default 6s) applies only to recommendation explanations (#99);
 #   past it the recommendation answers with template sentences. read-timeout stays for condition parsing and chat,
-#   vision-read-timeout for signs.
+#   vision-read-timeout for signs. 실제 응답 시간은 타이밍 로그의 explain 값을 보고 조정한다
+#   ("Recommendation timing: ... explain=…ms").
+# - The timeouts come from ~/BE/.env through docker-compose; an empty value keeps these defaults (OpenAiProperties).
 linkro:
   ai:
     module: ${LINKRO_AI_MODULE:mock}
@@ -93,7 +95,7 @@ linkro:
       connect-timeout: ${OPENAI_CONNECT_TIMEOUT:2s}
       read-timeout: ${OPENAI_READ_TIMEOUT:8s}
       vision-read-timeout: ${OPENAI_VISION_READ_TIMEOUT:4s}
-      explain-read-timeout: ${OPENAI_EXPLAIN_READ_TIMEOUT:4s}
+      explain-read-timeout: ${OPENAI_EXPLAIN_READ_TIMEOUT:6s}
 
 # Recommendation (#74, API 8.1). Tie tolerances ("허용 폭") with their defaults; see docs/recommendation-74.md.
 #   linkro.recommendation.fare-tolerance-won: 100       FARE: within this of the cheapest counts as a tie (TIME rule decides)
