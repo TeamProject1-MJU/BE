@@ -6,6 +6,7 @@ import com.mju.linkro.recommendation.dto.RecommendationResponse.MemberLimit;
 import com.mju.linkro.recommendation.service.Candidate.Member;
 import com.mju.linkro.recommendation.service.Candidate.Trip;
 import com.mju.linkro.subway.api.FareCalculator;
+import com.mju.linkro.subway.api.StationFareLookup;
 import com.mju.linkro.subway.api.RoutePath;
 import com.mju.linkro.subway.api.ShortestPathTree;
 import com.mju.linkro.subway.api.SubwayRouteFinder;
@@ -22,6 +23,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
@@ -51,14 +53,24 @@ public class RecommendationEngine {
     private final FareCalculator fares;
     private final RecommendationProperties properties;
     private final TimetableRouteFinder timetable;
+    private final StationFareLookup stationFares;
+    /** Station pairs already warned about, so a missing pair is logged once. */
+    private final Set<List<Long>> missingFares = ConcurrentHashMap.newKeySet();
 
     @Autowired
     public RecommendationEngine(SubwayRouteFinder finder, FareCalculator fares, RecommendationProperties properties,
-                                Optional<TimetableRouteFinder> timetable) {
+                                Optional<TimetableRouteFinder> timetable, Optional<StationFareLookup> stationFares) {
         this.finder = finder;
         this.fares = fares;
         this.properties = properties;
         this.timetable = timetable.orElse(null);
+        this.stationFares = stationFares.orElse(null);
+    }
+
+    /** Fares from the ridden distance only (no fare table). */
+    public RecommendationEngine(SubwayRouteFinder finder, FareCalculator fares, RecommendationProperties properties,
+                                Optional<TimetableRouteFinder> timetable) {
+        this(finder, fares, properties, timetable, Optional.empty());
     }
 
     /** Fixed-cost engine without a timetable. */
@@ -196,7 +208,7 @@ public class RecommendationEngine {
                 // Time on the way: leaving until the train arrives. Waiting at the destination for the appointment is
                 // not travel (it is slackSeconds in the response).
                 int minutes = minutes((int) Duration.between(route.leaveAt(), route.arriveAt()).toSeconds());
-                Trip trip = trip(member, route.path(), minutes, route, TIMETABLE, constraints, personalLimits);
+                Trip trip = trip(member, stationId, route.path(), minutes, route, TIMETABLE, constraints, personalLimits);
                 if (trip == null) {
                     trips = null;
                     break;
@@ -246,7 +258,8 @@ public class RecommendationEngine {
             if (path.isEmpty()) {
                 return null;
             }
-            Trip trip = trip(members.get(i), path.get(), minutes(path.get().totalSeconds()), null, ESTIMATE, constraints, personalLimits);
+            Trip trip = trip(members.get(i), stationId, path.get(), minutes(path.get().totalSeconds()), null, ESTIMATE, constraints,
+                    personalLimits);
             if (trip == null) {
                 return null;
             }
@@ -256,14 +269,30 @@ public class RecommendationEngine {
     }
 
     /** The trip, or null when it breaks a constraint (the same checks for both sources). */
-    private Trip trip(Member member, RoutePath path, int minutes, TimedRoute timed, String source,
+    private Trip trip(Member member, long stationId, RoutePath path, int minutes, TimedRoute timed, String source,
                       AppliedConstraints constraints, Map<UUID, Integer> personalLimits) {
-        int fare = fares.fareOf(path);
+        int fare = fare(member.departureStationId(), stationId, path);
         if (exceeds(constraints.maxMinutes(), minutes) || exceeds(constraints.maxTransfers(), path.transferCount())
                 || exceeds(constraints.maxFareWon(), fare) || exceeds(personalLimits.get(member.userId()), minutes)) {
             return null;
         }
         return new Trip(member, path, minutes, fare, timed, source);
+    }
+
+    /**
+     * Fare from the member's departure station to the candidate station in the Seoul Metro fare table (#109), whatever
+     * route is ridden: the pair sets the fare. Without the table or the pair (logged once per pair), the ridden distance
+     * as before. Only the fare: distance, legs and times stay those of the route.
+     */
+    private int fare(long departureStationId, long stationId, RoutePath path) {
+        if (stationFares != null && departureStationId != stationId) {
+            OptionalInt fare = stationFares.fareBetween(departureStationId, stationId);
+            if (fare.isPresent()) return fare.getAsInt();
+            if (missingFares.add(List.of(departureStationId, stationId))) {
+                log.warn("No fare-table fare for stations {} -> {}; using the ridden distance", departureStationId, stationId);
+            }
+        }
+        return fares.fareOf(path);
     }
 
     private static Map<UUID, Integer> personalLimits(AppliedConstraints constraints) {

@@ -9,7 +9,7 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
 3. 사전 검사(계산 전, run을 남기지 않음): 멤버 2명 미만 `TOO_FEW_MEMBERS`(422) → 출발역 없는 멤버가 있으면 `DEPARTURE_MISSING`(422, `error.details.missingUserIds`) → 방의 약속 시각이 지금보다 이전이면 `APPOINTMENT_PASSED`(422, #100, 아래 "지난 약속") → 약속 시각 직전 60분(설정값) 안에 도착하는 열차가 전 노선에 하나도 없으면 `NO_SERVICE_TIME`(422, #96, 아래 "운행하지 않는 시간대").
 4. **방 단위 동시 요청 보호(#98)**: 위 검사를 모두 통과한 뒤, 계산을 시작하기 직전에 `RecommendationInFlightGuard.tryAcquire(roomId)`를 건다. 아래 "동시 요청 보호" 참고.
 5. `ConstraintResolver`: `conditionText`가 있으면 `AiClient.interpretCondition` 1회. 서버가 범위를 검증하고 역 이름→stationId(`stations.name`, 끝의 "역" 무시, 같은 이름의 역이 여럿이면 버림), 닉네임→userId(방 멤버, 중복 닉네임이면 버림)로 매핑. 매핑 못 한 항목은 버리고 POST `message`에 알린다. 같은 항목이 `filter`에도 있으면 filter 값이 우선(항목 단위). AI 실패(어떤 예외든)는 filter만 적용하고 `conditionParseFailed=true`.
-6. `RecommendationEngine`: 이동 시간은 열차 시각표로 계산한다(#96, 아래 "열차 시각표 기반 이동 시간"). 시각표가 없을 때만 참여자당 `shortestPathsFrom` 1회(고정 소요시간)이고, 전원이 도달 가능한 역 = 후보. 방 멤버의 출발역은 후보에서 뺀다(어느 기준으로도 추천하지 않고, nearbyAlternatives에도 넣지 않는다). 이 출발역 제외는 서버 규칙이라 `appliedConstraints.excludeStationIds`에는 넣지 않는다. 그 필드는 사용자가 조건으로 뺀 역만 담는다(명세 v1.12 §8.1). 제약(참여자 **한 명당** 최대 시간·환승·요금, 개인별 한도, 제외 역)을 모두 통과한 역만 남긴다. 요금은 `FareCalculator.fareOf`(경로 API와 같은 `GraphFareCalculator`)로 계산한다.
+6. `RecommendationEngine`: 이동 시간은 열차 시각표로 계산한다(#96, 아래 "열차 시각표 기반 이동 시간"). 시각표가 없을 때만 참여자당 `shortestPathsFrom` 1회(고정 소요시간)이고, 전원이 도달 가능한 역 = 후보. 방 멤버의 출발역은 후보에서 뺀다(어느 기준으로도 추천하지 않고, nearbyAlternatives에도 넣지 않는다). 이 출발역 제외는 서버 규칙이라 `appliedConstraints.excludeStationIds`에는 넣지 않는다. 그 필드는 사용자가 조건으로 뺀 역만 담는다(명세 v1.12 §8.1). 제약(참여자 **한 명당** 최대 시간·환승·요금, 개인별 한도, 제외 역)을 모두 통과한 역만 남긴다. 요금은 서울교통공사 운임표에서 (출발역, 후보역) 쌍으로 조회한다(#109, 아래 "요금"). 운임표가 없거나 쌍이 없으면 `FareCalculator.fareOf`(경로 API와 같은 `GraphFareCalculator`, 탄 경로 거리)로 계산한다.
 7. 기준별 최적역(TIME / FARE / DISTANCE, 명세 8.1 표). 허용 폭은 설정 `linkro.recommendation.fare-tolerance-won`(100), `distance-tolerance-m`(1000).
 8. 결과마다 `participantTimes`(혼잡도는 `CongestionLookup`, 출발 예정 시각은 TIMETABLE이면 첫 열차 출발 − 역 접근 시간, ESTIMATE면 약속 시각 − travelMinutes(약속이 없으면 요청 시각)), `nearbyAlternatives`(앞·뒤 한 정거장, 후보 집합에 있는 역만), 설명 문장.
 9. 설명: `AiClient.explainRecommendation`을 추천 1건당 **1회**만 호출한다(결과가 없으면 호출 없음). 요청에 모든 기준(`ExplanationRequest.items`: criterion, stationName, facts)을 담고, 응답(`ExplanationResult.texts`)은 기준별 문장이다. 기준마다 문장 안 숫자를 그 기준의 facts와 대조해서 다르거나 비었거나 빠졌으면 그 기준만 템플릿 + `explanationSource: TEMPLATE`, 호출 전체가 실패하면 모든 기준이 템플릿이다.
@@ -188,6 +188,28 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
 | `linkro.subway.timetable.enabled` | true | false면 시각표를 적재하지 않고 기존 고정 소요시간으로 계산한다(시연 직전 비상 복귀용) |
 | `linkro.subway.timetable.station-access-seconds` | 0 | 출발해서 첫 승강장에 서기까지. 역별 자료가 없어 0이다 |
 | `linkro.subway.timetable.no-service-window-minutes` | 60 | 약속 직전 이 시간 안에 도착하는 열차가 없으면 `NO_SERVICE_TIME`(양수여야 하며, 아니면 기동 실패) |
+
+### 요금 (#109)
+
+- **원칙**: 요금은 출발역과 도착역 쌍으로 정해지고 탄 경로와 무관하다. 추천 요금은 운임표에서 (멤버의 출발역, 후보역)으로 조회한다.
+  - 근거: 지도 앱에서 두 역 쌍(불광→합정, 노원→사당)의 다섯 경로 요금이 같았고, 운임표 값도 일치했다.
+  - `distanceM`, legs, 경로 선택, 시간은 탄 경로 그대로다. `fareWon`만 바뀐다.
+- **자료**: `src/main/resources/fare-table.csv.gz`
+  - 출처: 서울교통공사 운임표. 기준일은 확인 후 기재한다.
+  - 성인 교통카드 기본요금이다. 청소년·어린이·정기권은 다루지 않는다.
+  - 형식: `from_code,to_code,distance_km,fare_won`, 75,824행. 우리 277개 노드의 외부 역코드(`station_lines.station_code`) 사이만 있고, 같은 역 안의 쌍은 없다.
+- **적재**(`FareTableConfig`, graph 모드): 기동할 때 코드를 역 단위로 묶어 (출발역, 도착역) → 요금 표를 만든다.
+  - 같은 역 쌍에 코드 조합이 여러 개면(환승역) 가장 낮은 요금을 쓴다. 15,130쌍이 여러 조합이고, 그중 464쌍은 조합마다 요금이 달랐다.
+    - 예: 남태령→삼각지 1,550/1,650 → 1,550원
+  - 까치산 2호선 노드(코드 200)는 운임표에 없지만, 까치산 5호선 코드로 역 단위가 채워진다.
+  - 결과: 지원 역 240개의 모든 순서쌍 57,360쌍이 채워진다(누락 0). 적재는 15~27 ms, 메모리는 약 236 KB(추정)다.
+- **안전장치**
+  - 파일을 읽지 못하면 기동은 계속하고(WARN), 빈 표로 동작한다. 그러면 모든 요금이 탄 경로 거리로 계산된다.
+  - 표에 쌍이 없으면 그 쌍만 탄 경로 거리로 계산하고, 쌍마다 한 번 WARN을 남긴다.
+  - mock 모드에는 운임표가 없어서 기존 방식 그대로다.
+- **적용 범위**
+  - 약속 있음·약속 없음·고정 비용 폴백이 모두 같은 `trip()`을 쓴다.
+  - 경로 검색 API(`InternalRouteBuilder`, `KakaoRouteMapper`)의 요금은 바꾸지 않았다.
 
 ### V15
 
