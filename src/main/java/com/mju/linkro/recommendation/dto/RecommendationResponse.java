@@ -75,9 +75,40 @@ public record RecommendationResponse(
             int transferCount,
             int fareWon,
             int distanceM,
-            @Schema(description = "출발 예정 시각 = 약속 시각 − travelMinutes(약속 시각이 없으면 요청 시각)") String departureAt,
+            @Schema(description = "출발 예정 시각. TIMETABLE: 첫 열차 출발 시각 − 역 접근 시간(늦어도 이때 나서면 약속 시각에 도착). "
+                    + "ESTIMATE: 약속 시각 − travelMinutes(약속 시각이 없으면 요청 시각)") String departureAt,
             @Schema(description = "경로 모든 정차역 혼잡도 중 최댓값. 데이터 없으면 null", types = {"object", "null"}) Congestion congestion,
-            List<Segment> segments) {}
+            List<Segment> segments,
+            @Schema(description = "처음 타는 열차. TIMETABLE일 때만 있고 ESTIMATE와 이전 실행은 null", types = {"object", "null"}) BoardingTrain boardingTrain,
+            @Schema(description = "열차별 승차·하차 시각과 환승 대기. ESTIMATE는 []") List<Leg> legs,
+            @Schema(description = "TIMETABLE(열차 시각표로 계산) / ESTIMATE(고정 소요시간 추정). 이전 실행은 null",
+                    example = "TIMETABLE", types = {"string", "null"}) String source) {}
+
+    @Schema(name = "RecommendationBoardingTrain")
+    public record BoardingTrain(
+            long lineId,
+            String lineName,
+            long stationId,
+            String stationName,
+            @Schema(description = "UP / DOWN / INNER / OUTER / LOOP (segments.direction과 같은 기준)") String direction,
+            @Schema(description = "열차 출발 시각, ISO 8601 Asia/Seoul", example = "2026-11-13T18:21:30+09:00") String departureAt,
+            @Schema(description = "열차 종착역(시각표 표기)", example = "성수") String terminal,
+            @Schema(description = "시각표 열차 번호", example = "2183") String trainCode) {}
+
+    @Schema(name = "RecommendationLeg")
+    public record Leg(
+            long lineId,
+            String lineName,
+            String trainCode,
+            String terminal,
+            String direction,
+            String fromStationName,
+            String toStationName,
+            @Schema(description = "승차(열차 출발) 시각") String boardAt,
+            @Schema(description = "하차(열차 도착) 시각") String alightAt,
+            int stationCount,
+            @Schema(description = "타기 전 환승 도보 초. 첫 열차와 같은 승강장 갈아타기는 0") int walkSec,
+            @Schema(description = "타기 전 승강장 대기 초 = 승차 − (이전 하차 + 도보). 첫 열차는 0") int transferWaitSec) {}
 
     @Schema(name = "RecommendationStationRef")
     public record StationRef(long id, String name) {}

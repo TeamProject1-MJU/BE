@@ -49,6 +49,34 @@ public final class TrainTimetable {
 
     private record Stop(long nodeId, String station, int arriveSec, int departSec) {}
 
+    /**
+     * Rides of one edge and day type for searches that look up many times (#96): the same binary searches as
+     * {@link #nextDeparture} and {@link #lastDepartureArriving}, returning an index instead of a new object.
+     */
+    public static final class Rides {
+        private final Series series;
+
+        private Rides(Series series) {
+            this.series = series;
+        }
+
+        /** Index of the first ride leaving at or after the time, or -1. */
+        public int next(int atOrAfterSec) {
+            int i = firstAtLeast(series.depart, atOrAfterSec);
+            return i < series.depart.length ? i : -1;
+        }
+
+        /** Index of the ride leaving latest among those arriving at or before the time, or -1. */
+        public int lastArriving(int arriveByOrBeforeSec) {
+            int k = firstAtLeast(series.arriveSorted, arriveByOrBeforeSec + 1) - 1;
+            return k >= 0 ? series.latestDepartureUpTo[k] : -1;
+        }
+
+        public int departSec(int index) { return series.depart[index]; }
+        public int arriveSec(int index) { return series.arrive[index]; }
+        public Departure departure(int index) { return series.at(index); }
+    }
+
     /** Rides of one edge and day type: sorted by departure, plus an arrival order for backward search. */
     private static final class Series {
         final int[] depart;
@@ -109,6 +137,8 @@ public final class TrainTimetable {
     /** (station id, line id) -> node id. */
     private final Map<List<Long>, Long> nodesByStationLine;
     private final LoadReport report;
+    /** Latest departure of any ride per day type; missing when the day type has no train. */
+    private final Map<DayType, Integer> lastDepartures;
 
     private TrainTimetable(Map<Long, Map<DayType, Series>> series, Map<Long, Map<Long, Long>> rideEdges,
                            Map<List<Long>, Long> nodesByStationLine, LoadReport report) {
@@ -116,6 +146,11 @@ public final class TrainTimetable {
         this.rideEdges = rideEdges;
         this.nodesByStationLine = nodesByStationLine;
         this.report = report;
+        Map<DayType, Integer> last = new EnumMap<>(DayType.class);
+        series.values().forEach(byDay -> byDay.forEach((day, s) -> {
+            if (s.depart.length > 0) last.merge(day, s.depart[s.depart.length - 1], Math::max);
+        }));
+        this.lastDepartures = Collections.unmodifiableMap(last);
     }
 
     /** Reads the gzip CSV and maps it onto the graph data. Fails on a wrong header or a malformed row. */
@@ -290,6 +325,19 @@ public final class TrainTimetable {
         return s == null ? Optional.empty() : s.lastArriving(arriveByOrBeforeSec);
     }
 
+    /**
+     * The ride of one train on the edge leaving at or after {@code notBeforeSec} (a loop train passes some edges twice),
+     * or empty when that train does not run the edge then.
+     */
+    public Optional<Departure> rideOf(long edgeId, DayType dayType, TrainKey train, int notBeforeSec) {
+        Series s = series(edgeId, dayType);
+        if (s == null) return Optional.empty();
+        for (int i = firstAtLeast(s.depart, notBeforeSec); i < s.depart.length; i++) {
+            if (s.trains[i].equals(train)) return Optional.of(s.at(i));
+        }
+        return Optional.empty();
+    }
+
     /** {@link #nextDeparture(long, DayType, int)} for boarding line {@code lineId} at a station towards the next station. */
     public Optional<Departure> nextDeparture(long lineId, long stationId, long nextStationId, DayType dayType, int atOrAfterSec) {
         OptionalLong edge = rideEdgeId(lineId, stationId, nextStationId);
@@ -319,6 +367,23 @@ public final class TrainTimetable {
         List<Departure> all = new ArrayList<>(s.depart.length);
         for (int i = 0; i < s.depart.length; i++) all.add(s.at(i));
         return all;
+    }
+
+    /** Rides of the edge for the day type, or null when no train runs it then. */
+    public Rides rides(long edgeId, DayType dayType) {
+        Series s = series(edgeId, dayType);
+        return s == null ? null : new Rides(s);
+    }
+
+    /** Whether any train runs on the day type. */
+    public boolean hasTrains(DayType dayType) {
+        return lastDepartures.containsKey(dayType);
+    }
+
+    /** Latest departure of any train on the day type (service-day seconds), or empty when none runs. */
+    public OptionalInt lastDepartureSec(DayType dayType) {
+        Integer last = lastDepartures.get(dayType);
+        return last == null ? OptionalInt.empty() : OptionalInt.of(last);
     }
 
     /** RIDE edges with at least one train. */

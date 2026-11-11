@@ -1,7 +1,9 @@
 package com.mju.linkro.recommendation.service;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.mju.linkro.recommendation.dto.RecommendationResponse.BoardingTrain;
 import com.mju.linkro.recommendation.dto.RecommendationResponse.Congestion;
+import com.mju.linkro.recommendation.dto.RecommendationResponse.Leg;
 import com.mju.linkro.recommendation.dto.RecommendationResponse.ParticipantTime;
 import com.mju.linkro.recommendation.dto.RecommendationResponse.Segment;
 import com.mju.linkro.recommendation.dto.RecommendationResponse.StationRef;
@@ -11,6 +13,9 @@ import java.util.UUID;
 /**
  * One element of recommendation_results.trips (ERD v1.13): the participantTimes snapshot with the departure station
  * kept as an id only. The API's departureStation{id, name} is filled in from the id when the row is read.
+ *
+ * <p>{@code boardingTrain}, {@code legs} and {@code source} (#96) are missing in older rows: they read as null, [] and
+ * null.
  *
  * <p>{@code legacyDepartureStation} only reads rows stored before this change (dev data with a full
  * departureStation object); it is never written.
@@ -26,11 +31,15 @@ record StoredTrip(
         String departureAt,
         Congestion congestion,
         List<Segment> segments,
+        BoardingTrain boardingTrain,
+        List<Leg> legs,
+        String source,
         @JsonProperty(value = "departureStation", access = JsonProperty.Access.WRITE_ONLY) StationRef legacyDepartureStation) {
 
     static StoredTrip of(ParticipantTime trip) {
         return new StoredTrip(trip.userId(), trip.nickname(), trip.departureStation().id(), trip.travelMinutes(),
-                trip.transferCount(), trip.fareWon(), trip.distanceM(), trip.departureAt(), trip.congestion(), trip.segments(), null);
+                trip.transferCount(), trip.fareWon(), trip.distanceM(), trip.departureAt(), trip.congestion(), trip.segments(),
+                trip.boardingTrain(), trip.legs(), trip.source(), null);
     }
 
     long stationId() {
@@ -45,6 +54,6 @@ record StoredTrip(
 
     ParticipantTime toParticipantTime(StationRef departureStation) {
         return new ParticipantTime(userId, nickname, departureStation, travelMinutes, transferCount, fareWon, distanceM,
-                departureAt, congestion, segments);
+                departureAt, congestion, segments, boardingTrain, legs == null ? List.of() : legs, source);
     }
 }

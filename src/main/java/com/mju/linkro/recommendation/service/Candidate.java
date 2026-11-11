@@ -1,16 +1,26 @@
 package com.mju.linkro.recommendation.service;
 
 import com.mju.linkro.subway.api.RoutePath;
+import com.mju.linkro.subway.api.TimedRoute;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * A station every participant can reach, with each participant's route to it (our graph, minimum time).
+ * A station every participant can reach, with each participant's route to it: real trains of the timetable (#96), or
+ * the fixed-cost graph when the timetable is off.
  * The totals are derived once so the criteria only compare numbers.
  */
 public final class Candidate {
-    /** @param minutes route time in whole minutes, rounded up so a limit is never exceeded by a partial minute */
-    public record Trip(Member member, RoutePath path, int minutes, int fareWon) {}
+    /**
+     * @param minutes route time in whole minutes, rounded up so a limit is never exceeded by a partial minute
+     * @param timed   the trains of the route (#96), null for an ESTIMATE trip on fixed graph costs
+     * @param source  TIMETABLE or ESTIMATE
+     */
+    public record Trip(Member member, RoutePath path, int minutes, int fareWon, TimedRoute timed, String source) {
+        public Trip(Member member, RoutePath path, int minutes, int fareWon) {
+            this(member, path, minutes, fareWon, null, RecommendationEngine.ESTIMATE);
+        }
+    }
 
     public record Member(UUID userId, String nickname, long departureStationId) {}
 
