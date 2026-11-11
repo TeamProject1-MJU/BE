@@ -22,8 +22,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * 응암 loop -> loop changes (#104) on a hand-made 6호선: 구산 -> 응암 -> 역촌 (loop), 응암 <-> 새절 (main). No train of
- * the timetable goes round twice, so a 구산 train reaching 응암 needs another train for 역촌, at least
- * default-branch-transfer-seconds (120 s, 응암 has no branch-transfers entry) later.
+ * the timetable goes round twice, so a 구산 train reaching 응암 needs another train for 역촌, at least the 응암 branch-transfers
+ * time later (60 s as in subway-graph-defaults.properties, provisional), or default-branch-transfer-seconds (120 s) without it.
  */
 class TimetableRouterEungamTest {
     static final SubwayGraphData DATA = new SubwayGraphData(
@@ -52,6 +52,10 @@ class TimetableRouterEungamTest {
     }
 
     static TimetableRouter router(List<List<String>> trains) {
+        return router(trains, List.of(new SubwayGraphProperties.BranchTransfer("응암", "6", 60, 0)));
+    }
+
+    static TimetableRouter router(List<List<String>> trains, List<SubwayGraphProperties.BranchTransfer> branchTransfers) {
         StringBuilder csv = new StringBuilder(TimetableRouterTest.HEADER).append('\n');
         trains.forEach(rows -> rows.forEach(row -> csv.append(row).append('\n')));
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
@@ -62,17 +66,19 @@ class TimetableRouterEungamTest {
         }
         SubwayGraphProperties costs = new SubwayGraphProperties();
         costs.setDefaultBranchTransferSeconds(120);
+        costs.setBranchTransfers(branchTransfers);
         return new TimetableRouter(SubwayGraph.of(DATA), TrainTimetable.load(new ByteArrayInputStream(bytes.toByteArray()), DATA),
                 new TimetableClock(new HolidayCalendar("")), costs, 0, Duration.ofMinutes(60));
     }
 
     // 6053-like: 구산 29880 -> 응암 30000 -> 새절 (goes on to the main line, not round the loop).
     static final List<String> FROM_GUSAN = train("6053", "응암", "봉화산", "구산:29870:29880", "응암:30000:30030", "새절:30110:30140");
-    // Loop trains leaving 응암 for 역촌 at 30000 (same second as the arrival), 30090 and 30180.
+    // Loop trains leaving 응암 for 역촌 0 s (same second as the arrival), 30 s, 90 s and 180 s after it.
     static final List<List<String>> LOOP = List.of(
             train("6059", "응암", "봉화산", "응암:30000:30000", "역촌:30100:30130"),
-            train("6061", "응암", "봉화산", "응암:30090:30090", "역촌:30190:30220"),
-            train("6063", "응암", "봉화산", "응암:30180:30180", "역촌:30280:30310"));
+            train("6061", "응암", "봉화산", "응암:30030:30030", "역촌:30130:30160"),
+            train("6063", "응암", "봉화산", "응암:30090:30090", "역촌:30190:30220"),
+            train("6065", "응암", "봉화산", "응암:30180:30180", "역촌:30280:30310"));
 
     static List<List<String>> trains(List<String>... extra) {
         List<List<String>> all = new ArrayList<>(LOOP);
@@ -84,11 +90,11 @@ class TimetableRouterEungamTest {
     @Test
     void forwardNoLongerChangesInZeroSeconds() {
         TimedRoute route = router(trains()).departingAt(4, at(THURSDAY, 29800)).routeTo(3).orElseThrow();
-        // Arrive 응암 30000: 6059 (30000) and 6061 (30090) are inside 120 s; 6063 (30180) is the first one possible.
+        // Arrive 응암 30000: 6059 (0 s) and 6061 (30 s) are inside 60 s; 6063 (90 s) is the first one possible.
         assertThat(route.legs()).extracting(TimedLeg::trainCode).containsExactly("6053", "6063");
-        assertThat(route.legs().get(1).waitSec()).isEqualTo(180);
+        assertThat(route.legs().get(1).waitSec()).isEqualTo(90);
         assertThat(route.legs().get(1).walkSec()).isZero();
-        assertThat(route.arriveAt()).isEqualTo(at(THURSDAY, 30280));
+        assertThat(route.arriveAt()).isEqualTo(at(THURSDAY, 30190));
         // A wait on the same line: no transfer, no TRANSFER step.
         assertThat(route.path().transferCount()).isZero();
         assertThat(route.path().steps()).extracting(PathStep::type).containsOnly(StepType.RIDE);
@@ -97,13 +103,21 @@ class TimetableRouterEungamTest {
 
     @Test
     void backwardKeepsTheChangeTimeToo() {
-        // Reach 역촌 by 30190 (6061): 6053 reaches 응암 at 30000, only 90 s before 6061 leaves, so it does not fit and
-        // nothing earlier leaves 구산.
-        assertThat(router(trains()).latestDepartures(3, at(THURSDAY, 30190), Set.of(4L), 0)).isEmpty();
-        // By 30280 (6063): 6053 then 6063, leaving 구산 at 29880.
-        TimedRoute route = router(trains()).latestDepartures(3, at(THURSDAY, 30280), Set.of(4L), 0).get(4L);
+        // Reach 역촌 by 30160 (6061, 30 s after 6053 reaches 응암): too short, and nothing earlier leaves 구산.
+        assertThat(router(trains()).latestDepartures(3, at(THURSDAY, 30160), Set.of(4L), 0)).isEmpty();
+        // By 30190 (6063, 90 s after): 6053 then 6063, leaving 구산 at 29880.
+        TimedRoute route = router(trains()).latestDepartures(3, at(THURSDAY, 30190), Set.of(4L), 0).get(4L);
         assertThat(route.legs()).extracting(TimedLeg::trainCode).containsExactly("6053", "6063");
         assertThat(route.leaveAt()).isEqualTo(at(THURSDAY, 29880));
+    }
+
+    @Test
+    void withoutAnEungamEntryTheDefaultBranchTransferTimeStillApplies() {
+        // The existing fallback is unchanged: no 응암 branch-transfers entry means default-branch-transfer-seconds (120 s),
+        // so 6063 (90 s) is too short and 6065 (180 s) is taken.
+        TimedRoute route = router(trains(), List.of()).departingAt(4, at(THURSDAY, 29800)).routeTo(3).orElseThrow();
+        assertThat(route.legs()).extracting(TimedLeg::trainCode).containsExactly("6053", "6065");
+        assertThat(route.legs().get(1).waitSec()).isEqualTo(180);
     }
 
     @Test

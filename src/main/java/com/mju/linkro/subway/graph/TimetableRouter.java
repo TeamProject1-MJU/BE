@@ -195,6 +195,9 @@ public class TimetableRouter implements TimetableRouteFinder {
      * Least time between arriving at junction {@code node} and leaving on another train, for the pairs above: the junction's
      * branch-transfers time, else default-branch-transfer-seconds (the same lookup as {@link #changeSeconds}). It is a wait
      * on the same line, not a transfer: transfer counts and TRANSFER steps do not change.
+     *
+     * <p>응암 6호선 is set to 60 s in subway-graph-defaults.properties: a provisional value, not measured, and whether the
+     * change is on the same platform is unknown.
      */
     private int minimumChangeSeconds(long previous, long node, long next) {
         BranchRules.Junction junction = graph.junction(node);
