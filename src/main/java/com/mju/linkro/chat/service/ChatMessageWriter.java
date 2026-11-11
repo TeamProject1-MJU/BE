@@ -11,6 +11,7 @@ import com.mju.linkro.common.exception.ErrorCode;
 import com.mju.linkro.room.service.RoomAccess;
 import java.sql.SQLException;
 import java.util.UUID;
+import java.util.function.Consumer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -43,8 +44,19 @@ public class ChatMessageWriter {
     /** Membership first, then the content (API 10.1). Members only; the room is not locked (docs/room-domain-34.md). */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Message recordUser(UUID roomId, UUID userId, ChatMessageRequest request) {
+        return recordUser(roomId, userId, request, content -> { });
+    }
+
+    /**
+     * Same, with a check that runs on the validated content after the membership and content checks and before the
+     * save. It may throw to refuse the message (the rate limit does); nothing is saved then.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Message recordUser(UUID roomId, UUID userId, ChatMessageRequest request, Consumer<String> beforeSave) {
         access.requireMember(roomId, userId);
-        return save(roomId, SenderType.USER, userId, request.validatedContent());
+        String content = request.validatedContent();
+        beforeSave.accept(content);
+        return save(roomId, SenderType.USER, userId, content);
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
