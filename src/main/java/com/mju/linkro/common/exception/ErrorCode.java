@@ -28,6 +28,7 @@ public enum ErrorCode {
     ALREADY_JOINED(HttpStatus.CONFLICT, "ALREADY_JOINED", "이미 참여한 방입니다."),
     ROOM_BUSY(HttpStatus.CONFLICT, "ROOM_BUSY", "방에서 작업이 진행 중입니다."),
     ALREADY_PROPOSED(HttpStatus.CONFLICT, "ALREADY_PROPOSED", "이미 후보로 제안된 역입니다."),
+    RECOMMENDATION_IN_PROGRESS(HttpStatus.CONFLICT, "RECOMMENDATION_IN_PROGRESS", "추천을 계산하는 중입니다. 잠시 후 다시 시도해 주세요."),
     STATION_UNSUPPORTED(HttpStatus.UNPROCESSABLE_CONTENT, "STATION_UNSUPPORTED", "지원하지 않는 역입니다."),
     DEPARTURE_MISSING(HttpStatus.UNPROCESSABLE_CONTENT, "DEPARTURE_MISSING", "출발지가 설정되지 않았습니다."),
     TOO_FEW_MEMBERS(HttpStatus.UNPROCESSABLE_CONTENT, "TOO_FEW_MEMBERS", "참여 인원이 부족합니다."),

@@ -133,6 +133,14 @@ class RecommendationControllerTest {
     }
 
     @Test
+    void aCalculationInProgressIsA409() throws Exception {
+        when(service.create(any(), any(), any())).thenThrow(new BusinessException(ErrorCode.RECOMMENDATION_IN_PROGRESS));
+        mvc.perform(auth(post(base))).andExpect(status().isConflict())
+                .andExpect(content().json("{\"success\":false,\"error\":{\"code\":\"RECOMMENDATION_IN_PROGRESS\","
+                        + "\"message\":\"추천을 계산하는 중입니다. 잠시 후 다시 시도해 주세요.\"}}"));
+    }
+
+    @Test
     void latestWithoutARunIsDataNull() throws Exception {
         when(service.latest(user.getId(), roomId)).thenReturn(null);
         mvc.perform(auth(get(base + "/latest"))).andExpect(status().isOk())

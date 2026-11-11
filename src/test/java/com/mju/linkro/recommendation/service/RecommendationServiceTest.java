@@ -104,6 +104,7 @@ class RecommendationServiceTest {
     AiClient ai;
     ApplicationEventPublisher events;
     MovingClock clock;
+    RecommendationInFlightGuard guard;
     RecommendationService service;
 
     @BeforeEach
@@ -121,6 +122,7 @@ class RecommendationServiceTest {
         ai = spy(new MockAiClient());
         events = mock(ApplicationEventPublisher.class);
         clock = new MovingClock();
+        guard = new RecommendationInFlightGuard(java.time.Duration.ofSeconds(60), clock);
         service = build(ai);
     }
 
@@ -134,7 +136,7 @@ class RecommendationServiceTest {
                 new ExplanationWriter(client), stations,
                 (path, departAt) -> path.totalSeconds() == 0 ? CongestionResult.unsupported()
                         : CongestionResult.of(92.5, "NORMAL", "보통", CongestionSource.MOCK),
-                events, JsonMapper.builder().build(), clock);
+                events, guard, JsonMapper.builder().build(), clock);
     }
 
     static MemberRow member(UUID user, String nickname, Long station) {
@@ -529,5 +531,76 @@ class RecommendationServiceTest {
         assertThatThrownBy(() -> service.latest(USER_A, roomId)).isInstanceOf(BusinessException.class);
         assertThatThrownBy(() -> service.byRun(USER_A, roomId, UUID.randomUUID())).isInstanceOf(BusinessException.class);
         assertThat(repository.saves).isZero();
+    }
+
+    // ---- in-flight guard (#98) ----
+
+    @Test
+    void aSecondRequestWhileTheFirstCalculatesIs409WithoutAiOrRun() throws Exception {
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        org.mockito.Mockito.doAnswer(call -> {
+            entered.countDown();
+            assertThat(release.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            return call.callRealMethod();
+        }).when(ai).explainRecommendation(any());
+        RecommendationRequest withText = new RecommendationRequest("40분 이내", null);
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            var first = executor.submit(() -> service.create(USER_A, roomId, withText));
+            assertThat(entered.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+            assertThatThrownBy(() -> service.create(USER_B, roomId, withText)).isInstanceOfSatisfying(BusinessException.class,
+                    exception -> assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.RECOMMENDATION_IN_PROGRESS));
+            // Reads are not guarded.
+            assertThat(service.latest(USER_B, roomId)).isNull();
+
+            release.countDown();
+            assertThat(first.get(10, java.util.concurrent.TimeUnit.SECONDS).results()).isNotEmpty();
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+        }
+        // Only the first request reached the AI and the repository.
+        org.mockito.Mockito.verify(ai, org.mockito.Mockito.times(1)).interpretCondition(any());
+        org.mockito.Mockito.verify(ai, org.mockito.Mockito.times(1)).explainRecommendation(any());
+        assertThat(repository.saves).isEqualTo(1);
+
+        // Once it is done the room is free again.
+        assertThat(create(null).results()).isNotEmpty();
+        assertThat(repository.saves).isEqualTo(2);
+    }
+
+    @Test
+    void theGuardIsReleasedWhenTheCalculationFails() {
+        // The second requireMember (reading the room back after saving) fails: a runtime exception, then a business one.
+        when(access.requireMember(any(), any())).thenReturn(room).thenThrow(new IllegalStateException("boom"))
+                .thenReturn(room).thenThrow(new BusinessException(ErrorCode.ROOM_NOT_FOUND)).thenReturn(room);
+        assertThatThrownBy(() -> create(null)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> create(null)).isInstanceOfSatisfying(BusinessException.class,
+                exception -> assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.ROOM_NOT_FOUND));
+        assertThat(create(null).results()).isNotEmpty();
+    }
+
+    @Test
+    void failedChecksNeverHoldTheRoom() {
+        members.remove(1);
+        assertThatThrownBy(() -> create(null)).isInstanceOfSatisfying(BusinessException.class,
+                exception -> assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.TOO_FEW_MEMBERS));
+        RecommendationInFlightGuard.Ticket ticket = guard.tryAcquire(roomId).orElseThrow();
+        guard.release(ticket);
+    }
+
+    @Test
+    void aHeldRoomRefusesButOtherRoomsCalculate() {
+        RecommendationInFlightGuard.Ticket ticket = guard.tryAcquire(roomId).orElseThrow();
+        assertThatThrownBy(() -> create(null)).isInstanceOfSatisfying(BusinessException.class,
+                exception -> assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.RECOMMENDATION_IN_PROGRESS));
+        assertThat(repository.saves).isZero();
+        UUID otherRoom = UUID.randomUUID();
+        when(roomReads.members(List.of(otherRoom))).thenAnswer(call -> List.copyOf(members));
+        assertThat(service.create(USER_A, otherRoom, null).results()).isNotEmpty();
+        guard.release(ticket);
+        assertThat(create(null).results()).isNotEmpty();
     }
 }
