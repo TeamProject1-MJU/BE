@@ -272,6 +272,42 @@ class TimetableRecommendationPostgresTest {
         assertThat(jdbc.queryForObject("select count(*) from recommendation_runs where room_id = ?", Integer.class, users[0])).isZero();
     }
 
+    /** Short description of a route: "code from HH:mm:ss -> to HH:mm:ss (wait s)" per leg. */
+    static List<String> legs(com.mju.linkro.subway.api.TimedRoute route) {
+        var hms = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss").withZone(SEOUL);
+        return route.legs().stream().map(leg -> leg.trainCode() + " " + leg.fromStationName() + " " + hms.format(leg.boardAt())
+                + " -> " + leg.toStationName() + " " + hms.format(leg.alightAt()) + " (" + leg.waitSec() + ")").toList();
+    }
+
+    @Test
+    void eungamLoopToLoopNeedsTheChangeTime() {
+        // #104: 6053 reaches 응암 at 08:02:30 and goes on to 새절; 6059 leaves for 역촌 at the same second. With the
+        // 120 s change time the next loop train, 6061 at 08:06:30, is the first one.
+        long gusan = station("구산");
+        long yeokchon = station("역촌");
+        var forward = timetable.departingAt(gusan, at(THURSDAY, 8, 0)).routeTo(yeokchon).orElseThrow();
+        assertThat(legs(forward)).containsExactly("6053 구산 08:00:30 -> 응암 08:02:30 (0)", "6061 응암 08:06:30 -> 역촌 08:08:10 (240)");
+        assertThat(forward.path().transferCount()).isZero();
+        // Backward (by 09:00) already waited 210 s at 응암: unchanged.
+        var backward = timetable.latestDepartures(yeokchon, at(THURSDAY, 9, 0), Set.of(gusan), 0).get(gusan);
+        assertThat(legs(backward)).containsExactly("6077 구산 08:49:00 -> 응암 08:51:00 (0)", "6085 응암 08:54:30 -> 역촌 08:56:10 (210)");
+    }
+
+    @Test
+    void routesAwayFromTheEungamLoopChangeAreUnchanged() {
+        // Same results as before #104 (checked on the same seed and timetable).
+        long bulgwang = station("불광");
+        long dmc = station("디지털미디어시티");
+        var forward = timetable.departingAt(bulgwang, at(THURSDAY, 8, 0)).routeTo(dmc).orElseThrow();
+        assertThat(legs(forward)).containsExactly("3068K 불광 08:01:00 -> 연신내 08:02:30 (0)", "6057 연신내 08:07:10 -> 디지털미디어시티 08:16:10 (129)");
+        var backward = timetable.latestDepartures(dmc, at(THURSDAY, 9, 0), Set.of(bulgwang), 0).get(bulgwang);
+        assertThat(legs(backward)).containsExactly("6077 불광 08:42:30 -> 디지털미디어시티 08:56:10 (0)");
+        // 새절 -> 응암 (응암행) -> 역촌 is main -> loop, not affected: still a 30 s wait.
+        long saejeol = station("새절");
+        var mainToLoop = timetable.latestDepartures(station("역촌"), at(THURSDAY, 9, 0), Set.of(saejeol), 0).get(saejeol);
+        assertThat(legs(mainToLoop)).containsExactly("6072 새절 08:52:40 -> 응암 08:54:00 (0)", "6085 응암 08:54:30 -> 역촌 08:56:10 (30)");
+    }
+
     @Test
     void openApiDocumentsTheTrainFields() throws Exception {
         var mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();

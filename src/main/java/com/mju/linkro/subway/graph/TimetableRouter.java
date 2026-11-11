@@ -184,6 +184,31 @@ public class TimetableRouter implements TimetableRouteFinder {
         return transfer == null ? costs.getDefaultBranchTransferSeconds() : transfer.getSeconds();
     }
 
+    /**
+     * Arm pairs that {@link BranchRules} lets one train run through for the fixed-cost graph, but no timetable train does
+     * (#104): no 6호선 train goes round the 응암 loop twice, so 구산 -> 응암 -> 역촌 always changes trains. Kept here, not in
+     * BranchRules, so the fixed-cost graph is unchanged.
+     */
+    private static final Set<List<String>> CHANGE_ONLY_ON_TIMETABLE = Set.of(List.of("응암", "6", "EUNGAM_LOOP", "EUNGAM_LOOP"));
+
+    /**
+     * Least time between arriving at junction {@code node} and leaving on another train, for the pairs above: the junction's
+     * branch-transfers time, else default-branch-transfer-seconds (the same lookup as {@link #changeSeconds}). It is a wait
+     * on the same line, not a transfer: transfer counts and TRANSFER steps do not change.
+     *
+     * <p>응암 6호선 is set to 60 s in subway-graph-defaults.properties: a provisional value, not measured, and whether the
+     * change is on the same platform is unknown.
+     */
+    private int minimumChangeSeconds(long previous, long node, long next) {
+        BranchRules.Junction junction = graph.junction(node);
+        if (junction == null || !CHANGE_ONLY_ON_TIMETABLE.contains(List.of(junction.stationName(), junction.lineCode(),
+                String.valueOf(graph.armAt(node, previous)), String.valueOf(graph.armAt(node, next))))) {
+            return 0;
+        }
+        var transfer = branchTransfers.get(junction);
+        return transfer == null ? costs.getDefaultBranchTransferSeconds() : transfer.getSeconds();
+    }
+
     private int changeMeters(long node) {
         var transfer = branchTransfers.get(graph.junction(node));
         return transfer == null ? 0 : transfer.getMeters();
@@ -258,6 +283,11 @@ public class TimetableRouter implements TimetableRouteFinder {
                     if (edgeRides == null) continue;
                     int change = state.ride() == null ? 0 : changeSeconds(nodeIds[from], nodeIds[node], state.edge().toNodeId());
                     int ride = edgeRides.lastArriving(state.time() - change);
+                    int minimum = state.ride() == null ? 0 : minimumChangeSeconds(nodeIds[from], nodeIds[node], state.edge().toNodeId());
+                    if (minimum > 0 && ride >= 0 && !edgeRides.departure(ride).train().equals(state.ride().train())) {
+                        // Another train: it must arrive early enough to make the change (#104).
+                        ride = edgeRides.lastArriving(state.time() - change - minimum);
+                    }
                     if (ride < 0 || edgeRides.departSec(ride) < floor) continue;
                     offer(best, queue, edgeRides.departSec(ride), state.transfers() + (change > 0 ? 1 : 0), from, e, edge,
                             edgeRides, ride, state, true);
@@ -367,6 +397,11 @@ public class TimetableRouter implements TimetableRouteFinder {
                     if (edgeRides == null) continue;
                     int change = state.ride() == null ? 0 : changeSeconds(state.edge().fromNodeId(), nodeIds[node], nodeIds[to]);
                     int ride = edgeRides.next(state.time() + change);
+                    int minimum = state.ride() == null ? 0 : minimumChangeSeconds(state.edge().fromNodeId(), nodeIds[node], nodeIds[to]);
+                    if (minimum > 0 && ride >= 0 && !edgeRides.departure(ride).train().equals(state.ride().train())) {
+                        // Another train: it can only be caught after the change time (#104).
+                        ride = edgeRides.next(state.time() + change + minimum);
+                    }
                     if (ride < 0) continue;
                     offer(best, queue, edgeRides.arriveSec(ride), state.transfers() + (change > 0 ? 1 : 0), to, e, edge,
                             edgeRides, ride, state, false);
