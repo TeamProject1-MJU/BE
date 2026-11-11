@@ -357,6 +357,22 @@ class RouteSearchPostgresTest {
         }
     }
 
+    /**
+     * Saturday 23:50 is still Saturday's service day, but the last 강남 -> 교대 train left at 23:45: on both route sources
+     * the route moves to the next service day, Sunday (SUNDAY day type), whose first train leaves 강남 at 05:35:30.
+     */
+    @Test void saturdayNightAfterTheRoutesLastTrainTakesSundaysFirstTrain() throws Exception {
+        server.expect(ExpectedCount.once(), requestTo(startsWith(URL))).andRespond(withSuccess(KAKAO_OK, MediaType.APPLICATION_JSON));
+        JsonNode kakaoRoute = ok(search(gangnam, sadang, "2026-11-14T23:50:00+09:00", null), member);
+        assertThat(kakaoRoute.get("routeSource").asString()).isEqualTo("KAKAO");
+        assertNoService(kakaoRoute, "2026-11-15T05:35:30+09:00", "11월 15일 05:35");
+
+        useKakao("", Duration.ofSeconds(3), Duration.ofSeconds(5));
+        JsonNode internal = ok(search(gangnam, sadang, "2026-11-14T23:50:00+09:00", null), member);
+        assertThat(internal.get("routeSource").asString()).isEqualTo("INTERNAL");
+        assertNoService(internal, "2026-11-15T05:35:30+09:00", "11월 15일 05:35");
+    }
+
     private static void assertNoService(JsonNode data, String departureAt, String firstTrain) {
         JsonNode summary = data.get("routes").get(0).get("summary");
         assertThat(summary.get("noService").asBoolean()).as(departureAt).isTrue();
