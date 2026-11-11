@@ -126,4 +126,20 @@ class RecommendationEngineTimetableTest {
         withoutTimetable.candidates().forEach((station, candidate) -> assertThat(candidate.trips()).extracting(Trip::minutes)
                 .isEqualTo(plain.candidates().get(station).trips().stream().map(Trip::minutes).toList()));
     }
+
+    @Test
+    void theFareComesFromTheFareTableWhateverRouteIsRidden() {
+        // #109: the pair of stations sets the fare. 가(1) -> 다(3) is in the table; 마(5) -> 다(3) is not, so its fare is the
+        // ridden distance (here the fare calculator returns the distance to make that visible).
+        SubwayGraph graph = SubwayGraph.of(TimetableRouterTest.DATA);
+        FareCalculator byDistance = path -> path.rideDistanceM();
+        com.mju.linkro.subway.api.StationFareLookup table = (from, to) -> from == 1 && to == 3
+                ? java.util.OptionalInt.of(1550) : java.util.OptionalInt.empty();
+        RecommendationEngine engine = new RecommendationEngine(new DijkstraSubwayRouteFinder(graph, new SubwayGraphProperties()),
+                byDistance, new RecommendationProperties(), Optional.of(TimetableRouterTest.router()), Optional.of(table));
+        Candidate da = engine.evaluate(MEMBERS, AppliedConstraints.none(), at(THURSDAY, 32390), Instant.EPOCH).candidates().get(3L);
+        assertThat(da.trips().get(0).fareWon()).isEqualTo(1550);
+        assertThat(da.trips().get(0).path().rideDistanceM()).isEqualTo(2000);
+        assertThat(da.trips().get(1).fareWon()).isEqualTo(da.trips().get(1).path().rideDistanceM());
+    }
 }

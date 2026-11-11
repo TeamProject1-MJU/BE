@@ -6,12 +6,14 @@ import com.mju.linkro.recommendation.dto.RecommendationResponse.MemberLimit;
 import com.mju.linkro.recommendation.service.Candidate.Member;
 import com.mju.linkro.recommendation.service.Candidate.Trip;
 import com.mju.linkro.subway.api.FareCalculator;
+import com.mju.linkro.subway.api.StationFareLookup;
 import com.mju.linkro.subway.api.RoutePath;
 import com.mju.linkro.subway.api.ShortestPathTree;
 import com.mju.linkro.subway.api.SubwayRouteFinder;
 import com.mju.linkro.subway.api.TimedRoute;
 import com.mju.linkro.subway.api.TimetableRouteFinder;
 import com.mju.linkro.subway.api.TimetableRouteFinder.TimedTree;
+import com.mju.linkro.subway.fare.StationPairFare;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -51,14 +53,22 @@ public class RecommendationEngine {
     private final FareCalculator fares;
     private final RecommendationProperties properties;
     private final TimetableRouteFinder timetable;
+    private final StationPairFare pairFare;
 
     @Autowired
     public RecommendationEngine(SubwayRouteFinder finder, FareCalculator fares, RecommendationProperties properties,
-                                Optional<TimetableRouteFinder> timetable) {
+                                Optional<TimetableRouteFinder> timetable, Optional<StationFareLookup> stationFares) {
         this.finder = finder;
         this.fares = fares;
         this.properties = properties;
         this.timetable = timetable.orElse(null);
+        this.pairFare = new StationPairFare(fares, stationFares);
+    }
+
+    /** Fares from the ridden distance only (no fare table). */
+    public RecommendationEngine(SubwayRouteFinder finder, FareCalculator fares, RecommendationProperties properties,
+                                Optional<TimetableRouteFinder> timetable) {
+        this(finder, fares, properties, timetable, Optional.empty());
     }
 
     /** Fixed-cost engine without a timetable. */
@@ -196,7 +206,7 @@ public class RecommendationEngine {
                 // Time on the way: leaving until the train arrives. Waiting at the destination for the appointment is
                 // not travel (it is slackSeconds in the response).
                 int minutes = minutes((int) Duration.between(route.leaveAt(), route.arriveAt()).toSeconds());
-                Trip trip = trip(member, route.path(), minutes, route, TIMETABLE, constraints, personalLimits);
+                Trip trip = trip(member, stationId, route.path(), minutes, route, TIMETABLE, constraints, personalLimits);
                 if (trip == null) {
                     trips = null;
                     break;
@@ -246,7 +256,8 @@ public class RecommendationEngine {
             if (path.isEmpty()) {
                 return null;
             }
-            Trip trip = trip(members.get(i), path.get(), minutes(path.get().totalSeconds()), null, ESTIMATE, constraints, personalLimits);
+            Trip trip = trip(members.get(i), stationId, path.get(), minutes(path.get().totalSeconds()), null, ESTIMATE, constraints,
+                    personalLimits);
             if (trip == null) {
                 return null;
             }
@@ -256,9 +267,10 @@ public class RecommendationEngine {
     }
 
     /** The trip, or null when it breaks a constraint (the same checks for both sources). */
-    private Trip trip(Member member, RoutePath path, int minutes, TimedRoute timed, String source,
+    private Trip trip(Member member, long stationId, RoutePath path, int minutes, TimedRoute timed, String source,
                       AppliedConstraints constraints, Map<UUID, Integer> personalLimits) {
-        int fare = fares.fareOf(path);
+        // The fare-table fare of (departure, candidate), whatever route is ridden (#109); only the fare, not the distance.
+        int fare = pairFare.fareOf(member.departureStationId(), stationId, path);
         if (exceeds(constraints.maxMinutes(), minutes) || exceeds(constraints.maxTransfers(), path.transferCount())
                 || exceeds(constraints.maxFareWon(), fare) || exceeds(personalLimits.get(member.userId()), minutes)) {
             return null;

@@ -68,6 +68,7 @@ class TimetableRecommendationPostgresTest {
     @Autowired RecommendationEngine engine;
     @Autowired TimetableRouteFinder timetable;
     @Autowired JdbcTemplate jdbc;
+    @Autowired com.mju.linkro.subway.api.StationFareLookup stationFares;
     @Autowired WebApplicationContext context;
     @Autowired JsonMapper mapper;
 
@@ -315,6 +316,38 @@ class TimetableRecommendationPostgresTest {
         long saejeol = station("새절");
         var mainToLoop = timetable.latestDepartures(station("역촌"), at(THURSDAY, 9, 0), Set.of(saejeol), 0).get(saejeol);
         assertThat(legs(mainToLoop)).containsExactly("6072 새절 08:52:40 -> 응암 08:54:00 (0)", "6085 응암 08:54:30 -> 역촌 08:56:10 (30)");
+    }
+
+    @Test
+    void faresComeFromTheFareTableByStationPair() {
+        // #109: 불광 -> 합정 1,550원 and 노원 -> 사당 1,850원 whatever route is ridden (map app and fare table agree).
+        long bulgwang = station("불광");
+        long hapjeong = station("합정");
+        long nowon = station("노원");
+        long sadang = station("사당");
+        assertThat(stationFares.fareBetween(bulgwang, hapjeong)).hasValue(1550);
+        assertThat(stationFares.fareBetween(nowon, sadang)).hasValue(1850);
+        List<Member> members = List.of(new Member(UUID.randomUUID(), "a", bulgwang), new Member(UUID.randomUUID(), "b", nowon));
+        Evaluation evaluation = engine.evaluate(members, AppliedConstraints.none(), at(THURSDAY, 13, 0), Instant.now());
+        assertThat(evaluation.candidates().get(hapjeong).trips().get(0).fareWon()).isEqualTo(1550);
+        assertThat(evaluation.candidates().get(sadang).trips().get(1).fareWon()).isEqualTo(1850);
+        // Every trip: the table fare for (departure, candidate); distance and legs stay the route's.
+        evaluation.candidates().values().forEach(candidate -> candidate.trips().forEach(trip -> {
+            assertThat(trip.fareWon()).isEqualTo(stationFares.fareBetween(trip.member().departureStationId(), candidate.stationId()).orElseThrow());
+            assertThat(trip.path()).isSameAs(trip.timed().path());
+        }));
+
+        // All ordered pairs of the 240 supported stations are in the table (까치산 2호선 code 200 is not in the file, but
+        // 까치산's 5호선 code covers the station).
+        List<Long> ids = jdbc.queryForList("select id from stations where is_supported order by id", Long.class);
+        assertThat(ids).hasSize(240);
+        long missing = ids.stream().flatMap(from -> ids.stream().filter(to -> !to.equals(from))
+                .filter(to -> stationFares.fareBetween(from, to).isEmpty())).count();
+        assertThat(missing).isZero();
+        // Pairs with several code combinations keep the lowest fare.
+        assertThat(stationFares.fareBetween(station("남태령"), station("삼각지"))).hasValue(1550);
+        assertThat(stationFares.fareBetween(station("종로3가"), station("연신내"))).hasValue(1550);
+        assertThat(stationFares.fareBetween(station("청량리"), station("연신내"))).hasValue(1650);
     }
 
     @Test

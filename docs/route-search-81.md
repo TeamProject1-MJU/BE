@@ -21,7 +21,7 @@
 - `steps[]`의 각 단계: `type`, `guidance`, `durationSec`, `distanceM`, `line`, `direction`, `directionCode`, `stops`, `path`, `stations`
 
 - `routeSource`: `KAKAO` 또는 `INTERNAL`
-- `summary.fareSource`: 카카오 `fare.value`면 `KAKAO`, 우리 RIDE 거리로 계산했으면 `ESTIMATED`(화면에 "예상 요금")
+- `summary.fareSource`: 카카오 `fare.value`면 `KAKAO`, 우리가 정했으면 `ESTIMATED`(화면에 "예상 요금"). 우리가 정하는 요금은 운임표의 출발역→도착역 요금이고, 없으면 우리 RIDE 거리로 계산한다(#109)
 - `routeType`: `FASTEST`, `FEWER_TRANSFERS`, `CHEAPEST` 중 하나 또는 null
   - 각 라벨은 그 기준에서 가장 앞선 경로에 하나씩 준다.
   - 그 경로가 이미 라벨을 가졌으면 그 라벨은 주지 않는다.
@@ -114,12 +114,12 @@
 
 정차역 통과 시각: 카카오는 단계 시간만 주므로 단계 안의 정차역에 시간을 고르게 나눈다. 예: 600초, 5개 역이면 0, 150, 300, 450, 600초.
 
-요금: `fare.value`를 쓴다(`KAKAO`). 지하철 경로에 값이 없으면 우리 RIDE 간선 거리 합으로 계산한다(`ESTIMATED`). #58 표본에서는 없는 경우가 없었다.
+요금: `fare.value`를 쓴다(`KAKAO`). 지하철 경로에 값이 없으면 운임표의 출발역→도착역 요금(#109), 운임표에 없으면 우리 RIDE 간선 거리 합으로 계산한다(`ESTIMATED`). #58 표본에서는 없는 경우가 없었다.
 
 INTERNAL 경로는 다음과 같이 만든다.
 - `SubwayRouteFinder.shortestPath`(그래프 모드면 다익스트라)의 RIDE 단계는 SUBWAY 단계, TRANSFER 단계는 WALKING 단계로 바꾼다.
 - `stops`와 `path`는 우리 역 좌표로 채운다.
-- 요금은 `FareCalculator`로 계산하고 `ESTIMATED`로 표시한다.
+- 요금은 운임표의 출발역→도착역 요금(#109, 추천과 같은 `StationPairFare`)이고, 운임표가 없거나 쌍이 없으면 `FareCalculator`로 계산한다. `ESTIMATED`로 표시한다.
 
 ## 혼잡도 규칙
 
