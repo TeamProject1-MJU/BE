@@ -25,6 +25,9 @@ public class OpenAiProperties {
     private Duration readTimeout = Duration.ofSeconds(8);
     @NotNull
     private Duration visionReadTimeout = Duration.ofSeconds(4);
+    /** explainRecommendation only (#99): past it the recommendation uses template sentences. */
+    @NotNull
+    private Duration explainReadTimeout = Duration.ofSeconds(4);
 
     @Override
     public String toString() {

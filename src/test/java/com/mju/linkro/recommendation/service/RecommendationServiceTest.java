@@ -603,4 +603,49 @@ class RecommendationServiceTest {
         guard.release(ticket);
         assertThat(create(null).results()).isNotEmpty();
     }
+
+    // ---- AI latency (#99) ----
+
+    @Test
+    void anExplanationTimeoutFallsBackToTemplatesAndStillAnswers() {
+        // What OpenAiClient throws when the explanation read timeout passes.
+        doThrow(new BusinessException(ErrorCode.AI_UNAVAILABLE)).when(ai).explainRecommendation(any());
+        RecommendationResponse response = create(null);
+        assertThat(response.results()).isNotEmpty().allSatisfy(result -> {
+            assertThat(result.explanationSource()).isEqualTo("TEMPLATE");
+            assertThat(result.explanation()).isNotBlank();
+        });
+        assertThat(repository.saves).isEqualTo(1);
+    }
+
+    @Test
+    void aBlankConditionNeverCallsTheConditionAi() {
+        create(new RecommendationRequest("   ", null));
+        create(new RecommendationRequest("", null));
+        create(new RecommendationRequest(null, null));
+        create(null);
+        verify(ai, times(0)).interpretCondition(any());
+        create(new RecommendationRequest(" 40분 이내 ", null));
+        verify(ai, times(1)).interpretCondition(any());
+    }
+
+    @Test
+    void timingIsLoggedPerStageWithoutTheCondition() {
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(RecommendationService.class);
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            create(new RecommendationRequest("민감한조건 40분 이내", null));
+        } finally {
+            logger.detachAppender(appender);
+        }
+        List<String> lines = appender.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                .filter(line -> line.startsWith("Recommendation timing:")).toList();
+        assertThat(lines).singleElement().satisfies(line -> {
+            assertThat(line).matches("Recommendation timing: parse=\\d+ms evaluate=\\d+ms explain=\\d+ms save=\\d+ms total=\\d+ms "
+                    + "\\(members 2, results \\d+\\)");
+            assertThat(line).doesNotContain("민감한조건");
+        });
+    }
 }

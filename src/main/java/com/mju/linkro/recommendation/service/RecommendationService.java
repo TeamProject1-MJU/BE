@@ -109,6 +109,7 @@ public class RecommendationService {
 
     /** API 8.1. */
     public RecommendationResponse create(UUID userId, UUID roomId, RecommendationRequest body) {
+        long started = System.nanoTime();
         RecommendationRequest request = RecommendationRequest.orEmpty(body);
         MeetingRoom room = rooms.requireMember(roomId, userId);
         List<MemberRow> rows = roomReads.members(List.of(roomId));
@@ -135,9 +136,13 @@ public class RecommendationService {
         RecommendationInFlightGuard.Ticket ticket = inFlight.tryAcquire(roomId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.RECOMMENDATION_IN_PROGRESS));
         try {
+            long mark = System.nanoTime();
             Resolved resolved = constraints.resolve(request, members);
+            long parse = elapsed(mark);
             Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+            mark = System.nanoTime();
             Evaluation evaluation = engine.evaluate(members, resolved.applied(), room.getAppointmentAt(), now);
+            long evaluate = elapsed(mark);
             UUID runId = UuidCreator.getTimeOrderedEpoch();
             // Everything is computed first, then one AI call explains all criteria of this recommendation.
             record Drafted(Criterion criterion, Candidate best, StationInfo station, List<ParticipantTime> trips,
@@ -153,8 +158,10 @@ public class RecommendationService {
                 drafted.add(new Drafted(criterion, best.get(), station, trips, nearby(best.get(), evaluation),
                         facts(criterion, trips, best.get())));
             }
+            mark = System.nanoTime();
             Map<Criterion, Explanation> explained = explanations.explain(
                     drafted.stream().map(item -> new ExplanationWriter.Item(item.facts(), item.station().name())).toList());
+            long explain = elapsed(mark);
             List<ResultRow> results = new ArrayList<>();
             for (Drafted item : drafted) {
                 Explanation explanation = explained.get(item.criterion());
@@ -168,16 +175,26 @@ public class RecommendationService {
                     rows.stream().map(row -> new RunCriteria.Participant(row.userId(), row.stationId())).toList(),
                     evaluation.unreachableByTrain());
             RunRow run = new RunRow(runId, roomId, userId, write(criteria), now);
+            mark = System.nanoTime();
             repository.save(run, results);
+            long save = elapsed(mark);
             publish(new RecommendationCreatedEvent(roomId, runId, userId, now));
 
             String dropped = resolved.dropped().isEmpty() ? null : "적용하지 못한 조건: " + String.join(", ", resolved.dropped()) + ".";
             // The response is read back like GET does, so the stale fields come from the room as it is now.
             MeetingRoom current = rooms.requireMember(roomId, userId);
-            return render(run, results, true, current, roomReads.members(List.of(roomId)), dropped);
+            RecommendationResponse response = render(run, results, true, current, roomReads.members(List.of(roomId)), dropped);
+            // Durations only: no condition text, names or keys.
+            log.info("Recommendation timing: parse={}ms evaluate={}ms explain={}ms save={}ms total={}ms (members {}, results {})",
+                    parse, evaluate, explain, save, elapsed(started), members.size(), results.size());
+            return response;
         } finally {
             inFlight.release(ticket);
         }
+    }
+
+    private static long elapsed(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000;
     }
 
     /** API 8.2: the room's latest run, or null (data: null) when it has none. */
