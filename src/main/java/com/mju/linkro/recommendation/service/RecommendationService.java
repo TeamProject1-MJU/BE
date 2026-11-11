@@ -122,7 +122,8 @@ public class RecommendationService {
         }
         List<Member> members = rows.stream()
                 .map(row -> new Member(row.userId(), row.nickname(), row.stationId())).toList();
-        // No train of any line in the 3 hours before the appointment (e.g. 04:00): refuse before the AI call and save nothing.
+        // No train of any line arrives in the window before the appointment (default 60 min, e.g. 04:00): refuse before
+        // the AI call and save nothing.
         if (engine.noServiceBefore(room.getAppointmentAt())) {
             throw new BusinessException(ErrorCode.NO_SERVICE_TIME);
         }

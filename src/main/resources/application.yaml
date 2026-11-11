@@ -60,6 +60,7 @@ logging:
 # - timetable.enabled (default true, module=graph only): recommendations use real trains of train-timetable.csv.gz
 #   (#96). false loads no timetable and goes back to the fixed costs below (emergency switch).
 #   timetable.station-access-seconds (default 0): time from leaving to the first platform. See docs/recommendation-74.md.
+#   timetable.no-service-window-minutes (default 60): no train arriving this long before the appointment -> NO_SERVICE_TIME.
 # - graph.* and fare.* apply only with module=graph; defaults are in subway-graph-defaults.properties
 #   (docs/subway-graph-69.md lists them).
 # linkro:

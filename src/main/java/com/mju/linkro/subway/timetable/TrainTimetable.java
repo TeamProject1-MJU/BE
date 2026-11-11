@@ -141,6 +141,7 @@ public final class TrainTimetable {
     private final Map<DayType, Integer> lastDepartures;
     /** First departure and last arrival of any ride per day type. */
     private final Map<DayType, Integer> firstDepartures;
+    private final Map<DayType, Integer> firstArrivals;
     private final Map<DayType, Integer> lastArrivals;
 
     private TrainTimetable(Map<Long, Map<DayType, Series>> series, Map<Long, Map<Long, Long>> rideEdges,
@@ -151,15 +152,18 @@ public final class TrainTimetable {
         this.report = report;
         Map<DayType, Integer> last = new EnumMap<>(DayType.class);
         Map<DayType, Integer> first = new EnumMap<>(DayType.class);
+        Map<DayType, Integer> firstArrival = new EnumMap<>(DayType.class);
         Map<DayType, Integer> lastArrival = new EnumMap<>(DayType.class);
         series.values().forEach(byDay -> byDay.forEach((day, s) -> {
             if (s.depart.length == 0) return;
             last.merge(day, s.depart[s.depart.length - 1], Math::max);
             first.merge(day, s.depart[0], Math::min);
+            firstArrival.merge(day, s.arriveSorted[0], Math::min);
             lastArrival.merge(day, s.arriveSorted[s.arriveSorted.length - 1], Math::max);
         }));
         this.lastDepartures = Collections.unmodifiableMap(last);
         this.firstDepartures = Collections.unmodifiableMap(first);
+        this.firstArrivals = Collections.unmodifiableMap(firstArrival);
         this.lastArrivals = Collections.unmodifiableMap(lastArrival);
     }
 
@@ -399,6 +403,12 @@ public final class TrainTimetable {
     /** First departure of any train on the day type, or empty when none runs. */
     public OptionalInt firstDepartureSec(DayType dayType) {
         Integer value = firstDepartures.get(dayType);
+        return value == null ? OptionalInt.empty() : OptionalInt.of(value);
+    }
+
+    /** First arrival of any train on the day type, or empty when none runs. */
+    public OptionalInt firstArrivalSec(DayType dayType) {
+        Integer value = firstArrivals.get(dayType);
         return value == null ? OptionalInt.empty() : OptionalInt.of(value);
     }
 

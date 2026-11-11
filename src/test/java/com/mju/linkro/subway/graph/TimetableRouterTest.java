@@ -104,7 +104,8 @@ public class TimetableRouterTest {
         SubwayGraphProperties costs = new SubwayGraphProperties();
         costs.setDefaultBranchTransferSeconds(120);
         costs.setBranchTransfers(List.of(new SubwayGraphProperties.BranchTransfer("강동", "5", 16, 19)));
-        return new TimetableRouter(SubwayGraph.of(DATA), timetable, new TimetableClock(new HolidayCalendar("")), costs, 0);
+        return new TimetableRouter(SubwayGraph.of(DATA), timetable, new TimetableClock(new HolidayCalendar("")), costs, 0,
+                java.time.Duration.ofMinutes(60));
     }
 
     public static Instant at(LocalDate date, int second) {

@@ -9,6 +9,7 @@ import com.mju.linkro.subway.graph.TimetableRouter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.time.Duration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -45,6 +46,7 @@ public class TrainTimetableConfig {
     @Bean
     TimetableRouteFinder timetableRouteFinder(SubwayGraph graph, TrainTimetable timetable, TimetableClock clock,
                                               SubwayGraphProperties costs, TimetableProperties properties) {
-        return new TimetableRouter(graph, timetable, clock, costs, properties.getStationAccessSeconds());
+        return new TimetableRouter(graph, timetable, clock, costs, properties.getStationAccessSeconds(),
+                Duration.ofMinutes(properties.getNoServiceWindowMinutes()));
     }
 }

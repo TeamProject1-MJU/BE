@@ -18,11 +18,12 @@ public interface TimetableRouteFinder {
     boolean covers(Instant at);
 
     /**
-     * Whether any train of any line runs (from the day's first departure to its last arrival) at some moment between
-     * the two instants. Both the service day of {@code to} and the one before are checked, since a night can belong to
-     * either.
+     * True when no train of any line arrives anywhere in the configured window before {@code at}
+     * ({@code linkro.subway.timetable.no-service-window-minutes}, default 60): the subway is not running then. Trains
+     * arrive from the day's first arrival to its last one; the service day of {@code at} and the one before are both
+     * checked, since a night can belong to either.
      */
-    boolean runsBetween(Instant from, Instant to);
+    boolean noTrainArrivesBefore(Instant at);
 
     /** Supported stations of the graph. */
     Set<Long> stationIds();

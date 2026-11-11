@@ -36,7 +36,7 @@ public class RecommendationController {
 
     @PostMapping
     @Operation(summary = "중간역 추천 생성", description = "참여자 전원의 출발역 기준으로 시간·요금·거리 기준별 최적 중간역과 주변 대안역을 계산해 저장합니다. "
-            + "멤버가 2명 미만이면 TOO_FEW_MEMBERS, 출발역이 없는 멤버가 있으면 DEPARTURE_MISSING(error.details.missingUserIds), 약속 시각 전 3시간 동안 어느 노선도 운행하지 않으면(열차 시각표 기준, 예: 04:00) NO_SERVICE_TIME으로 요청 전체를 거절하며 실행 기록을 남기지 않습니다. "
+            + "멤버가 2명 미만이면 TOO_FEW_MEMBERS, 출발역이 없는 멤버가 있으면 DEPARTURE_MISSING(error.details.missingUserIds), 약속 시각 전 60분(설정값) 안에 도착하는 열차가 전 노선에 하나도 없으면(열차 시각표 기준, 예: 04:00) NO_SERVICE_TIME으로 요청 전체를 거절하며 실행 기록을 남기지 않습니다. "
             + "conditionText는 AI로 filter 항목으로 해석하고(실패하면 filter만 적용하고 message로 알림), 조건에 맞는 역이 없으면 200과 results: []입니다. "
             + "body는 생략할 수 있습니다.",
             requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(content = @Content(mediaType = "application/json",

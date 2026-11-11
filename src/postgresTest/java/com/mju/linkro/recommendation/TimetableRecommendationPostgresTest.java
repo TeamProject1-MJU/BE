@@ -232,32 +232,32 @@ class TimetableRecommendationPostgresTest {
     }
 
     @Test
-    void noTrainInTheThreeHoursBeforeIsRefusedWithoutARun() {
-        // Last arrivals: weekday nights 25:14 (2호선 도림천), Saturday and Sunday nights 24:18:30; first departure 05:11:30.
-        // Friday 04:30 (01:30~04:30) and Sunday 04:00 (01:00~04:00, after Saturday's 00:18:30) have no train at all.
-        for (Instant appointment : List.of(at(THURSDAY.plusDays(1), 4, 30), at(SATURDAY.plusDays(1), 4, 0))) {
+    void noTrainArrivingInTheHourBeforeIsRefusedWithoutARun() {
+        // Last arrivals: weekday nights 25:14 (2호선 도림천), Saturday nights 24:18:30. No-service window: 60 minutes.
+        LocalDate friday = THURSDAY.plusDays(1);
+        LocalDate sunday = SATURDAY.plusDays(1);
+        Map<Instant, Boolean> refused = new LinkedHashMap<>();
+        refused.put(at(friday, 1, 30), false);  // 00:30~01:30 has Thursday's last trains
+        refused.put(at(friday, 2, 30), true);
+        refused.put(at(friday, 4, 0), true);
+        refused.put(at(friday, 5, 30), false);  // Friday's first trains arrive from about 05:13
+        refused.put(at(sunday, 1, 0), false);   // 00:00~01:00 has Saturday's last train (00:18:30)
+        refused.put(at(sunday, 4, 0), true);
+        refused.forEach((appointment, expected) -> {
             UUID[] users = room(appointment, "강남", "사당");
-            assertThatThrownBy(() -> service.create(users[1], users[0], null)).as("%s", appointment)
-                    .isInstanceOfSatisfying(BusinessException.class, exception -> {
-                        assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.NO_SERVICE_TIME);
-                        assertThat(exception.getErrorCode().getStatus().value()).isEqualTo(422);
-                        assertThat(exception.getErrorCode().getMessage()).isEqualTo("해당 시간대에는 지하철이 운행하지 않습니다. 약속 시간을 바꿔 주세요.");
-                    });
-        }
-        assertThat(jdbc.queryForObject("select count(*) from recommendation_runs", Integer.class)).isZero();
-    }
-
-    @Test
-    void aWeekdayNightTrainInTheWindowLeavesFourOClockToTheExclusionRule() {
-        // Friday 04:00: Thursday's last train arrives at 01:14, inside 01:00~04:00, so it is not NO_SERVICE_TIME.
-        // 04:00 is Friday's service day, before its first train, so every station is left out with the reason.
-        UUID[] users = room(at(THURSDAY.plusDays(1), 4, 0), "강남", "사당");
-        RecommendationResponse response = service.create(users[1], users[0], null);
-        assertThat(response.results()).isEmpty();
-        int stations = timetable.stationIds().size() - 2;
-        assertThat(response.message()).isEqualTo("약속 시각까지 열차로 도착할 수 없는 역 " + stations
-                + "곳을 제외했습니다. 조건에 맞는 중간역이 없습니다. 조건을 완화해 보세요.");
-        assertThat(service.latest(users[1], users[0]).message()).isEqualTo(response.message());
+            if (expected) {
+                assertThatThrownBy(() -> service.create(users[1], users[0], null)).as("%s", appointment)
+                        .isInstanceOfSatisfying(BusinessException.class, exception -> {
+                            assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.NO_SERVICE_TIME);
+                            assertThat(exception.getErrorCode().getStatus().value()).isEqualTo(422);
+                            assertThat(exception.getErrorCode().getMessage()).isEqualTo("해당 시간대에는 지하철이 운행하지 않습니다. 약속 시간을 바꿔 주세요.");
+                        });
+                assertThat(jdbc.queryForObject("select count(*) from recommendation_runs where room_id = ?", Integer.class, users[0]))
+                        .as("%s", appointment).isZero();
+            } else {
+                assertThat(service.create(users[1], users[0], null).runId()).as("%s", appointment).isNotNull();
+            }
+        });
     }
 
     @Test

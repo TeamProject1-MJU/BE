@@ -79,13 +79,15 @@ class RecommendationEngineTimetableTest {
     }
 
     @Test
-    void noServiceMeansNoTrainOfAnyLineInTheThreeHoursBefore() {
+    void noServiceMeansNoTrainArrivesInTheHourBefore() {
         RecommendationEngine engine = engine(true);
-        // Thursday's last train arrives at Friday 00:03:10; Friday's first leaves at 08:20.
-        assertThat(engine.noServiceBefore(at(THURSDAY.plusDays(1), 14400))).isTrue();   // Friday 04:00
-        assertThat(engine.noServiceBefore(at(THURSDAY.plusDays(1), 7200))).isFalse();   // Friday 02:00: Thursday's last train
-        assertThat(engine.noServiceBefore(at(THURSDAY.plusDays(1), 3 * 3600 + 190))).isFalse(); // 00:03:10 is exactly 3 h before
-        assertThat(engine.noServiceBefore(at(THURSDAY.plusDays(1), 3 * 3600 + 191))).isTrue();
+        // Thursday's last train arrives at Friday 00:03:10; Friday's first arrives at 08:21:30.
+        assertThat(engine.noServiceBefore(at(THURSDAY.plusDays(1), 3600))).isFalse();        // Friday 01:00
+        assertThat(engine.noServiceBefore(at(THURSDAY.plusDays(1), 3600 + 190))).isFalse();  // 00:03:10 is exactly 60 min before
+        assertThat(engine.noServiceBefore(at(THURSDAY.plusDays(1), 3600 + 191))).isTrue();
+        assertThat(engine.noServiceBefore(at(THURSDAY.plusDays(1), 14400))).isTrue();        // Friday 04:00
+        assertThat(engine.noServiceBefore(at(THURSDAY.plusDays(1), 30089))).isTrue();        // 1 s before the first arrival
+        assertThat(engine.noServiceBefore(at(THURSDAY.plusDays(1), 30090))).isFalse();
         assertThat(engine.noServiceBefore(at(THURSDAY, 32390))).isFalse();
         assertThat(engine.noServiceBefore(null)).isFalse();
         // Without the timetable nothing is refused.

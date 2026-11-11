@@ -8,6 +8,7 @@ import com.mju.linkro.subway.timetable.TimetableClock;
 import com.mju.linkro.subway.timetable.TimetableClock.ServiceTime;
 import com.mju.linkro.subway.timetable.TrainTimetable;
 import com.mju.linkro.subway.timetable.TrainTimetable.Departure;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -37,6 +38,7 @@ public class TimetableRouter implements TimetableRouteFinder {
     private final TrainTimetable timetable;
     private final TimetableClock clock;
     private final int accessSeconds;
+    private final Duration noServiceWindow;
     private final SubwayGraphProperties costs;
     private final Map<BranchRules.Junction, SubwayGraphProperties.BranchTransfer> branchTransfers = new HashMap<>();
     // Dense indices for the searches: nodes 0..n-1, edges 0..m-1.
@@ -52,10 +54,17 @@ public class TimetableRouter implements TimetableRouteFinder {
     /** day type ordinal -> edge -> rides, null when no train runs it. */
     private final TrainTimetable.Rides[][] rides;
 
-    /** @param accessSeconds from leaving to standing on the first platform, added before the first train */
+    /**
+     * @param accessSeconds   from leaving to standing on the first platform, added before the first train
+     * @param noServiceWindow how long before an appointment some train must arrive for the subway to count as running
+     */
     public TimetableRouter(SubwayGraph graph, TrainTimetable timetable, TimetableClock clock, SubwayGraphProperties costs,
-                           int accessSeconds) {
+                           int accessSeconds, Duration noServiceWindow) {
         if (accessSeconds < 0) throw new IllegalArgumentException("station access seconds must not be negative");
+        if (noServiceWindow == null || noServiceWindow.isNegative() || noServiceWindow.isZero()) {
+            throw new IllegalArgumentException("linkro.subway.timetable.no-service-window-minutes must be positive");
+        }
+        this.noServiceWindow = noServiceWindow;
         this.graph = graph;
         this.timetable = timetable;
         this.clock = clock;
@@ -111,19 +120,20 @@ public class TimetableRouter implements TimetableRouteFinder {
     }
 
     @Override
-    public boolean runsBetween(Instant from, Instant to) {
-        LocalDate serviceDate = serviceTime(to).serviceDate();
+    public boolean noTrainArrivesBefore(Instant at) {
+        Instant from = at.minus(noServiceWindow);
+        LocalDate serviceDate = serviceTime(at).serviceDate();
         for (LocalDate date : List.of(serviceDate.minusDays(1), serviceDate)) {
             DayType day = clock.dayTypeOf(date);
-            OptionalInt first = timetable.firstDepartureSec(day);
+            OptionalInt first = timetable.firstArrivalSec(day);
             OptionalInt last = timetable.lastArrivalSec(day);
             if (first.isEmpty()) continue;
             Instant midnight = date.atStartOfDay(ZONE).toInstant();
             Instant start = midnight.plusSeconds(first.getAsInt());
             Instant end = midnight.plusSeconds(last.getAsInt());
-            if (!start.isAfter(to) && !end.isBefore(from)) return true;
+            if (!start.isAfter(at) && !end.isBefore(from)) return false;
         }
-        return false;
+        return true;
     }
 
     @Override

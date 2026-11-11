@@ -108,16 +108,13 @@ public class RecommendationEngine {
         }
     }
 
-    /** How far before an appointment some train must run for {@link #noServiceBefore} to be false. */
-    static final Duration NO_SERVICE_WINDOW = Duration.ofHours(3);
-
     /**
-     * True when the timetable shows no train of any line in the {@link #NO_SERVICE_WINDOW} before the appointment
-     * (for example 04:00). Without a timetable it cannot tell and returns false.
+     * True when no train of any line arrives in the configured window before the appointment
+     * ({@code linkro.subway.timetable.no-service-window-minutes}, for example 04:00). Without a timetable it cannot
+     * tell and returns false.
      */
     public boolean noServiceBefore(Instant appointmentAt) {
-        return timetable != null && appointmentAt != null
-                && !timetable.runsBetween(appointmentAt.minus(NO_SERVICE_WINDOW), appointmentAt);
+        return timetable != null && appointmentAt != null && timetable.noTrainArrivesBefore(appointmentAt);
     }
 
     /** Without an appointment, leaving now. */
