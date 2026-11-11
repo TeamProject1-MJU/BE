@@ -1,3 +1,7 @@
+server:
+  # Finish running requests at shutdown; the @링크로 answers get their own wait (linkro.chat.ai-shutdown-wait) after that.
+  shutdown: graceful
+
 spring:
   application:
     name: linkro
@@ -65,6 +69,8 @@ logging:
 #   (#96). false loads no timetable and goes back to the fixed costs below (emergency switch).
 #   timetable.station-access-seconds (default 0): time from leaving to the first platform. See docs/recommendation-74.md.
 #   timetable.no-service-window-minutes (default 60): no train arriving this long before the appointment -> NO_SERVICE_TIME.
+# - Recommendation fares come from fare-table.csv.gz (Seoul Metro fare table by station pair, adult transit card, #109)
+#   when module=graph; without it or for a missing pair, from the ridden distance. See docs/recommendation-74.md.
 # - graph.* and fare.* apply only with module=graph; defaults are in subway-graph-defaults.properties
 #   (docs/subway-graph-69.md lists them).
 # linkro:

@@ -6,7 +6,8 @@ import com.mju.linkro.route.service.RouteDraft.StepDraft;
 import com.mju.linkro.subway.api.*;
 import java.util.ArrayList;
 import java.util.List;
-import lombok.RequiredArgsConstructor;
+import com.mju.linkro.subway.fare.StationPairFare;
+import java.util.Optional;
 import org.springframework.stereotype.Component;
 
 /**
@@ -14,10 +15,14 @@ import org.springframework.stereotype.Component;
  * with stops and a path from our station coordinates; TRANSFER steps become WALKING steps.
  */
 @Component
-@RequiredArgsConstructor
 public class InternalRouteBuilder {
     private final SubwayRouteFinder finder;
-    private final FareCalculator fares;
+    private final StationPairFare fares;
+
+    public InternalRouteBuilder(SubwayRouteFinder finder, FareCalculator fares, Optional<StationFareLookup> fareTable) {
+        this.finder = finder;
+        this.fares = new StationPairFare(fares, fareTable);
+    }
 
     /** @throws com.mju.linkro.common.exception.BusinessException ROUTE_NOT_FOUND (404) and the finder's other errors */
     public RouteDraft build(long originStationId, long destinationStationId) {
@@ -40,7 +45,9 @@ public class InternalRouteBuilder {
                 index += 1;
             }
         }
-        return new RouteDraft(steps, path.totalSeconds(), fares.fareOf(path), FareSource.ESTIMATED, path.transferCount(),
+        // Fare-table fare of the station pair (#109), as for recommendations; the ridden distance without it.
+        return new RouteDraft(steps, path.totalSeconds(), fares.fareOf(originStationId, destinationStationId, path),
+                FareSource.ESTIMATED, path.transferCount(),
                 originStationId, destinationStationId);
     }
 }

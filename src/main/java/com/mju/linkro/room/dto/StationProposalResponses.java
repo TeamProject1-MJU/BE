@@ -21,6 +21,9 @@ public final class StationProposalResponses {
     @JsonInclude(JsonInclude.Include.ALWAYS)
     @Schema(name = "StationProposalListing", requiredProperties = {"selectedStation", "maxProposals", "items"})
     public record Listing(RoomResponses.Station selectedStation, int maxProposals, List<Item> items) {}
+    @Schema(requiredProperties = {"proposalId", "voteCount", "votedByMe"})
+    public record Vote(UUID proposalId, long voteCount, boolean votedByMe) {}
+    public record VoteEnvelope(boolean success, Vote data) {}
     public record CreatedEnvelope(boolean success, Created data) {}
     public record ListEnvelope(boolean success, Listing data) {}
 }

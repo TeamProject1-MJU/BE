@@ -27,6 +27,7 @@ public enum ErrorCode {
     ROOM_FULL(HttpStatus.CONFLICT, "ROOM_FULL", "방 참여 인원이 가득 찼습니다."),
     ALREADY_JOINED(HttpStatus.CONFLICT, "ALREADY_JOINED", "이미 참여한 방입니다."),
     ROOM_BUSY(HttpStatus.CONFLICT, "ROOM_BUSY", "방에서 작업이 진행 중입니다."),
+    ALREADY_VOTED(HttpStatus.CONFLICT, "ALREADY_VOTED", "이미 다른 후보에 투표했습니다."),
     ALREADY_PROPOSED(HttpStatus.CONFLICT, "ALREADY_PROPOSED", "이미 후보로 제안된 역입니다."),
     RECOMMENDATION_IN_PROGRESS(HttpStatus.CONFLICT, "RECOMMENDATION_IN_PROGRESS", "추천을 계산하는 중입니다. 잠시 후 다시 시도해 주세요."),
     STATION_UNSUPPORTED(HttpStatus.UNPROCESSABLE_CONTENT, "STATION_UNSUPPORTED", "지원하지 않는 역입니다."),

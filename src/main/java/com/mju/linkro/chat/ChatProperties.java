@@ -1,6 +1,7 @@
 package com.mju.linkro.chat;
 
 import jakarta.validation.constraints.Min;
+import java.time.Duration;
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -21,4 +22,10 @@ public class ChatProperties {
     /** Questions waiting for a free thread; beyond this the asker gets the "AI unavailable" SYSTEM message. */
     @Min(0)
     private int aiQueueCapacity = 50;
+    /** One @링크로 call per user per this long (all rooms together); a faster one is refused with AI_QUOTA_EXCEEDED. Zero turns the limit off. */
+    private Duration aiCallInterval = Duration.ofSeconds(10);
+    /** At shutdown, how long running and queued @링크로 answers get to finish before they are cut off. */
+    private Duration aiShutdownWait = Duration.ofSeconds(15);
+    /** At startup, questions from this long ago that nobody answered get the failure notice. Zero turns the sweep off. */
+    private Duration answerSweepWindow = Duration.ofMinutes(10);
 }

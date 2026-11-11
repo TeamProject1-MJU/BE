@@ -1,6 +1,6 @@
 # 채팅 메시지 전송·조회와 @링크로 AI 답변 (#76)
 
-API 명세 v1.12 10.1(#27), 10.2(#28), 상세설계서 3.3.4, ERD v1.13 `room_messages` 기준이에요. V8 테이블을 그대로 쓰고 마이그레이션은 추가하지 않아요. STOMP 전송은 #42, #43 몫이라 이 이슈는 이벤트 발행까지만 해요.
+API 명세 v1.12 10.1(#27), 10.2(#28), 상세설계서 3.3.4, ERD v1.13 `room_messages` 기준이에요. V8 테이블을 그대로 쓰고 마이그레이션은 추가하지 않아요. STOMP 전송은 #42, #43에서 해요([stomp-42-43.md](stomp-42-43.md)). 이 문서는 이벤트 발행까지 다뤄요.
 
 ## API
 
@@ -70,10 +70,25 @@ API 명세 v1.12 10.1(#27), 10.2(#28), 상세설계서 3.3.4, ERD v1.13 `room_me
 
 **실시간 전달:** 이벤트는 STOMP `/topic/rooms/{roomId}`로 나가요(#42, #43, [docs/stomp-42-43.md](stomp-42-43.md)). 연결이 끊겼다 다시 이어지면 놓친 메시지는 메시지 목록 조회(10.2)로 채워야 해요.
 
+## 호출 간격 제한 (#117)
+
+이 절과 다음 절의 변경은 #117(재시작 때 답변 유실, 호출 횟수 제한 없음)을 닫아요.
+
+- 한 사용자는 @링크로를 10초에 한 번만 부를 수 있어요(방과 상관없이 사용자 기준, `linkro.chat.ai-call-interval`, 0이면 끔). 서버 메모리에서 세고, 서버는 한 대라서 재시작하면 마지막 몇 초 기록만 잊어요.
+- 넘으면 HTTP 429 `AI_QUOTA_EXCEEDED`(명세 v1.12에 이미 있는 코드)와 `details.retryAfterSeconds`(남은 초, 올림)를 돌려줘요. 새 에러 코드는 만들지 않았어요. 메시지는 저장하지 않고 이벤트도 나가지 않아요.
+- 순서는 멤버 확인 → 본문 검사 → 호출 간격 확인 → 저장이에요. 그래서 멤버가 아니거나 본문이 틀리면 간격 기록이 남지 않아요. 거절된 호출은 새 간격을 시작하지 않고, 간격을 확인한 뒤 저장이 실패하면 차례를 돌려줘요.
+- @링크로가 없는 메시지는 확인하지 않아요. 제한과 상관없이 보낼 수 있어요.
+
+## 종료와 재시작 (#117)
+
+- **종료:** `server.shutdown=graceful`이라 진행 중인 요청을 먼저 끝내요. 그다음 `ChatAiShutdown`(SmartLifecycle, 웹 서버의 graceful 단계보다 뒤이고 빈이 없어지기 전, DB가 아직 살아 있는 단계)이 `chatAiExecutor`를 닫고 실행 중이거나 대기 중인 답변을 `linkro.chat.ai-shutdown-wait`(15초)까지 기다려요. 이때 새 @링크로 작업은 풀이 거절하고, 기존 대기열 초과와 같은 경로로 SYSTEM 실패 안내가 저장돼요(가능하면). 15초가 지나도 안 끝난 답변은 끊어요. `docker-compose.yml`의 app에 `stop_grace_period: 20s`를 줬어요(기본 10초면 Docker가 먼저 죽여요).
+- **시작 시 정리(`ChatAnswerSweep`):** 앱이 준비되면, 최근 `linkro.chat.answer-sweep-window`(10분, 0이면 끔) 안에 보낸 @링크로 USER 메시지 중 답이 없는 것에 실패 안내("AI가 답변을 만들지 못했어요. 잠시 후 다시 시도해 주세요.")를 SYSTEM 메시지로 저장하고 `MESSAGE_CREATED`를 발행해요. 새 컬럼은 없어요.
+  - **"답이 있다"의 기준:** 질문과 답을 잇는 값이 없어서 방 단위로 세요. 창 안의 멘션 질문이 n개이고, 그중 가장 오래된 질문 뒤에 AI 메시지나 실패 안내(두 문구)가 m개 있으면 n−m개에 답이 없다고 보고 안내를 n−m개 저장해요. 안내도 답으로 세기 때문에 다시 재시작해도 더 만들지 않아요(여러 번 재시작해도 안전). 한 방에 질문이 여럿이어도 맞아요.
+  - 이번 서버가 뜨기 전에 저장된 질문만 봐요. 뜬 뒤에 온 질문은 지금 답을 만드는 중이라 건드리지 않아요.
+  - 한계: 창보다 오래된 질문은 그대로 둬요. 안내 문구에 질문 이름이 없어서 어느 질문의 답이 빠졌는지는 구분하지 않아요. 서버 한 대 기준이에요.
+
 ## 알려진 한계
 
-- 서버가 재시작되면 만들고 있던 AI 답변은 사라지고 안내 메시지도 남지 않아요(답변 대기열이 메모리에만 있어요).
-- 사용자별 @링크로 호출 횟수 제한은 없어요. 연달아 부르면 그만큼 OpenAI를 불러요. 후속 이슈로 다룰 예정이에요.
 - SYSTEM 메시지는 방 변경과 같은 트랜잭션이라, 메시지 저장이 실패하면 입장·퇴장 같은 변경도 같이 취소돼요. #43 "방 데이터 변경과 SYSTEM 메시지를 같은 트랜잭션에서 저장"을 따른 거예요.
 
 ## 설정
@@ -85,10 +100,13 @@ API 명세 v1.12 10.1(#27), 10.2(#28), 상세설계서 3.3.4, ERD v1.13 `room_me
 | `ai-context-messages` | 10 | 질문과 함께 AI에 보내는 이전 대화 수 |
 | `ai-threads` | 4 | 동시에 답하는 스레드 수 |
 | `ai-queue-capacity` | 50 | 대기 가능한 질문 수. 넘으면 SYSTEM 안내 |
+| `ai-call-interval` | 10s | 한 사용자의 @링크로 호출 간격. 0이면 제한 없음 |
+| `ai-shutdown-wait` | 15s | 종료 때 답변이 끝나길 기다리는 시간 |
+| `answer-sweep-window` | 10m | 시작 시 답이 없는 질문을 찾는 기간. 0이면 끔 |
 
 AI 호출 읽기 타임아웃은 기존 `OPENAI_READ_TIMEOUT`(8s)이에요. 모델이 느려 시간이 넘으면 `AI_UNAVAILABLE`로 처리돼 SYSTEM 안내가 나가요.
 
 ## 테스트
 
-- 단위: `ChatMessageRequestTest`(본문 검사), `LinkroMentionTest`, `ChatMessageWriterTest`(이벤트 시점·롤백·방 삭제), `ChatServiceTest`(전송·AI 성공/실패/대기열·목록), `ChatSystemMessagesTest`(문구). 방 서비스 테스트는 SYSTEM 메시지 호출을 확인하도록 고쳤어요.
-- PostgreSQL(`ChatPostgresTest`): 커서 쿼리(PG 순서 vs Java 순서, 페이지 순회), 전송·조회 HTTP 흐름, 1000/1001자와 DB 4000자, @링크로 답변(mock AI)과 실패 안내, 방 이벤트별 SYSTEM 메시지, 롤백 시 메시지·이벤트 없음, 방 삭제 시 메시지 cascade.
+- 단위: `ChatMessageRequestTest`(본문 검사), `LinkroMentionTest`, `ChatMessageWriterTest`(이벤트 시점·롤백·방 삭제), `ChatServiceTest`(전송·AI 성공/실패/대기열·목록), `ChatSystemMessagesTest`(문구), `ChatRateLimiterTest`(호출 간격), `ChatAiShutdownTest`(종료 때 답변 마저 하기), `ChatAnswerSweepTest`(시작 시 정리). 방 서비스 테스트는 SYSTEM 메시지 호출을 확인하도록 고쳤어요.
+- PostgreSQL(`ChatPostgresTest`): 커서 쿼리(PG 순서 vs Java 순서, 페이지 순회), 전송·조회 HTTP 흐름, 1000/1001자와 DB 4000자, @링크로 답변(mock AI)과 실패 안내, 호출 간격 429(메시지 미저장·멘션 없는 메시지는 제한 없음), 시작 시 정리(여러 질문·재실행), 방 이벤트별 SYSTEM 메시지, 롤백 시 메시지·이벤트 없음, 방 삭제 시 메시지 cascade.

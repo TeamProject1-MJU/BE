@@ -62,12 +62,14 @@ class ChatServiceTest {
     AiClient ai = mock(AiClient.class);
     ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     ChatProperties properties = new ChatProperties();
+    long[] nanos = {0};
     List<Runnable> queued = new ArrayList<>();
     Executor executor = queued::add;
     ChatService service;
 
     @BeforeEach
     void setUp() {
+        properties.setAiCallInterval(java.time.Duration.ZERO);
         when(messages.insert(any(), eq(room), any(), any(), any())).thenAnswer(call -> new Message(call.getArgument(0),
                 call.getArgument(2), call.getArgument(3), call.getArgument(2) == SenderType.USER ? "민지" : null,
                 call.getArgument(4), Instant.parse("2026-11-11T02:00:00Z"), null));
@@ -77,7 +79,8 @@ class ChatServiceTest {
     ChatService build(Executor aiExecutor) {
         var writer = new ChatMessageWriter(access, messages, events);
         var context = new ChatRoomContext(properties, messages, rooms, roomReads, recommendations);
-        return new ChatService(writer, access, messages, new ChatAiResponder(ai, context, writer), aiExecutor);
+        return new ChatService(writer, access, messages, new ChatAiResponder(ai, context, writer),
+                new ChatRateLimiter(properties, () -> nanos[0]), aiExecutor);
     }
 
     ChatMessageRequest body(String content) {
@@ -229,6 +232,21 @@ class ChatServiceTest {
     }
 
     @Test
+    void aQuestionSentWhileTheExecutorIsShuttingDownStillSavesAndGetsTheFailureNotice() {
+        var closed = new java.util.concurrent.ThreadPoolExecutor(1, 1, 1, java.util.concurrent.TimeUnit.SECONDS,
+                new java.util.concurrent.ArrayBlockingQueue<>(1));
+        closed.shutdown();
+
+        Sent sent = build(closed).send(room, user, body("@링크로 안녕"));
+
+        assertThat(sent.aiPending()).isTrue();
+        assertThat(savedMessages()).extracting(Message::senderType, Message::content).containsExactly(
+                org.assertj.core.groups.Tuple.tuple(SenderType.USER, "@링크로 안녕"),
+                org.assertj.core.groups.Tuple.tuple(SenderType.SYSTEM, ChatAiResponder.UNAVAILABLE_NOTICE));
+        verifyNoInteractions(ai);
+    }
+
+    @Test
     void theRoomDisappearingDuringTheAiCallLosesTheAnswerQuietly() {
         when(ai.replyToChat(any())).thenReturn(new GeneratedText("답변"));
         when(messages.insert(any(), eq(room), eq(SenderType.AI), any(), any()))
@@ -240,6 +258,77 @@ class ChatServiceTest {
         runQueued();
 
         assertThat(savedMessages()).extracting(Message::senderType).containsExactly(SenderType.USER);
+    }
+
+    @Test
+    void aSecondMentionWithinTheIntervalIsRefusedWith429AndSavesNothing() {
+        properties.setAiCallInterval(java.time.Duration.ofSeconds(10));
+        service.send(room, user, body("@링크로 하나"));
+        nanos[0] = 3_000_000_000L;
+
+        assertThatThrownBy(() -> service.send(room, user, body("@링크로 둘"))).isInstanceOfSatisfying(BusinessException.class, e -> {
+            assertThat(e.getErrorCode()).isEqualTo(ErrorCode.AI_QUOTA_EXCEEDED);
+            assertThat(e.getErrorCode().getStatus().value()).isEqualTo(429);
+            assertThat(e.getDetails().get("retryAfterSeconds")).isEqualTo(7L);
+        });
+
+        assertThat(savedMessages()).extracting(Message::content).containsExactly("@링크로 하나");
+        verify(messages, org.mockito.Mockito.times(1)).insert(any(), eq(room), any(), any(), any());
+        assertThat(queued).hasSize(1);
+    }
+
+    @Test
+    void theNextMentionPassesOnceTheIntervalHasPassedAndOtherUsersAreNotLimited() {
+        properties.setAiCallInterval(java.time.Duration.ofSeconds(10));
+        service.send(room, user, body("@링크로 하나"));
+
+        service.send(room, UUID.randomUUID(), body("@링크로 다른 사람"));
+        nanos[0] = 10_000_000_000L;
+        service.send(room, user, body("@링크로 둘"));
+
+        assertThat(queued).hasSize(3);
+    }
+
+    @Test
+    void aMessageWithoutTheMentionIsNeverLimitedAndDoesNotUseTheTurn() {
+        properties.setAiCallInterval(java.time.Duration.ofSeconds(10));
+
+        for (int i = 0; i < 5; i++) service.send(room, user, body("그냥 말해요 " + i));
+        Sent mention = service.send(room, user, body("@링크로 지금"));
+        Sent plain = service.send(room, user, body("멘션 바로 뒤의 일반 메시지"));
+
+        assertThat(mention.aiPending()).isTrue();
+        assertThat(plain.aiPending()).isFalse();
+        assertThat(savedMessages()).hasSize(7);
+    }
+
+    @Test
+    void aRefusedOrInvalidOrOutsiderCallDoesNotStartAnInterval() {
+        properties.setAiCallInterval(java.time.Duration.ofSeconds(10));
+        UUID outsider = UUID.randomUUID();
+        when(access.requireMember(room, outsider)).thenThrow(new BusinessException(ErrorCode.NOT_ROOM_MEMBER));
+
+        assertThatThrownBy(() -> service.send(room, outsider, body("@링크로 안녕"))).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.send(room, outsider, body("   "))).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.send(room, user, body("@링크로 " + "가".repeat(1001)))).isInstanceOf(BusinessException.class);
+
+        // None of those took the turn, so the first real call passes.
+        assertThat(service.send(room, user, body("@링크로 진짜")).aiPending()).isTrue();
+    }
+
+    @Test
+    void aFailedSaveGivesTheTurnBack() {
+        properties.setAiCallInterval(java.time.Duration.ofSeconds(10));
+        var saves = new java.util.concurrent.atomic.AtomicInteger();
+        when(messages.insert(any(), eq(room), eq(SenderType.USER), any(), any())).thenAnswer(call -> {
+            if (saves.getAndIncrement() == 0) throw new IllegalStateException("db down");
+            return new Message(call.getArgument(0), SenderType.USER, user, "민지", call.getArgument(4), Instant.EPOCH, null);
+        });
+
+        assertThatThrownBy(() -> service.send(room, user, body("@링크로 하나"))).isInstanceOf(IllegalStateException.class);
+        verifyNoInteractions(events);
+
+        assertThat(service.send(room, user, body("@링크로 다시")).aiPending()).isTrue();
     }
 
     @Test

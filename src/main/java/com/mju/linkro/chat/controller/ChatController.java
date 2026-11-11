@@ -35,9 +35,10 @@ public class ChatController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     @Operation(summary = "채팅 전송 (10.1, #27)", description = "멤버만 보낼 수 있어요. 멤버 확인 후 본문(1~1000자)을 검사하고, 저장한 메시지를 바로 돌려줘요. "
-            + "@링크로가 있으면 aiPending:true이고 AI 답변은 비동기로 만들어 MESSAGE_CREATED 이벤트로 나가요. AI가 실패해도 보낸 메시지는 남고 SYSTEM 안내 메시지가 대신 나가요.",
+            + "@링크로가 있으면 aiPending:true이고 AI 답변은 비동기로 만들어 MESSAGE_CREATED 이벤트로 나가요. AI가 실패해도 보낸 메시지는 남고 SYSTEM 안내 메시지가 대신 나가요. 같은 사용자가 @링크로를 10초 안에 다시 부르면 저장하지 않고 429 AI_QUOTA_EXCEEDED로 거절해요(details.retryAfterSeconds가 남은 초). @링크로가 없는 메시지는 제한이 없어요.",
             requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(mediaType = "application/json", schema = @Schema(implementation = ChatMessageRequest.class), examples = @ExampleObject(value = "{\"content\":\"@링크로 사당역에서 갈만한 곳 알려줘\"}"))))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "저장됨", content = @Content(mediaType = "application/json", schema = @Schema(implementation = SentEnvelope.class), examples = @ExampleObject(value = "{\"success\":true,\"data\":{\"message\":{\"id\":\"0192f3c1-0000-7000-8000-000000000001\",\"senderType\":\"USER\",\"senderId\":\"0192f3a4-7b1c-7c3e-9a10-5d2e8f6b1a01\",\"nickname\":\"민지\",\"content\":\"@링크로 사당역에서 갈만한 곳 알려줘\",\"createdAt\":\"2026-11-11T11:00:00Z\",\"meta\":null},\"aiPending\":true}}")))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "AI_QUOTA_EXCEEDED: 같은 사용자의 @링크로 호출이 10초 안에 또 왔어요. 메시지는 저장되지 않아요.", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class), examples = @ExampleObject(value = "{\"success\":false,\"error\":{\"code\":\"AI_QUOTA_EXCEEDED\",\"message\":\"...\",\"details\":{\"retryAfterSeconds\":7}}}")))
     public ApiResponse<Sent> send(@CurrentUser UUID userId, @PathVariable UUID roomId, @RequestBody ChatMessageRequest request) {
         return ApiResponse.success(chat.send(roomId, userId, request));
     }

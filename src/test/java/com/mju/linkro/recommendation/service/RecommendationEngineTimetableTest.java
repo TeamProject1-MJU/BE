@@ -58,6 +58,22 @@ class RecommendationEngineTimetableTest {
     }
 
     @Test
+    void justAfterTheFirstTrainsEveryStationIsOutBecauseOfThem() {
+        // #115. Without the 5호선 stations (no train from 가 or 마 reaches them), at 30100 only 가's first train has
+        // arrived anywhere (나 30090); 마's first train (R1) leaves at 32100. Every station has a member whose earliest
+        // arrival of the day is after the appointment: 나 and 다 (마 via R1), 라 (가 via T1 30390).
+        AppliedConstraints no5 = new AppliedConstraints(null, null, null, List.of(10L, 11L, 12L, 13L), List.of());
+        Evaluation evaluation = engine(true).evaluate(MEMBERS, no5, at(THURSDAY, 30100), Instant.EPOCH);
+        assertThat(evaluation.candidates()).isEmpty();
+        assertThat(evaluation.unreachableByTrain()).isEqualTo(3);
+        assertThat(evaluation.beforeFirstTrain()).isTrue();
+        // Once 마's first train has reached 나 (32290) and 다 (32390), they are candidates.
+        Evaluation later = engine(true).evaluate(MEMBERS, no5, at(THURSDAY, 32390), Instant.EPOCH);
+        assertThat(later.candidates()).containsOnlyKeys(2L, 3L);
+        assertThat(later.beforeFirstTrain()).isFalse();
+    }
+
+    @Test
     void maxMinutesFiltersOnTimetableMinutes() {
         AppliedConstraints fourMinutes = new AppliedConstraints(4, null, null, List.of(), List.of());
         Evaluation evaluation = engine(true).evaluate(MEMBERS, fourMinutes, at(THURSDAY, 32390), Instant.EPOCH);
@@ -66,6 +82,12 @@ class RecommendationEngineTimetableTest {
         assertThat(evaluation.candidates()).containsOnlyKeys(2L);
         assertThat(evaluation.candidates().get(2L).trips()).extracting(Trip::minutes).containsExactly(2, 4);
         assertThat(evaluation.unreachableByTrain()).isEqualTo(5);
+        assertThat(evaluation.beforeFirstTrain()).isFalse();
+        // Empty because of the condition, not the first trains: 1 minute leaves nothing, and the flag stays false (#115).
+        Evaluation none = engine(true).evaluate(MEMBERS, new AppliedConstraints(1, null, null, List.of(), List.of()),
+                at(THURSDAY, 32390), Instant.EPOCH);
+        assertThat(none.candidates()).isEmpty();
+        assertThat(none.beforeFirstTrain()).isFalse();
     }
 
     @Test
@@ -76,6 +98,8 @@ class RecommendationEngineTimetableTest {
         assertThat(evaluation.candidates()).isEmpty();
         assertThat(evaluation.unreachableByTrain()).isEqualTo(7);
         assertThat(evaluation.fallbackMembers()).isZero();
+        // The 5호선 stations have no train from 가 or 마 at all that day: the first trains do not explain them (#115).
+        assertThat(evaluation.beforeFirstTrain()).isFalse();
     }
 
     @Test
@@ -125,5 +149,21 @@ class RecommendationEngineTimetableTest {
         assertThat(withoutTimetable.candidates().keySet()).isEqualTo(plain.candidates().keySet());
         withoutTimetable.candidates().forEach((station, candidate) -> assertThat(candidate.trips()).extracting(Trip::minutes)
                 .isEqualTo(plain.candidates().get(station).trips().stream().map(Trip::minutes).toList()));
+    }
+
+    @Test
+    void theFareComesFromTheFareTableWhateverRouteIsRidden() {
+        // #109: the pair of stations sets the fare. 가(1) -> 다(3) is in the table; 마(5) -> 다(3) is not, so its fare is the
+        // ridden distance (here the fare calculator returns the distance to make that visible).
+        SubwayGraph graph = SubwayGraph.of(TimetableRouterTest.DATA);
+        FareCalculator byDistance = path -> path.rideDistanceM();
+        com.mju.linkro.subway.api.StationFareLookup table = (from, to) -> from == 1 && to == 3
+                ? java.util.OptionalInt.of(1550) : java.util.OptionalInt.empty();
+        RecommendationEngine engine = new RecommendationEngine(new DijkstraSubwayRouteFinder(graph, new SubwayGraphProperties()),
+                byDistance, new RecommendationProperties(), Optional.of(TimetableRouterTest.router()), Optional.of(table));
+        Candidate da = engine.evaluate(MEMBERS, AppliedConstraints.none(), at(THURSDAY, 32390), Instant.EPOCH).candidates().get(3L);
+        assertThat(da.trips().get(0).fareWon()).isEqualTo(1550);
+        assertThat(da.trips().get(0).path().rideDistanceM()).isEqualTo(2000);
+        assertThat(da.trips().get(1).fareWon()).isEqualTo(da.trips().get(1).path().rideDistanceM());
     }
 }

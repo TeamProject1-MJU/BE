@@ -59,6 +59,9 @@ public class OpenApiConfig {
             var proposal = document.getPaths().get("/api/v1/rooms/{roomId}/station-proposals/{proposalId}");
             if (proposal != null) addMembershipErrorExamples(proposal.getDelete(), ErrorCode.NOT_ROOM_MEMBER,
                     ErrorCode.NOT_PROPOSAL_OWNER, ErrorCode.ROOM_NOT_FOUND, ErrorCode.PROPOSAL_NOT_FOUND, ErrorCode.ROOM_BUSY);
+            var vote = document.getPaths().get("/api/v1/rooms/{roomId}/station-proposals/{proposalId}/vote");
+            if (vote != null) addMembershipErrorExamples(vote.getPut(), ErrorCode.NOT_ROOM_MEMBER,
+                    ErrorCode.ROOM_NOT_FOUND, ErrorCode.PROPOSAL_NOT_FOUND, ErrorCode.ALREADY_VOTED, ErrorCode.ROOM_BUSY);
             var selection = document.getPaths().get("/api/v1/rooms/{roomId}/selected-station");
             if (selection != null) {
                 addMembershipErrorExamples(selection.getPut(), ErrorCode.NOT_ROOM_MEMBER, ErrorCode.NOT_ROOM_OWNER,

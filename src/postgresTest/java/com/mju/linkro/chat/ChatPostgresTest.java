@@ -4,7 +4,9 @@ import com.mju.linkro.ai.mock.MockAiClient;
 import com.mju.linkro.auth.jwt.JwtProvider;
 import com.mju.linkro.chat.domain.SenderType;
 import com.mju.linkro.chat.event.MessageCreatedEvent;
+import com.github.f4b6a3.uuid.UuidCreator;
 import com.mju.linkro.chat.repository.RoomMessageRepository;
+import com.mju.linkro.chat.service.ChatAnswerSweep;
 import com.mju.linkro.room.domain.MeetingMember;
 import com.mju.linkro.room.domain.RoomRole;
 import com.mju.linkro.room.dto.SelectedStationRequest;
@@ -17,6 +19,7 @@ import com.mju.linkro.room.service.SelectedStationService;
 import com.mju.linkro.room.service.StationProposalService;
 import com.mju.linkro.user.domain.User;
 import com.mju.linkro.user.repository.UserRepository;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -55,7 +58,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest(properties = {
         "spring.config.import=", "spring.jpa.hibernate.ddl-auto=validate", "spring.jpa.open-in-view=false",
         "spring.jpa.show-sql=false", "auth.kakao.app-id=1234", "auth.jwt.access-token-ttl=15m",
-        "auth.jwt.secret=dGVzdC1vbmx5LXNlY3JldC0wMTIzNDU2Nzg5YWJjZGVmZ2hpams="})
+        "auth.jwt.secret=dGVzdC1vbmx5LXNlY3JldC0wMTIzNDU2Nzg5YWJjZGVmZ2hpams=",
+        "linkro.chat.ai-call-interval=0s", "linkro.chat.answer-sweep-window=0s"})
 @Import(ChatPostgresTest.Events.class)
 @Timeout(60)
 class ChatPostgresTest {
@@ -83,6 +87,10 @@ class ChatPostgresTest {
     @Autowired SelectedStationService selection;
     @Autowired RoomMessageRepository messages;
     @Autowired JdbcTemplate jdbc;
+    @Autowired ChatProperties chatProperties;
+    @Autowired ChatAnswerSweep sweep;
+    @Autowired ChatAiShutdown aiShutdown;
+    @Autowired org.springframework.core.env.Environment environment;
     final JsonMapper mapper = JsonMapper.builder().build();
     MockMvc mvc;
     UUID owner, member, outsider, room;
@@ -218,6 +226,108 @@ class ChatPostgresTest {
         assertThat(texts("AI")).isEmpty();
         assertThat(jdbc.queryForObject("select sender_id is null from room_messages where sender_type = 'SYSTEM' and room_id = ?",
                 Boolean.class, room)).isTrue();
+    }
+
+    // --- call interval (#117) ---------------------------------------------------------------------------------------
+
+    @Test void aSecondMentionWithinTheIntervalIs429AndNotSavedWhileOtherMessagesAndUsersAreFine() throws Exception {
+        chatProperties.setAiCallInterval(java.time.Duration.ofSeconds(10));
+        try {
+            send(member, "@링크로 하나").andExpect(status().isCreated());
+            send(member, "@링크로 둘").andExpect(status().isTooManyRequests())
+                    .andExpect(jsonPath("$.success").value(false))
+                    .andExpect(jsonPath("$.error.code").value("AI_QUOTA_EXCEEDED"))
+                    .andExpect(jsonPath("$.error.details.retryAfterSeconds").value(org.hamcrest.Matchers.allOf(
+                            org.hamcrest.Matchers.greaterThanOrEqualTo(1), org.hamcrest.Matchers.lessThanOrEqualTo(10))));
+            // A message without the mention is never limited, even right after a refused call.
+            for (int i = 0; i < 3; i++) send(member, "그냥 말해요 " + i).andExpect(status().isCreated());
+            // Another user has their own interval.
+            send(owner, "@링크로 방장도 물어요").andExpect(status().isCreated());
+
+            assertThat(texts("USER")).containsExactly("@링크로 하나", "그냥 말해요 0", "그냥 말해요 1", "그냥 말해요 2", "@링크로 방장도 물어요");
+            waitFor(() -> texts("AI").size() == 2);
+        } finally {
+            chatProperties.setAiCallInterval(java.time.Duration.ZERO);
+        }
+    }
+
+    @Test void aRefusedOutsiderOrInvalidMentionDoesNotUseUpTheTurn() throws Exception {
+        chatProperties.setAiCallInterval(java.time.Duration.ofSeconds(10));
+        try {
+            send(outsider, "@링크로 들어가도 되나요").andExpect(status().isForbidden());
+            send(member, "   ").andExpect(status().isBadRequest());
+            send(member, "@링크로 " + "가".repeat(1001)).andExpect(status().isBadRequest());
+            send(member, "@링크로 진짜 질문").andExpect(status().isCreated());
+            waitFor(() -> texts("AI").size() == 1);
+        } finally {
+            chatProperties.setAiCallInterval(java.time.Duration.ZERO);
+        }
+    }
+
+    // --- shutdown and startup sweep (#117) ----------------------------------------------------------------------------
+
+    @Test void gracefulShutdownIsOnAndTheAnswerDrainIsPartOfTheLifecycle() {
+        assertThat(environment.getProperty("server.shutdown")).isEqualTo("graceful");
+        assertThat(aiShutdown.isRunning()).isTrue();
+        assertThat(aiShutdown.getPhase()).isLessThan(org.springframework.context.SmartLifecycle.DEFAULT_PHASE);
+        assertThat(chatProperties.getAiShutdownWait()).isEqualTo(java.time.Duration.ofSeconds(15));
+    }
+
+    UUID save(UUID roomId, SenderType type, UUID sender, String content) {
+        UUID id = UuidCreator.getTimeOrderedEpoch();
+        messages.insert(id, roomId, type, sender, content);
+        return id;
+    }
+
+    static final String NOTICE = "AI가 답변을 만들지 못했어요. 잠시 후 다시 시도해 주세요.";
+
+    @Test void theStartupSweepAnswersOnlyTheUnansweredQuestionsOfAMultiQuestionRoomAndIsIdempotent() {
+        chatProperties.setAnswerSweepWindow(java.time.Duration.ofMinutes(10));
+        try {
+            UUID otherRoom = creation.create(owner, "C00002", "other", null).id();
+            save(room, SenderType.USER, member, "@링크로 첫 질문");           // answered
+            save(room, SenderType.AI, null, "첫 답");
+            save(room, SenderType.USER, member, "그냥 대화");
+            save(room, SenderType.USER, owner, "@링크로 둘째 질문");          // lost
+            save(room, SenderType.USER, member, "me@링크로 메일");            // not a mention
+            save(room, SenderType.USER, member, "@링크로야 셋째 질문");       // lost
+            save(otherRoom, SenderType.USER, owner, "@링크로 다른 방 질문");  // lost, other room
+            UUID old = save(room, SenderType.USER, owner, "@링크로 오래된 질문");
+            jdbc.update("update room_messages set created_at = now() - interval '1 hour' where id = ?", old);
+            Instant before = Instant.now().plusSeconds(60);
+            Events.SEEN.clear();
+
+            assertThat(sweep.sweep(Instant.now(), before)).isEqualTo(3);
+
+            assertThat(texts("SYSTEM")).containsExactly(NOTICE, NOTICE);
+            assertThat(jdbc.queryForList("select content from room_messages where room_id = ? and sender_type = 'SYSTEM'",
+                    String.class, otherRoom)).containsExactly(NOTICE);
+            assertThat(Events.SEEN).extracting(e -> e.message().senderType()).containsOnly(SenderType.SYSTEM).hasSize(3);
+
+            // A restart again changes nothing: the notices count as replies.
+            assertThat(sweep.sweep(Instant.now(), before)).isZero();
+            assertThat(texts("SYSTEM")).hasSize(2);
+        } finally {
+            chatProperties.setAnswerSweepWindow(java.time.Duration.ZERO);
+        }
+    }
+
+    @Test void aQuestionAnsweredByTheAiOrByAFailureNoticeIsNotSweptAndANewerQuestionIsLeftToTheRunningServer() {
+        chatProperties.setAnswerSweepWindow(java.time.Duration.ofMinutes(10));
+        try {
+            save(room, SenderType.USER, member, "@링크로 답 받은 질문");
+            save(room, SenderType.AI, null, "답");
+            save(room, SenderType.USER, member, "@링크로 안내 받은 질문");
+            save(room, SenderType.SYSTEM, null, "AI 사용 한도를 초과해 답변하지 못했어요. 잠시 후 다시 시도해 주세요.");
+            Instant before = Instant.now().plusSeconds(60);
+            save(room, SenderType.USER, member, "@링크로 서버가 뜬 뒤의 질문");
+            jdbc.update("update room_messages set created_at = now() + interval '2 minutes' where content = ?", "@링크로 서버가 뜬 뒤의 질문");
+
+            assertThat(sweep.sweep(Instant.now(), before)).isZero();
+            assertThat(texts("SYSTEM")).hasSize(1);
+        } finally {
+            chatProperties.setAnswerSweepWindow(java.time.Duration.ZERO);
+        }
     }
 
     // --- SYSTEM messages of room events ---------------------------------------------------------------------------

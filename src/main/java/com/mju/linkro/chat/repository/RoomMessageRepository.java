@@ -4,6 +4,8 @@ import com.mju.linkro.chat.domain.SenderType;
 import com.mju.linkro.chat.dto.ChatResponses.Message;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -73,6 +75,35 @@ public class RoomMessageRepository {
         List<Message> oldestFirst = new ArrayList<>(newestFirst);
         Collections.reverse(oldestFirst);
         return oldestFirst;
+    }
+
+    /** A USER message that may carry the mention; the caller checks the exact mention rule. */
+    public record Candidate(UUID id, UUID roomId, String content) {}
+
+    /**
+     * USER messages whose text contains {@code text}, created in {@code [since, before)}, grouped by room and oldest
+     * first within a room (ids are UUIDv7, so the id order is the time order; PostgreSQL does the ordering).
+     */
+    public List<Candidate> userMessagesContaining(String text, Instant since, Instant before) {
+        return jdbc.query("""
+                select id, room_id, content from room_messages
+                where sender_type = 'USER' and created_at >= :since and created_at < :before
+                  and position(:text in content) > 0
+                order by room_id, id
+                """, new MapSqlParameterSource().addValue("since", Timestamp.from(since))
+                .addValue("before", Timestamp.from(before)).addValue("text", text),
+                (rs, n) -> new Candidate(rs.getObject("id", UUID.class), rs.getObject("room_id", UUID.class), rs.getString("content")));
+    }
+
+    /** AI messages and the given SYSTEM failure notices in the room after the message {@code afterId}. */
+    public int repliesAfter(UUID roomId, UUID afterId, List<String> failureNotices) {
+        Integer count = jdbc.queryForObject("""
+                select count(*) from room_messages
+                where room_id = :room and id > :after
+                  and (sender_type = 'AI' or (sender_type = 'SYSTEM' and content in (:notices)))
+                """, new MapSqlParameterSource().addValue("room", roomId).addValue("after", afterId)
+                .addValue("notices", failureNotices), Integer.class);
+        return count == null ? 0 : count;
     }
 
     private static JsonNode meta(JsonMapper json, ResultSet rs) throws SQLException {

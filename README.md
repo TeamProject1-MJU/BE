@@ -24,6 +24,8 @@ Spring Boot(Java)와 PostgreSQL을 기반으로
 ![AWS Lightsail](https://img.shields.io/badge/AWS_Lightsail-FF9900?style=flat-square&logo=amazonaws&logoColor=white)
 ![Ubuntu](https://img.shields.io/badge/Ubuntu-E95420?style=flat-square&logo=ubuntu&logoColor=white)
 
+- 서버 DB는 외부에 열려 있지 않습니다(`docker-compose.yml`에서 127.0.0.1로 바인딩, #113). 로컬 DB 도구로 붙으려면 SSH 터널(`ssh -L 5432:127.0.0.1:5432 ...`)을 씁니다.
+
 ### Collaboration
 
 ![GitHub](https://img.shields.io/badge/GitHub-181717?style=flat-square&logo=github&logoColor=white)

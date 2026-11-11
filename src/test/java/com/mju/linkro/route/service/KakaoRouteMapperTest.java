@@ -175,4 +175,23 @@ class KakaoRouteMapperTest {
             assertThat(draft.fare()).isEqualTo(1550); // 2,500 m
         });
     }
+
+    @Test
+    void missingKakaoFareUsesTheFareTableWhenItHasThePair() {
+        // #109: the fare-table fare of (강남 31, 서초 33), not the 2,500 m ridden; a pair missing from the table keeps the
+        // ridden estimate.
+        com.mju.linkro.subway.api.StationFareLookup table = (from, to) -> from == 31 && to == 33
+                ? java.util.OptionalInt.of(1650) : java.util.OptionalInt.empty();
+        RouteReference reference = mock(RouteReference.class);
+        when(reference.index()).thenReturn(RouteReference.Index.of(DATA));
+        KakaoRouteMapper withTable = new KakaoRouteMapper(reference, MockFareCalculatorAccess.calculator(), java.util.Optional.of(table));
+        var drafts = withTable.map(ok(route("SUBWAY", null, subway("2호선", 300, "강남", "교대", "서초"))), 31, 33);
+        assertThat(drafts).singleElement().satisfies(draft -> {
+            assertThat(draft.fareSource()).isEqualTo(FareSource.ESTIMATED);
+            assertThat(draft.fare()).isEqualTo(1650);
+        });
+        // A Kakao fare still wins.
+        assertThat(withTable.map(ok(route("SUBWAY", 1450, subway("2호선", 300, "강남", "교대", "서초"))), 31, 33))
+                .singleElement().extracting(RouteDraft::fare).isEqualTo(1450);
+    }
 }

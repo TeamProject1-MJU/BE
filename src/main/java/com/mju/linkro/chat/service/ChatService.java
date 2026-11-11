@@ -31,29 +31,47 @@ public class ChatService {
     private final RoomAccess access;
     private final RoomMessageRepository messages;
     private final ChatAiResponder responder;
+    private final ChatRateLimiter limiter;
     private final Executor aiExecutor;
 
     ChatService(ChatMessageWriter writer, RoomAccess access, RoomMessageRepository messages, ChatAiResponder responder,
-                @Qualifier("chatAiExecutor") Executor aiExecutor) {
+                ChatRateLimiter limiter, @Qualifier("chatAiExecutor") Executor aiExecutor) {
         this.writer = writer;
         this.access = access;
         this.messages = messages;
         this.responder = responder;
+        this.limiter = limiter;
         this.aiExecutor = aiExecutor;
     }
 
     /**
      * Saves the message (one short transaction, committed before this returns), then starts the AI answer in the
      * background. The response never waits for the AI, and an AI failure never touches the saved message.
+     *
+     * <p>A message with the mention takes the user's turn in the rate limiter after the membership and content checks
+     * and before the save, so a refused call (AI_QUOTA_EXCEEDED, 429) saves nothing. If the save fails after the turn
+     * was taken, the turn is given back. Messages without the mention are never limited.
      */
     public Sent send(UUID roomId, UUID userId, ChatMessageRequest request) {
-        Message saved = writer.recordUser(roomId, userId, request);
+        boolean[] turnTaken = {false};
+        Message saved;
+        try {
+            saved = writer.recordUser(roomId, userId, request, content -> {
+                if (LinkroMention.in(content)) {
+                    limiter.claim(userId);
+                    turnTaken[0] = true;
+                }
+            });
+        } catch (RuntimeException | Error failure) {
+            if (turnTaken[0]) limiter.release(userId);
+            throw failure;
+        }
         boolean aiPending = LinkroMention.in(saved.content());
         if (aiPending) {
             try {
                 aiExecutor.execute(() -> responder.reply(roomId, saved));
             } catch (RejectedExecutionException busy) {
-                log.warn("@링크로 answer queue is full; room {}", roomId);
+                log.warn("@링크로 answer queue is full or shutting down; room {}", roomId);
                 responder.notifyFailure(roomId, ErrorCode.AI_UNAVAILABLE);
             }
         }
