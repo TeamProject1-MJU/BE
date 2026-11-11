@@ -17,15 +17,21 @@ public class OpenAiConfig {
 
     @Bean
     AiClient aiClient(OpenAiProperties props) {
-        return new OpenAiClient(restClient(props, props.getReadTimeout()),
-                restClient(props, props.getVisionReadTimeout()), props.getApiKey(), props.getModel());
+        return client(props, OpenAiClient.BASE_URL);
     }
 
-    // Separate clients because text and vision calls have different read timeouts (Kakao client pattern).
-    private static RestClient restClient(OpenAiProperties props, Duration readTimeout) {
+    /** Text, vision and explanation calls each get a client with their own read timeout. */
+    static OpenAiClient client(OpenAiProperties props, String baseUrl) {
+        return new OpenAiClient(restClient(props, props.getReadTimeout(), baseUrl),
+                restClient(props, props.getVisionReadTimeout(), baseUrl),
+                restClient(props, props.getExplainReadTimeout(), baseUrl), props.getApiKey(), props.getModel());
+    }
+
+    // Separate clients because the calls have different read timeouts (Kakao client pattern).
+    private static RestClient restClient(OpenAiProperties props, Duration readTimeout, String baseUrl) {
         var factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(props.getConnectTimeout());
         factory.setReadTimeout(readTimeout);
-        return RestClient.builder().baseUrl(OpenAiClient.BASE_URL).requestFactory(factory).build();
+        return RestClient.builder().baseUrl(baseUrl).requestFactory(factory).build();
     }
 }

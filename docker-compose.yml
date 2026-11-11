@@ -29,6 +29,12 @@ services:
       LINKRO_AI_MODULE: ${LINKRO_AI_MODULE:-mock}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-}
+      # OpenAI timeouts (optional, e.g. 6s). Unset or empty in ~/BE/.env keeps the application defaults
+      # (connect 2s, read 8s, vision 4s, explain 6s): an empty value is not bound.
+      OPENAI_CONNECT_TIMEOUT: ${OPENAI_CONNECT_TIMEOUT:-}
+      OPENAI_READ_TIMEOUT: ${OPENAI_READ_TIMEOUT:-}
+      OPENAI_VISION_READ_TIMEOUT: ${OPENAI_VISION_READ_TIMEOUT:-}
+      OPENAI_EXPLAIN_READ_TIMEOUT: ${OPENAI_EXPLAIN_READ_TIMEOUT:-}
       # Subway switches (optional). Unset or empty in ~/BE/.env means mock, as before.
       LINKRO_SUBWAY_MODULE: ${LINKRO_SUBWAY_MODULE:-mock}
       LINKRO_SUBWAY_CONGESTION: ${LINKRO_SUBWAY_CONGESTION:-mock}

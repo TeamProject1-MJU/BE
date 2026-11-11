@@ -43,12 +43,19 @@ public class OpenAiClient implements AiClient {
 
     private final RestClient textClient;
     private final RestClient visionClient;
+    /** Recommendation explanations only, with their own shorter read timeout (#99). */
+    private final RestClient explainClient;
     private final String apiKey;
     private final String model;
 
     OpenAiClient(RestClient textClient, RestClient visionClient, String apiKey, String model) {
+        this(textClient, visionClient, textClient, apiKey, model);
+    }
+
+    OpenAiClient(RestClient textClient, RestClient visionClient, RestClient explainClient, String apiKey, String model) {
         this.textClient = textClient;
         this.visionClient = visionClient;
+        this.explainClient = explainClient;
         this.apiKey = apiKey;
         this.model = model;
     }
@@ -68,7 +75,7 @@ public class OpenAiClient implements AiClient {
             input.append("기준: ").append(item.criterion()).append(", 역: ").append(item.stationName())
                     .append(", facts: ").append(write(item.facts())).append('\n');
         }
-        String json = call(textClient, EXPLANATION_PROMPT, textInput(input.toString()), jsonFormat("explanation", EXPLANATION_SCHEMA));
+        String json = call(explainClient, EXPLANATION_PROMPT, textInput(input.toString()), jsonFormat("explanation", EXPLANATION_SCHEMA));
         Reply reply = parse(json, Reply.class);
         Set<String> asked = new HashSet<>();
         req.items().forEach(item -> asked.add(item.criterion()));
