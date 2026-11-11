@@ -16,7 +16,7 @@
 | `departAt` | X | 혼잡도 기준 시각, 오프셋 포함 ISO-8601. 생략하면 요청 시각 |
 | `roomId` | X | 방 화면에서 호출할 때. 보내면 방 멤버를 확인하고 약속 시각 기준으로 출발 시각을 계산 |
 
-응답은 명세 6.1 형식이다: `routeSource`, `routes[]`.
+응답은 명세 6.1 형식이다: `routeSource`, `routes[]`. #120에서 `appointmentPassed`, `notice`와 `summary.departureAt`, `summary.noService`, `summary.serviceNotice`를 추가했다(필드 추가만, 기존 필드·구조·에러 코드는 그대로).
 - `routes[]`의 각 경로: `routeId`, `routeType`, `summary`, `steps[]`
 - `steps[]`의 각 단계: `type`, `guidance`, `durationSec`, `distanceM`, `line`, `direction`, `directionCode`, `stops`, `path`, `stations`
 
@@ -28,7 +28,10 @@
   - INTERNAL은 경로 1개이고 `FASTEST`다.
 - `direction`(방면 문자열): 카카오가 방면을 주지 않아 항상 null이다. `directionCode`는 간선으로 계산한다.
 - `stations[]`: SUBWAY 단계의 정차역별 슬롯과 혼잡도, `stops`와 같은 순서. WALKING 단계는 빈 배열이다.
-- `summary.arrivalAt`: 출발 예정 시각 + `totalTimeSec`, Asia/Seoul 오프셋
+- `summary.departureAt`: 출발 예정 시각, Asia/Seoul 오프셋. 비운행이면 첫차 기준으로 바꾼 시각이다(아래 "비운행 시각과 첫차").
+- `summary.arrivalAt`: `departureAt` + `totalTimeSec`, Asia/Seoul 오프셋
+- `summary.noService`, `summary.serviceNotice`: 비운행이라 출발을 첫차 기준으로 바꿨으면 `true`와 안내 문구, 아니면 `false`·`null`
+- `appointmentPassed`, `notice`: 방 약속 시각 자체가 지났으면 `true`와 안내 문구, 아니면 `false`·`null`
 - `walkingMinutes`: 도보 단계 시간 합을 분으로 반올림
 
 ## 처리 순서
@@ -44,7 +47,7 @@
 4. 출발역과 도착역이 같으면 카카오를 호출하지 않고 INTERNAL(빈 경로)이다.
 5. 카카오 호출 → 우리 역·노선·방향으로 변환 → 쓸 수 있는 경로가 없으면 INTERNAL
    - INTERNAL로도 경로가 없으면 404 `ROUTE_NOT_FOUND`다.
-6. 경로마다 출발 예정 시각을 정하고 정차역 혼잡도를 붙인다.
+6. 경로마다 출발 예정 시각을 정하고, 열차 시각표가 있으면 그 시각에 경로를 운행하는 열차가 있는지 대조해 없으면 첫차 기준으로 바꾼 뒤(#120) 정차역 혼잡도를 붙인다.
 
 카카오 호출 중에는 DB 트랜잭션을 잡지 않는다.
 
@@ -133,6 +136,34 @@ INTERNAL 경로는 다음과 같이 만든다.
   - 계산한 시각이 이미 지났으면 요청 시각을 쓴다.
   - 약속 시각이 없거나 `roomId`가 없으면 `departAt`, 그것도 없으면 요청 시각이다.
 
+## 비운행 시각과 첫차 (#120)
+
+카카오 길찾기는 출발 시각을 받지 않고 시각 정보도 주지 않는다. 그래서 전에는 열차가 없는 시각(예: 평일 03:00)에도 `입력 시각 + 낮 소요시간`이 도착 시각으로 나왔다. 이제 경로마다 열차 시각표(`train-timetable.csv.gz`, #94)로 판별한다. 고정 시각은 쓰지 않는다.
+
+- **적용 조건**: 열차 시각표가 올라온 경우만이다(`linkro.subway.module=graph`이고 `linkro.subway.timetable.enabled`가 false가 아님). mock 모드나 시각표를 끈 경우에는 전과 같고 `noService`는 항상 `false`다.
+- **고정 경로 대조** (`FirstTrainTimer`): 보여줄 경로(KAKAO는 매핑된 정차역, INTERNAL은 다익스트라 경로)는 그대로 둔다. 그 경로의 SUBWAY 단계 정차역 쌍(RIDE 간선)을 순서대로 실제 열차에 태워 본다.
+  - 첫 승차는 출발 시각 + 첫 정차역까지 시간(카카오의 승차 전 도보) 이후의 다음 열차다.
+  - 같은 단계 안에서는 그 열차가 계속 가면 그대로 타고(`rideOf`), 아니면 다음 열차를 탄다.
+  - 다음 SUBWAY 단계는 사이 도보 시간 뒤의 다음 열차를 탄다.
+  - 그날 운행일 열차로 끝까지 못 가면(어느 간선이든 막차가 지났으면) 다음 운행일 첫 열차부터 다시 대조한다. 그래서 **막차 이후 입력은 다음 운행일 첫차**다. 운행일은 03:00에 바뀐다(`TimetableClock`). 그래서 토요일 01:30은 금요일(평일) 운행일의 막차 이후이고, 토요일 첫차로 안내한다.
+- **비운행 판정**: 다음 운행일로 넘어갔거나, 처음 탄 열차가 그 간선의 그날 첫차이고 출발 시각보다 늦게 떠나면 비운행이다. 이때만 바꾼다.
+  - `departureAt` = 첫차 출발 − 첫 정차역까지 시간
+  - `arrivalAt` = `departureAt` + `totalTimeSec`
+  - `serviceNotice` = `요청한 시각에는 이 경로를 운행하는 열차가 없어 첫차(11월 12일 05:36 출발) 기준으로 안내합니다.`
+- **소요시간은 기존 계산 그대로**다. `totalTimeSec`, 요금, 환승 수, 단계, 정차역 `offsetSec`는 바꾸지 않는다. 시각표의 실제 도착 시각(첫차 대기·환승 대기 포함)은 쓰지 않는다.
+- **판정하지 않는 경우**: 정차역 쌍이 시각표 간선이 아니거나 두 운행일 모두 대조가 안 되면 아무것도 바꾸지 않는다(`noService: false`). 시각표 리포트(`docs/timetable-94.md`) 기준으로 RIDE 간선 536개 모두에 요일별 열차가 있다.
+- **정상 운행 시각**: 바뀌는 것이 없다. 새 필드만 `departureAt`(요청한 출발 그대로), `noService: false`, `serviceNotice: null`로 붙는다.
+- **첫차 시각은 역·방향마다 다르다**: 평일 첫 출발은 역·방향별로 05:11~06:05, 막차는 00:09~01:14다. 그래서 노선 전체 기준(추천의 `noTrainArrivesBefore`)이 아니라 경로 기준으로 판정한다. 예: 강남→사당(2호선) 첫차는 평일 05:36:00, 토요일 05:35:30이다. 막차는 평일 00:46, 토·휴일 23:45다(같은 외선 서울대입구행 열차가 주말 시각표에서 약 1시간 이르다). 그래서 토요일 23:50 강남→사당은 비운행으로 다음 날 첫차를 안내한다.
+- **혼잡도와 `firstTrain`**: 혼잡도는 바꾼 출발 시각 기준으로 조회한다. 그래서 비운행이면 정차역 `stations[].slotStart`·`slotDate`·`firstTrain`이 바뀐다. 예: 평일 03:00 조회는 전에는 05:30 슬롯 `firstTrain: true`였다. 이제 05:36 출발 기준 05:30 슬롯 `firstTrain: false`다. 막차 이후(예: 00:50) 조회는 전에는 그날 00:30 슬롯이었고, 이제 다음 날 첫차 시간대 슬롯이다. 비운행 표시는 `summary.noService`로 한다.
+- **#115 `earliestArrivalsOfServiceDay`는 재사용하지 않았다**: 출발역에서 아무 경로로나 가장 빨리 닿는 도착 시각이라 보여주는 경로와 다를 수 있다. 승차 시각도 주지 않는다.
+
+## 방 약속이 지난 경우 (#120)
+
+- 방 약속 시각 자체가 요청 시각보다 앞서면(추천의 `APPOINTMENT_PASSED`와 같은 초 단위 비교, 같은 초는 지나지 않음) `appointmentPassed: true`, `notice: "약속 시각이 이미 지나 지금 출발 기준으로 안내합니다."`다. 출발은 요청 시각이고 `departAt`은 무시한다(전과 같은 동작).
+- 방에 약속 시각이 있으면 `departAt`은 약속이 지나지 않았어도 무시한다(기존 동작).
+- **알려진 한계**: 약속은 아직 남았지만 `약속 시각 − totalTimeSec`가 이미 지난 경우(지금 출발해도 늦는 경우)도 출발은 요청 시각으로 바뀐다. 이 경우는 표시하지 않는다(`appointmentPassed: false`). 경로별 `TOO_LATE_NOW` 같은 표시는 이번에 하지 않았다.
+- 약속 시각 기준 출발이 비운행이면(예: 약속 05:00) 출발이 첫차로 바뀌어 `arrivalAt`이 약속보다 늦을 수 있다. 별도 표시는 없고 `noService`·`serviceNotice`로 알린다.
+
 ## 설정과 실행
 
 ### 운영 서버
@@ -171,6 +202,16 @@ INTERNAL 경로는 다음과 같이 만든다.
   - 429 쿨다운(30초)
   - 로그에 키·본문·좌표가 없음
 - `RouteSearchFallbackLogTest`: 실패 사유마다 즉시 INTERNAL, 로그 수준(INFO/WARN)
+- `FirstTrainTimerTest`(직접 만든 시각표, #120)
+  - 평일 03:00·05:00 → 첫차, 토요일 01:30 → 토요일 첫차, 막차 이후 → 다음 운행일 첫차
+  - 14:00·23:30·막차 전·첫차 정각 → 그대로
+  - 환승 노선 막차가 지났으면 경로 전체를 다음 날 첫차로
+  - 시각표에 없는 간선, 빈 경로 → 판정 안 함
+  - 카카오 fixture(호출 없음)를 `KakaoRouteMapper`로 매핑한 정차역으로 대조. 승차 전 도보만큼 일찍 출발
+- `RouteSearchServiceTest`
+  - 14:00·23:30 응답이 시각표 없이 만든 응답과 같음(새 필드 `false`/`null`)
+  - 03:00이면 출발·도착만 바뀌고 소요시간·요금·환승·정차역은 그대로
+  - `appointmentPassed`: 약속 시각 자체가 지났을 때만, 초 단위
 - `KakaoRouteMapperTest`
   - 정차역·방향·통과 시각, 환승
   - 버스 섞임, 9호선, 없는 역, 인접하지 않은 역, 출발역 불일치 → 제외
@@ -182,3 +223,4 @@ INTERNAL 경로는 다음과 같이 만든다.
   - 방 멤버(약속 시각 기준 슬롯), 비멤버 403, 없는 방 404
   - 역 검증(404, 422)이 카카오보다 먼저
   - 인증 없음 401, OpenAPI
+  - #120 실제 시각표: 강남→사당 KAKAO fixture·INTERNAL 모두 평일 03:00·05:00 → 05:36:00, 토요일 01:30 → 05:35:30. 14:00·23:30 → 그대로. 지난 약속 → `appointmentPassed`

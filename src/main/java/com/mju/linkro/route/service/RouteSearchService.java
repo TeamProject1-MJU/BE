@@ -12,6 +12,8 @@ import com.mju.linkro.subway.congestion.CongestionResolver;
 import com.mju.linkro.subway.congestion.DbCongestionLookup;
 import com.mju.linkro.subway.congestion.ServiceSlots;
 import com.mju.linkro.subway.congestion.repository.CongestionStatsRepository;
+import com.mju.linkro.subway.timetable.TimetableClock;
+import com.mju.linkro.subway.timetable.TrainTimetable;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
@@ -24,11 +26,16 @@ import org.springframework.stereotype.Service;
  * API 6.1. Kakao first, INTERNAL (our Dijkstra) when Kakao has no key, fails or gives no usable subway route.
  * Congestion of every SUBWAY stop is read from congestion_stats, like GET /congestion, whatever
  * {@code linkro.subway.congestion} is. No transaction is held while Kakao is called.
+ *
+ * <p>With the train timetable loaded (graph module, {@code linkro.subway.timetable.enabled}), each route is ridden on it
+ * at its departure; when no train runs it then, the departure moves to the first train (#120, {@link FirstTrainTimer}).
  */
 @Slf4j
 @Service
 public class RouteSearchService {
     private static final DateTimeFormatter OFFSET_TIME = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
+    private static final DateTimeFormatter NOTICE_TIME = DateTimeFormatter.ofPattern("M월 d일 HH:mm");
+    static final String APPOINTMENT_PASSED_NOTICE = "약속 시각이 이미 지나 지금 출발 기준으로 안내합니다.";
 
     private final RoomAccess rooms;
     private final StationLookup stations;
@@ -37,15 +44,24 @@ public class RouteSearchService {
     private final InternalRouteBuilder internal;
     private final CongestionLookup congestion;
     private final Clock clock;
+    /** Null without the train timetable: departures are never moved. */
+    private final FirstTrainTimer firstTrains;
 
     @Autowired
     public RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
-                              InternalRouteBuilder internal, CongestionStatsRepository stats, CongestionResolver resolver) {
-        this(rooms, stations, kakao, mapper, internal, new DbCongestionLookup(stats, resolver), Clock.systemUTC());
+                              InternalRouteBuilder internal, CongestionStatsRepository stats, CongestionResolver resolver,
+                              Optional<TrainTimetable> timetable, Optional<TimetableClock> timetableClock) {
+        this(rooms, stations, kakao, mapper, internal, new DbCongestionLookup(stats, resolver), Clock.systemUTC(),
+                timetable.isPresent() && timetableClock.isPresent() ? new FirstTrainTimer(timetable.get(), timetableClock.get()) : null);
     }
 
     RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
                        InternalRouteBuilder internal, CongestionLookup congestion, Clock clock) {
+        this(rooms, stations, kakao, mapper, internal, congestion, clock, null);
+    }
+
+    RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
+                       InternalRouteBuilder internal, CongestionLookup congestion, Clock clock, FirstTrainTimer firstTrains) {
         this.rooms = rooms;
         this.stations = stations;
         this.kakao = kakao;
@@ -53,6 +69,7 @@ public class RouteSearchService {
         this.internal = internal;
         this.congestion = congestion;
         this.clock = clock;
+        this.firstTrains = firstTrains;
     }
 
     public RouteSearchResponse search(UUID userId, RouteSearchRequest request) {
@@ -97,7 +114,18 @@ public class RouteSearchService {
             RouteDraft draft = drafts.get(i);
             routes.add(route("r" + (i + 1), types.get(i), draft, departure(room, query.departAt(), draft.totalTimeSec(), now)));
         }
-        return new RouteSearchResponse(source, routes);
+        boolean passed = appointmentPassed(room, now);
+        return new RouteSearchResponse(source, routes, passed, passed ? APPOINTMENT_PASSED_NOTICE : null);
+    }
+
+    /**
+     * The room's appointment itself is before now, compared in whole seconds like recommendations (APPOINTMENT_PASSED):
+     * departures are then the request time and departAt is ignored. A planned departure (appointment − totalTimeSec)
+     * that has passed while the appointment has not is not reported (known limit, docs/route-search-81.md).
+     */
+    static boolean appointmentPassed(MeetingRoom room, Instant now) {
+        return room != null && room.getAppointmentAt() != null && room.getAppointmentAt().truncatedTo(ChronoUnit.SECONDS)
+                .isBefore(now.truncatedTo(ChronoUnit.SECONDS));
     }
 
     /**
@@ -134,7 +162,11 @@ public class RouteSearchService {
         }
     }
 
-    private Route route(String routeId, String routeType, RouteDraft draft, Instant departure) {
+    private Route route(String routeId, String routeType, RouteDraft draft, Instant requested) {
+        FirstTrainTimer.Timing timing = firstTrains == null ? null : firstTrains.time(draft, requested).orElse(null);
+        boolean noService = timing != null && timing.noService();
+        Instant departure = noService ? timing.departure() : requested;
+        String serviceNotice = noService ? serviceNotice(timing.boardAt()) : null;
         List<PathStop> stops = draft.subwayStops();
         List<StopCongestion> perStop = List.of();
         CongestionResult summary = CongestionResult.unsupported();
@@ -162,11 +194,19 @@ public class RouteSearchService {
             steps.add(new Step(step.type(), step.guidance(), step.durationSec(), step.distanceM(), step.line(), null,
                     step.directionCode(), stopList, step.path(), stationList));
         }
-        String arrivalAt = departure.plusSeconds(draft.totalTimeSec()).truncatedTo(ChronoUnit.SECONDS)
-                .atZone(ServiceSlots.ZONE).toOffsetDateTime().format(OFFSET_TIME);
+        String arrivalAt = offsetTime(departure.plusSeconds(draft.totalTimeSec()));
         int walkingMinutes = (int) Math.round(draft.walkingSeconds() / 60.0);
         return new Route(routeId, routeType, new Summary(draft.totalTimeSec(), arrivalAt, draft.fare(), draft.fareSource(),
-                draft.transferCount(), walkingMinutes, congestion(summary)), steps);
+                draft.transferCount(), walkingMinutes, congestion(summary), offsetTime(departure), noService, serviceNotice), steps);
+    }
+
+    private static String offsetTime(Instant at) {
+        return at.truncatedTo(ChronoUnit.SECONDS).atZone(ServiceSlots.ZONE).toOffsetDateTime().format(OFFSET_TIME);
+    }
+
+    static String serviceNotice(Instant boardAt) {
+        return "요청한 시각에는 이 경로를 운행하는 열차가 없어 첫차(" + boardAt.atZone(ServiceSlots.ZONE).format(NOTICE_TIME)
+                + " 출발) 기준으로 안내합니다.";
     }
 
     /** pct is already the display value (CongestionResolver.display: integer, capped by level); no rounding here. */

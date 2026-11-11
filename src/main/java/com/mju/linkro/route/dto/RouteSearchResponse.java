@@ -8,10 +8,12 @@ import java.util.List;
 
 /** POST /routes/search data (6.1). Null fields are always written. */
 @JsonInclude(JsonInclude.Include.ALWAYS)
-@Schema(name = "RouteSearchData", requiredProperties = {"routeSource", "routes"})
+@Schema(name = "RouteSearchData", requiredProperties = {"routeSource", "routes", "appointmentPassed", "notice"})
 public record RouteSearchResponse(
         @Schema(description = "KAKAO: 카카오 대중교통 길찾기(지하철만). INTERNAL: 카카오 키 없음·실패·지하철 경로 없음·역 매칭 실패로 내부 다익스트라 경로") RouteSource routeSource,
-        List<Route> routes) {
+        List<Route> routes,
+        @Schema(description = "roomId의 약속 시각 자체가 이미 지났으면 true(추천의 APPOINTMENT_PASSED와 같은 초 단위 기준). 이때 출발은 요청 시각이고 departAt은 무시된다", example = "false") boolean appointmentPassed,
+        @Schema(description = "appointmentPassed일 때 안내 문구. 아니면 null", example = "약속 시각이 이미 지나 지금 출발 기준으로 안내합니다.", types = {"string", "null"}) String notice) {
 
     public enum RouteSource { KAKAO, INTERNAL }
 
@@ -27,15 +29,18 @@ public record RouteSearchResponse(
             Summary summary, List<Step> steps) {}
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
-    @Schema(name = "RouteSummaryData", requiredProperties = {"totalTimeSec", "arrivalAt", "fare", "fareSource", "transferCount", "walkingMinutes", "congestion"})
+    @Schema(name = "RouteSummaryData", requiredProperties = {"totalTimeSec", "arrivalAt", "fare", "fareSource", "transferCount", "walkingMinutes", "congestion", "departureAt", "noService", "serviceNotice"})
     public record Summary(
             @Schema(example = "1680") int totalTimeSec,
-            @Schema(description = "출발 예정 시각 + totalTimeSec (Asia/Seoul 오프셋)", example = "2026-11-06T08:28:00+09:00") String arrivalAt,
+            @Schema(description = "departureAt + totalTimeSec (Asia/Seoul 오프셋)", example = "2026-11-06T08:28:00+09:00") String arrivalAt,
             @Schema(description = "원", example = "1550") int fare,
             @Schema(example = "KAKAO") FareSource fareSource,
             @Schema(example = "1") int transferCount,
             @Schema(description = "도보 단계 시간 합(분, 반올림)", example = "4") int walkingMinutes,
-            @Schema(description = "supported 정차역 중 원값이 가장 큰 정차역의 값. 모두 데이터 없음이면 supported=false") Congestion congestion) {}
+            @Schema(description = "supported 정차역 중 원값이 가장 큰 정차역의 값. 모두 데이터 없음이면 supported=false") Congestion congestion,
+            @Schema(description = "출발 예정 시각(Asia/Seoul 오프셋). noService면 첫차 기준으로 바꾼 시각", example = "2026-11-06T08:00:00+09:00") String departureAt,
+            @Schema(description = "요청한 출발 시각에 이 경로를 운행하는 열차가 없어(첫차 전·막차 후) 출발을 첫차 기준으로 바꿨으면 true. 열차 시각표가 없으면 항상 false", example = "false") boolean noService,
+            @Schema(description = "noService일 때 안내 문구. 아니면 null", example = "요청한 시각에는 이 경로를 운행하는 열차가 없어 첫차(11월 6일 05:36 출발) 기준으로 안내합니다.", types = {"string", "null"}) String serviceNotice) {}
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
     @Schema(name = "RouteCongestionData", requiredProperties = {"supported", "kind", "pct", "level", "levelLabel"})

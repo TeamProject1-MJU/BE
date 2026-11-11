@@ -5,6 +5,7 @@ import com.mju.linkro.user.domain.User;
 import com.mju.linkro.user.repository.UserRepository;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.*;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -328,6 +329,72 @@ class RouteSearchPostgresTest {
         operation.get("responses").propertyNames().forEach(codes::add);
         assertThat(codes).contains("200", "400", "401", "403", "404", "422");
         assertThat(root.get("components").get("schemas").get("RouteSearchData").toString()).contains("KAKAO", "INTERNAL");
+        assertThat(root.get("components").get("schemas").get("RouteSearchData").toString()).contains("appointmentPassed", "notice");
+        assertThat(root.get("components").get("schemas").get("RouteSummaryData").toString())
+                .contains("departureAt", "noService", "serviceNotice");
+    }
+
+    // ---- #120: no service on the real timetable (2026-11-12 Thursday, 2026-11-14 Saturday) ----
+
+    /** 강남 -> 사당 on 2호선 (Kakao fixture and INTERNAL): first trains from 강남 are 05:36:00 weekdays, 05:35:30 Saturdays. */
+    @Test void noServiceTimesMoveToTheFirstTrainOnBothRouteSources() throws Exception {
+        server.expect(ExpectedCount.manyTimes(), requestTo(startsWith(URL))).andRespond(withSuccess(KAKAO_OK, MediaType.APPLICATION_JSON));
+        String[][] cases = {
+                {"2026-11-12T03:00:00+09:00", "2026-11-12T05:36:00+09:00", "11월 12일 05:36"},
+                {"2026-11-12T05:00:00+09:00", "2026-11-12T05:36:00+09:00", "11월 12일 05:36"},
+                // Saturday 01:30 is after Friday's last train: Saturday's first train.
+                {"2026-11-14T01:30:00+09:00", "2026-11-14T05:35:30+09:00", "11월 14일 05:35"}};
+        for (String[] c : cases) {
+            JsonNode data = ok(search(gangnam, sadang, c[0], null), member);
+            assertThat(data.get("routeSource").asString()).isEqualTo("KAKAO");
+            assertNoService(data, c[1], c[2]);
+        }
+        useKakao("", Duration.ofSeconds(3), Duration.ofSeconds(5));
+        for (String[] c : cases) {
+            JsonNode data = ok(search(gangnam, sadang, c[0], null), member);
+            assertThat(data.get("routeSource").asString()).isEqualTo("INTERNAL");
+            assertNoService(data, c[1], c[2]);
+        }
+    }
+
+    private static void assertNoService(JsonNode data, String departureAt, String firstTrain) {
+        JsonNode summary = data.get("routes").get(0).get("summary");
+        assertThat(summary.get("noService").asBoolean()).as(departureAt).isTrue();
+        assertThat(summary.get("departureAt").asString()).isEqualTo(departureAt);
+        assertThat(OffsetDateTime.parse(summary.get("arrivalAt").asString()))
+                .isEqualTo(OffsetDateTime.parse(departureAt).plusSeconds(summary.get("totalTimeSec").asInt()));
+        assertThat(summary.get("serviceNotice").asString()).contains("첫차(" + firstTrain + " 출발)");
+        assertThat(data.get("appointmentPassed").asBoolean()).isFalse();
+        assertThat(data.get("notice").isNull()).isTrue();
+    }
+
+    @Test void runningHoursKeepTheRequestedDeparture() throws Exception {
+        server.expect(ExpectedCount.manyTimes(), requestTo(startsWith(URL))).andRespond(withSuccess(KAKAO_OK, MediaType.APPLICATION_JSON));
+        for (boolean internal : new boolean[] {false, true}) {
+            if (internal) useKakao("", Duration.ofSeconds(3), Duration.ofSeconds(5));
+            for (String departAt : List.of("2026-11-12T14:00:00+09:00", "2026-11-12T23:30:00+09:00")) {
+                JsonNode data = ok(search(gangnam, sadang, departAt, null), member);
+                JsonNode summary = data.get("routes").get(0).get("summary");
+                assertThat(summary.get("noService").asBoolean()).as(departAt).isFalse();
+                assertThat(summary.get("serviceNotice").isNull()).isTrue();
+                assertThat(summary.get("departureAt").asString()).isEqualTo(departAt);
+                assertThat(OffsetDateTime.parse(summary.get("arrivalAt").asString()))
+                        .isEqualTo(OffsetDateTime.parse(departAt).plusSeconds(summary.get("totalTimeSec").asInt()));
+                assertThat(data.get("appointmentPassed").asBoolean()).isFalse();
+                assertThat(data.get("notice").isNull()).isTrue();
+            }
+        }
+    }
+
+    @Test void aPassedAppointmentIsReportedAndDepartAtIgnored() throws Exception {
+        String room = createRoom(member, "2020-01-01T00:00:00Z");
+        server.expect(ExpectedCount.once(), requestTo(startsWith(URL))).andRespond(withSuccess(KAKAO_OK, MediaType.APPLICATION_JSON));
+
+        JsonNode data = ok(search(gangnam, sadang, "2026-11-12T14:00:00+09:00", room), member);
+
+        assertThat(data.get("appointmentPassed").asBoolean()).isTrue();
+        assertThat(data.get("notice").asString()).isEqualTo("약속 시각이 이미 지나 지금 출발 기준으로 안내합니다.");
+        assertThat(data.get("routes").get(0).get("summary").get("departureAt").asString()).isNotEqualTo("2026-11-12T14:00:00+09:00");
     }
 
     // ---- helpers ----

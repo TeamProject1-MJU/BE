@@ -29,7 +29,11 @@ public class RouteController {
     @PostMapping("/routes/search")
     @Operation(summary = "지하철 경로 검색", description = "카카오 대중교통 길찾기의 지하철 경로(버스 포함 경로 제외)에 우리 DB 혼잡도를 붙입니다. "
             + "카카오 키 없음·호출 실패(3초×재시도 1회, 전체 5초)·지하철 경로 없음·역 매칭 실패면 내부 다익스트라 경로(routeSource=INTERNAL, fareSource=ESTIMATED)로 대체합니다. "
-            + "roomId를 보내면 방 멤버를 확인하고, 약속 시각이 있으면 약속 시각 − 소요시간을 혼잡도 기준 출발 시각으로 씁니다.",
+            + "roomId를 보내면 방 멤버를 확인하고, 약속 시각이 있으면 약속 시각 − 소요시간을 혼잡도 기준 출발 시각으로 씁니다. "
+            + "약속 시각 자체가 지났으면 요청 시각 기준이고 appointmentPassed=true와 notice로 알립니다. "
+            + "열차 시각표가 있으면 경로마다 출발 시각에 그 경로를 운행하는 열차가 있는지 시각표로 대조하고, 첫차 전·막차 후라 없으면 "
+            + "출발(departureAt)과 도착(arrivalAt = departureAt + totalTimeSec)을 첫차 기준으로 바꾸고 noService=true와 serviceNotice로 알립니다. "
+            + "경로·요금·소요시간은 바꾸지 않습니다.",
             requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true,
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = RouteSearchRequest.class),
                             examples = { @ExampleObject(name = "혼자 이동", value = "{\"originStationId\":31,\"destinationStationId\":35}"),
