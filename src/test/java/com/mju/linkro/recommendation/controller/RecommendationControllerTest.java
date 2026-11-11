@@ -141,6 +141,14 @@ class RecommendationControllerTest {
     }
 
     @Test
+    void aPastAppointmentIsA422WithItsMessage() throws Exception {
+        when(service.create(any(), any(), any())).thenThrow(new BusinessException(ErrorCode.APPOINTMENT_PASSED));
+        mvc.perform(auth(post(base))).andExpect(status().isUnprocessableContent())
+                .andExpect(content().json("{\"success\":false,\"error\":{\"code\":\"APPOINTMENT_PASSED\","
+                        + "\"message\":\"약속 시각이 이미 지났습니다. 약속 시간을 다시 설정해 주세요.\"}}"));
+    }
+
+    @Test
     void latestWithoutARunIsDataNull() throws Exception {
         when(service.latest(user.getId(), roomId)).thenReturn(null);
         mvc.perform(auth(get(base + "/latest"))).andExpect(status().isOk())

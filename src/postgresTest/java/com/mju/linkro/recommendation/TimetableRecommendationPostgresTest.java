@@ -45,6 +45,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * make leave the stations out.
  */
 @Testcontainers
+@org.springframework.context.annotation.Import(FixedRecommendationClock.class)
 @SpringBootTest(properties = {
         "spring.config.import=", "spring.jpa.hibernate.ddl-auto=validate", "spring.jpa.open-in-view=false",
         "spring.jpa.show-sql=false", "auth.kakao.app-id=1234", "auth.jwt.access-token-ttl=15m",
@@ -258,6 +259,17 @@ class TimetableRecommendationPostgresTest {
                 assertThat(service.create(users[1], users[0], null).runId()).as("%s", appointment).isNotNull();
             }
         });
+    }
+
+    @Test
+    void aPastAppointmentIsRefusedBeforeTheNoServiceCheck() {
+        // Tuesday 04:00 (a NO_SERVICE_TIME hour) is before the fixed "now" (Wednesday 09:00): APPOINTMENT_PASSED comes first.
+        UUID[] users = room(at(THURSDAY.minusDays(2), 4, 0), "강남", "사당");
+        assertThatThrownBy(() -> service.create(users[1], users[0], null)).isInstanceOfSatisfying(BusinessException.class, exception -> {
+            assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.APPOINTMENT_PASSED);
+            assertThat(exception.getErrorCode().getStatus().value()).isEqualTo(422);
+        });
+        assertThat(jdbc.queryForObject("select count(*) from recommendation_runs where room_id = ?", Integer.class, users[0])).isZero();
     }
 
     @Test

@@ -44,6 +44,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -84,9 +85,10 @@ public class RecommendationService {
     public RecommendationService(RoomAccess rooms, RoomReadRepository roomReads, RecommendationRepository repository,
                                  ConstraintResolver constraints, RecommendationEngine engine, ExplanationWriter explanations,
                                  StationLookup stations, CongestionLookup congestion, ApplicationEventPublisher events,
-                                 RecommendationInFlightGuard inFlight, JsonMapper json) {
+                                 RecommendationInFlightGuard inFlight, JsonMapper json, ObjectProvider<Clock> clock) {
+        // No Clock bean in the application: the system clock. Tests may provide one to fix "now".
         this(rooms, roomReads, repository, constraints, engine, explanations, stations, congestion, events, inFlight, json,
-                Clock.systemUTC());
+                clock.getIfAvailable(Clock::systemUTC));
     }
 
     RecommendationService(RoomAccess rooms, RoomReadRepository roomReads, RecommendationRepository repository,
@@ -128,6 +130,13 @@ public class RecommendationService {
                 .map(row -> new Member(row.userId(), row.nickname(), row.stationId())).toList();
         // No train of any line arrives in the window before the appointment (default 60 min, e.g. 04:00): refuse before
         // the AI call and save nothing.
+        // An appointment already past cannot be planned (#100); compared in whole seconds, so "now" itself is allowed.
+        // Before the in-flight guard: refused requests hold nothing, call no AI and save no run.
+        Instant appointment = room.getAppointmentAt();
+        if (appointment != null && appointment.truncatedTo(ChronoUnit.SECONDS)
+                .isBefore(clock.instant().truncatedTo(ChronoUnit.SECONDS))) {
+            throw new BusinessException(ErrorCode.APPOINTMENT_PASSED);
+        }
         if (engine.noServiceBefore(room.getAppointmentAt())) {
             throw new BusinessException(ErrorCode.NO_SERVICE_TIME);
         }
