@@ -68,7 +68,7 @@ API 명세 v1.12 10.1(#27), 10.2(#28), 상세설계서 3.3.4, ERD v1.13 `room_me
 
 모든 메시지(USER, AI, SYSTEM)는 저장·커밋 뒤에 `MessageCreatedEvent(roomId, message)`를 Spring `ApplicationEventPublisher`로 발행해요. WebSocket `MESSAGE_CREATED`(11장, payload = 메시지 객체)는 #42/#43의 리스너가 이 이벤트를 받아 보내요. 이 모듈은 STOMP를 몰라요. 리스너 예외는 로그만 남기고 저장·응답에 영향을 주지 않아요. 바깥 트랜잭션 안에서 저장한 메시지는 그 트랜잭션이 커밋될 때만 발행해요.
 
-**#42/#43 전까지:** 실시간 연결(STOMP)이 아직 없어서 이벤트가 앱까지 가지 않아요. 그동안 앱은 메시지 목록 조회(10.2)를 다시 불러야 새 메시지와 AI 답변이 보여요.
+**실시간 전달:** 이벤트는 STOMP `/topic/rooms/{roomId}`로 나가요(#42, #43, [docs/stomp-42-43.md](stomp-42-43.md)). 연결이 끊겼다 다시 이어지면 놓친 메시지는 메시지 목록 조회(10.2)로 채워야 해요.
 
 ## 알려진 한계
 

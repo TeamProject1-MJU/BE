@@ -35,7 +35,7 @@ public class ChatController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     @Operation(summary = "채팅 전송 (10.1, #27)", description = "멤버만 보낼 수 있어요. 멤버 확인 후 본문(1~1000자)을 검사하고, 저장한 메시지를 바로 돌려줘요. "
-            + "@링크로가 있으면 aiPending:true이고 AI 답변은 비동기로 만들어 MESSAGE_CREATED 이벤트로 나가요. AI가 실패해도 보낸 메시지는 남고 SYSTEM 안내 메시지가 대신 나가요. 실시간 연결(#42/#43)이 아직 없어서 지금은 앱으로 바로 오지 않아요. 그 전까지는 메시지 목록 조회(GET .../messages)를 다시 불러서 확인해야 해요.",
+            + "@링크로가 있으면 aiPending:true이고 AI 답변은 비동기로 만들어 MESSAGE_CREATED 이벤트로 나가요. AI가 실패해도 보낸 메시지는 남고 SYSTEM 안내 메시지가 대신 나가요.",
             requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true, content = @Content(mediaType = "application/json", schema = @Schema(implementation = ChatMessageRequest.class), examples = @ExampleObject(value = "{\"content\":\"@링크로 사당역에서 갈만한 곳 알려줘\"}"))))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "저장됨", content = @Content(mediaType = "application/json", schema = @Schema(implementation = SentEnvelope.class), examples = @ExampleObject(value = "{\"success\":true,\"data\":{\"message\":{\"id\":\"0192f3c1-0000-7000-8000-000000000001\",\"senderType\":\"USER\",\"senderId\":\"0192f3a4-7b1c-7c3e-9a10-5d2e8f6b1a01\",\"nickname\":\"민지\",\"content\":\"@링크로 사당역에서 갈만한 곳 알려줘\",\"createdAt\":\"2026-11-11T11:00:00Z\",\"meta\":null},\"aiPending\":true}}")))
     public ApiResponse<Sent> send(@CurrentUser UUID userId, @PathVariable UUID roomId, @RequestBody ChatMessageRequest request) {
