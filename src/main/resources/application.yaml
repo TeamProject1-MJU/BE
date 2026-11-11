@@ -100,6 +100,7 @@ linkro:
       connect-timeout: ${OPENAI_CONNECT_TIMEOUT:2s}
       read-timeout: ${OPENAI_READ_TIMEOUT:8s}
       vision-read-timeout: ${OPENAI_VISION_READ_TIMEOUT:4s}
+      vision-reasoning-effort: ${OPENAI_VISION_REASONING_EFFORT:}
       explain-read-timeout: ${OPENAI_EXPLAIN_READ_TIMEOUT:6s}
 
 # Recommendation (#74, API 8.1). Tie tolerances ("허용 폭") with their defaults; see docs/recommendation-74.md.

@@ -82,6 +82,28 @@ class OpenAiClientTest {
     }
 
     @Test
+    void visionReasoningEffortIsSentOnlyWhenConfiguredAndOnlyForSigns() {
+        String ok = response("{\\\"result\\\":\\\"RETAKE\\\",\\\"reason\\\":\\\"UNREADABLE\\\","
+                + "\\\"stationName\\\":null,\\\"lineName\\\":null,\\\"headsign\\\":null}");
+        var ctx = new SignContext("강남", "2호선", null, "사당 방면");
+        var image = new SignImage(new byte[] {1}, "image/jpeg");
+
+        server.expect(requestTo(URL)).andExpect(jsonPath("$.reasoning").doesNotExist())
+                .andRespond(withSuccess(ok, MediaType.APPLICATION_JSON));
+        client.readSign(image, ctx);
+        server.verify();
+
+        var builder = RestClient.builder().baseUrl("https://api.openai.test");
+        var configuredServer = MockRestServiceServer.bindTo(builder).build();
+        RestClient restClient = builder.build();
+        var configured = new OpenAiClient(restClient, restClient, restClient, "test-dummy", "test-model", " low ");
+        configuredServer.expect(requestTo(URL)).andExpect(jsonPath("$.reasoning.effort").value("low"))
+                .andRespond(withSuccess(ok, MediaType.APPLICATION_JSON));
+        configured.readSign(image, ctx);
+        configuredServer.verify();
+    }
+
+    @Test
     void readSignWithInconsistentResultMapsToAiUnavailable() {
         server.expect(requestTo(URL)).andRespond(withSuccess(response("{\\\"result\\\":\\\"CORRECT\\\",\\\"reason\\\":\\\"UNREADABLE\\\","
                 + "\\\"stationName\\\":null,\\\"lineName\\\":null,\\\"headsign\\\":null}"), MediaType.APPLICATION_JSON));

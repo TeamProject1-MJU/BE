@@ -30,6 +30,8 @@ public class OpenAiProperties {
     private Duration readTimeout = Duration.ofSeconds(8);
     @NotNull
     private Duration visionReadTimeout = Duration.ofSeconds(4);
+    /** Sign reads only (OPENAI_VISION_REASONING_EFFORT, e.g. none/low). Blank sends no reasoning setting. */
+    private String visionReasoningEffort;
     /** explainRecommendation only (#99): past it the recommendation uses template sentences. */
     @NotNull
     private Duration explainReadTimeout = Duration.ofSeconds(6);
