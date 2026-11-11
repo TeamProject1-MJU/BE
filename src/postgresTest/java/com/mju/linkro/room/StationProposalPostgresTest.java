@@ -1,5 +1,6 @@
 package com.mju.linkro.room;
 
+import com.mju.linkro.auth.jwt.JwtProvider;
 import com.mju.linkro.common.exception.*;
 import com.mju.linkro.room.domain.*;
 import com.mju.linkro.room.dto.*;
@@ -18,6 +19,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.*;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.*;
@@ -25,6 +29,9 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import tools.jackson.databind.json.JsonMapper;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @Testcontainers
 @SpringBootTest(properties = {
@@ -40,6 +47,11 @@ class StationProposalPostgresTest {
         registry.add("spring.datasource.password",POSTGRES::getPassword);
     }
     @Autowired StationProposalService service;
+    @Autowired ProposalVoteService voting;
+    @Autowired WebApplicationContext context;
+    @Autowired JwtProvider jwt;
+    MockMvc mvc;
+
     @Autowired RoomCreationAttempt creation;
     @Autowired RoomLeaveService leaving;
     @Autowired SelectedStationService selection;
@@ -54,6 +66,8 @@ class StationProposalPostgresTest {
     List<Long> stations;
     final JsonMapper mapper=JsonMapper.builder().build();
     @BeforeEach void setup() {
+        mvc=MockMvcBuilders.webAppContextSetup(context)
+            .apply(springSecurity()).build();
         jdbc.update("delete from meeting_rooms"); jdbc.update("delete from refresh_tokens"); jdbc.update("delete from users");
         owner=users.saveAndFlush(new User("owner","방장")).getId();
         member=users.saveAndFlush(new User("member","제안자")).getId();
@@ -89,6 +103,124 @@ class StationProposalPostgresTest {
             return results;
         } finally { start.countDown(); pool.shutdownNow(); assertThat(pool.awaitTermination(10,TimeUnit.SECONDS)).isTrue(); }
     }
+    int voteHttp(UUID user, UUID targetRoom, UUID proposal) throws Exception {
+        return mvc.perform(put("/api/v1/rooms/"+targetRoom+"/station-proposals/"+proposal+"/vote")
+            .header("Authorization","Bearer "+jwt.createAccessToken(user))).andReturn().getResponse().getStatus();
+    }
+    long votes() { return jdbc.queryForObject("select count(*) from station_proposal_votes where room_id=?",Long.class,room); }
+    void assertVote(UUID user, UUID proposal) {
+        assertThat(jdbc.queryForList("select proposal_id from station_proposal_votes where room_id=? and user_id=?",UUID.class,room,user))
+            .containsExactly(proposal);
+    }
+    List<Integer> concurrentVotes(List<UUID> voters,List<UUID> candidates) throws Exception {
+        // Three short transactions at most; no artificial lock hold in success tests.
+        var pool=Executors.newFixedThreadPool(voters.size());
+        var ready=new CountDownLatch(voters.size()); var start=new CountDownLatch(1);
+        try {
+            var futures=new ArrayList<Future<Integer>>();
+            for(int i=0;i<voters.size();i++) {
+                UUID voter=voters.get(i), candidate=candidates.get(i);
+                futures.add(pool.submit(()->{ ready.countDown(); assertThat(start.await(10,TimeUnit.SECONDS)).isTrue();
+                    return voteHttp(voter,room,candidate); }));
+            }
+            assertThat(ready.await(10,TimeUnit.SECONDS)).isTrue(); start.countDown();
+            var statuses=new ArrayList<Integer>();
+            for(var f:futures) statuses.add(f.get(15,TimeUnit.SECONDS));
+            return statuses;
+        } finally { start.countDown(); pool.shutdownNow(); assertThat(pool.awaitTermination(10,TimeUnit.SECONDS)).isTrue(); }
+    }
+    @Test void sameVoterSameCandidateConcurrentHttpIsIdempotent() throws Exception {
+        var p=service.create(room,member,request(stations.get(0))).id();
+        assertThat(concurrentVotes(List.of(member,member),List.of(p,p))).containsExactly(200,200);
+        assertThat(votes()).isEqualTo(1); assertVote(member,p);
+        assertThat(service.list(room,member).items().get(0).voteCount()).isEqualTo(1);
+        assertThat(service.list(room,member).items().get(0).votedByMe()).isTrue();
+    }
+    @Test void sameVoterDifferentCandidatesConcurrentHttpPreservesWinner() throws Exception {
+        var p=service.create(room,member,request(stations.get(0))).id();
+        var q=service.create(room,owner,request(stations.get(1))).id();
+        assertThat(concurrentVotes(List.of(member,member),List.of(p,q))).containsExactlyInAnyOrder(200,409);
+        assertThat(votes()).isEqualTo(1);
+        UUID winner=proposals.voteByUser(room,member).orElseThrow(), loser=winner.equals(p)?q:p;
+        assertThat(voteHttp(member,room,loser)).isEqualTo(409); assertVote(member,winner);
+        assertThat(proposals.voteState(room,winner,member).voteCount()).isEqualTo(1);
+        assertThat(proposals.voteState(room,loser,member).voteCount()).isZero();
+    }
+    @Test void differentVotersConcurrentHttpCountsAndListAgree() throws Exception {
+        var p=service.create(room,member,request(stations.get(0))).id();
+        assertThat(concurrentVotes(List.of(owner,member,other),List.of(p,p,p))).containsOnly(200).hasSize(3);
+        assertThat(votes()).isEqualTo(3);
+        for(var user:List.of(owner,member,other)) {
+            assertVote(user,p);
+            var response=voting.vote(room,user,p); var item=service.list(room,user).items().get(0);
+            assertThat(response.voteCount()).isEqualTo(3).isEqualTo(item.voteCount());
+            assertThat(response.votedByMe()).isTrue().isEqualTo(item.votedByMe());
+            mvc.perform(get("/api/v1/rooms/"+room+"/station-proposals")
+                .header("Authorization","Bearer "+jwt.createAccessToken(user)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].voteCount").value(3))
+                .andExpect(jsonPath("$.data.items[0].votedByMe").value(true));
+        }
+    }
+    @Test void votingBeforeAndAfterConfirmationPreservesSelectionAndScopesCandidates() throws Exception {
+        var p=service.create(room,owner,request(stations.get(0))).id();
+        assertThat(voteHttp(owner,room,p)).isEqualTo(200);
+        assertThat(jdbc.queryForMap("select selected_station_id,confirmed_at from meeting_rooms where id=?",room))
+            .containsEntry("selected_station_id",null).containsEntry("confirmed_at",null);
+        selection.select(room,owner,mapper.readValue("{\"stationId\":"+stations.get(1)+"}",SelectedStationRequest.class));
+        var before=jdbc.queryForMap("select selected_station_id,confirmed_at from meeting_rooms where id=?",room);
+        assertThat(voteHttp(member,room,p)).isEqualTo(200);
+        assertThat(jdbc.queryForMap("select selected_station_id,confirmed_at from meeting_rooms where id=?",room)).isEqualTo(before);
+        UUID another=creation.create(owner,"V00002","other",null).id();
+        var foreign=service.create(another,owner,request(stations.get(0))).id();
+        assertThat(voteHttp(owner,room,foreign)).isEqualTo(404);
+        assertThat(voteHttp(owner,room,UUID.randomUUID())).isEqualTo(404);
+        assertThat(voteHttp(member,another,foreign)).isEqualTo(403);
+        assertThat(voteHttp(owner,UUID.randomUUID(),p)).isEqualTo(404);
+        assertThat(votes()).isEqualTo(2); assertVote(owner,p); assertVote(member,p);
+    }
+    @Test void deletionLeaveWithdrawalAndRoomCascadeVotes() {
+        var p=service.create(room,member,request(stations.get(0))).id();
+        var q=service.create(room,owner,request(stations.get(1))).id();
+        voting.vote(room,member,p); service.delete(room,member,p);
+        assertThat(votes()).isZero(); voting.vote(room,member,q); assertVote(member,q);
+        voting.vote(room,other,q); voting.vote(room,owner,q);
+        leaving.leave(room,member);
+        assertThat(votes()).isEqualTo(2); assertThat(proposals.voteState(room,q,owner).voteCount()).isEqualTo(2);
+        assertThat(members.findByRoomIdAndUserId(room,member)).isEmpty();
+        userService.withdraw(other);
+        assertThat(votes()).isEqualTo(1); assertThat(proposals.voteState(room,q,owner).voteCount()).isEqualTo(1);
+        assertThat(members.findByRoomIdAndUserId(room,other)).isEmpty();
+        leaving.leave(room,owner); assertThat(votes()).isZero();
+    }
+    @Test void uniqueViolationRollsBackThenRecoversInNewTransaction() {
+        var p=service.create(room,member,request(stations.get(0))).id();
+        var q=service.create(room,owner,request(stations.get(1))).id();
+        voting.vote(room,member,p);
+        doReturn(Optional.empty(),Optional.of(p)).when(proposals).voteByUser(room,member);
+        assertThat(voting.vote(room,member,p).voteCount()).isEqualTo(1);
+        doReturn(Optional.empty(),Optional.of(p)).when(proposals).voteByUser(room,member);
+        error(()->voting.vote(room,member,q),ErrorCode.ALREADY_VOTED);
+        assertThat(votes()).isEqualTo(1); assertVote(member,p);
+        assertThat(proposals.voteState(room,q,member).voteCount()).isZero();
+    }
+    @Test void voteHttpLockTimeoutIsRoomBusyAndWritesNothing() throws Exception {
+        var p=service.create(room,member,request(stations.get(0))).id();
+        try(var connection=java.sql.DriverManager.getConnection(POSTGRES.getJdbcUrl(),POSTGRES.getUsername(),POSTGRES.getPassword())) {
+            connection.setAutoCommit(false);
+            try(var statement=connection.prepareStatement("select id from meeting_rooms where id=? for update")) {
+                statement.setObject(1,room); statement.executeQuery().close();
+            }
+            try {
+                mvc.perform(put("/api/v1/rooms/"+room+"/station-proposals/"+p+"/vote")
+                    .header("Authorization","Bearer "+jwt.createAccessToken(member)))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.error.code").value("ROOM_BUSY"));
+                assertThat(votes()).isZero();
+            } finally { connection.rollback(); }
+        }
+    }
+
     @Test void twelveDistinctConcurrentProposalsHaveExactlyNineSuccesses() throws Exception {
         var results=concurrent(false);
         assertThat(Collections.frequency(results,"OK")).isEqualTo(9);

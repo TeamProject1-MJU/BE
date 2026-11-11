@@ -57,6 +57,27 @@ class StationProposalHttpTest {
     MockHttpServletRequestBuilder auth(MockHttpServletRequestBuilder request) {
         return request.header("Authorization","Bearer "+jwt.createAccessToken(user));
     }
+    @Test void voteFirstIdempotentConflictAndErrorEnvelopes() throws Exception {
+        when(proposals.voteByUser(room,user)).thenReturn(Optional.empty());
+        when(proposals.voteState(room,id,user)).thenReturn(new Vote(id,1,true));
+        mvc.perform(auth(put(path+"/"+id+"/vote"))).andExpect(status().isOk())
+            .andExpect(content().json("{\"success\":true,\"data\":{\"proposalId\":\""+id+"\",\"voteCount\":1,\"votedByMe\":true}}",org.springframework.test.json.JsonCompareMode.STRICT));
+        when(proposals.voteByUser(room,user)).thenReturn(Optional.of(id));
+        mvc.perform(auth(put(path+"/"+id+"/vote"))).andExpect(status().isOk())
+            .andExpect(jsonPath("$.data.voteCount").value(1)).andExpect(jsonPath("$.data.votedByMe").value(true));
+        verify(proposals,times(1)).insertVote(any(),eq(room),eq(id),eq(user));
+        when(proposals.voteByUser(room,user)).thenReturn(Optional.of(UUID.randomUUID()));
+        failure(put(path+"/"+id+"/vote"),ErrorCode.ALREADY_VOTED);
+        when(proposals.author(room,id)).thenReturn(Optional.empty());
+        failure(put(path+"/"+id+"/vote"),ErrorCode.PROPOSAL_NOT_FOUND);
+        for(var code:List.of(ErrorCode.ROOM_NOT_FOUND,ErrorCode.NOT_ROOM_MEMBER,ErrorCode.ROOM_BUSY)) {
+            doThrow(new BusinessException(code)).when(access).lockMember(room,user);
+            failure(put(path+"/"+id+"/vote"),code);
+        }
+        mvc.perform(put(path+"/"+id+"/vote")).andExpect(status().isUnauthorized());
+        failure(put("/api/v1/rooms/bad/station-proposals/"+id+"/vote"),ErrorCode.VALIDATION_ERROR);
+    }
+
     @Test void directResultListAndDeleteEnvelopes() throws Exception {
         for(String suffix:List.of("",",\"resultId\":\""+result+"\"")) {
             mvc.perform(auth(post(path).contentType("application/json").content("{\"stationId\":112"+suffix+"}")))
@@ -134,5 +155,11 @@ class StationProposalHttpTest {
         var deletion=root.at("/paths/~1api~1v1~1rooms~1{roomId}~1station-proposals~1{proposalId}/delete");
         assertThat(deletion.at("/responses/200/content/application~1json/example/data").isNull()).isTrue();
         assertThat(deletion.at("/responses/403/content/application~1json/examples/NOT_PROPOSAL_OWNER/value/error/code").asString()).isEqualTo("NOT_PROPOSAL_OWNER");
+        var vote=root.at("/paths/~1api~1v1~1rooms~1{roomId}~1station-proposals~1{proposalId}~1vote/put");
+        assertThat(vote.has("requestBody")).isFalse();
+        assertThat(vote.at("/responses/200/content/application~1json/schema/$ref").asString()).endsWith("VoteEnvelope");
+        for(var code:List.of(ErrorCode.ROOM_NOT_FOUND,ErrorCode.PROPOSAL_NOT_FOUND,ErrorCode.NOT_ROOM_MEMBER,
+                ErrorCode.ROOM_BUSY,ErrorCode.ALREADY_VOTED))
+            assertThat(vote.at("/responses/"+code.getStatus().value()+"/content/application~1json/examples/"+code.name()+"/value/error/code").asString()).isEqualTo(code.name());
     }
 }

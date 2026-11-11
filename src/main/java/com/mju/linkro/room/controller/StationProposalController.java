@@ -5,6 +5,7 @@ import com.mju.linkro.common.config.*;
 import com.mju.linkro.common.response.ApiResponse;
 import com.mju.linkro.room.dto.StationProposalRequest;
 import com.mju.linkro.room.dto.StationProposalResponses.*;
+import com.mju.linkro.room.service.ProposalVoteService;
 import com.mju.linkro.room.service.StationProposalService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.*;
@@ -26,6 +27,17 @@ import org.springframework.web.bind.annotation.*;
 })
 public class StationProposalController {
     private final StationProposalService service;
+    private final ProposalVoteService votes;
+
+    @PutMapping("/{proposalId}/vote")
+    @Operation(summary = "약속역 후보 참고용 투표 (7.17)", description = "방 전체에서 1표이며 같은 후보 재요청은 멱등이에요. 요청 본문은 없어요.")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "현재 투표 상태", content = @Content(mediaType = "application/json", schema = @Schema(implementation = VoteEnvelope.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "NOT_ROOM_MEMBER", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "ROOM_NOT_FOUND / PROPOSAL_NOT_FOUND", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "ROOM_BUSY / ALREADY_VOTED", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
+    public ApiResponse<Vote> vote(@CurrentUser UUID userId, @PathVariable UUID roomId, @PathVariable UUID proposalId) {
+        return ApiResponse.success(votes.vote(roomId, userId, proposalId));
+    }
 
     @PostMapping
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "NOT_ROOM_MEMBER", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
