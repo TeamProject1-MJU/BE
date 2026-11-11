@@ -94,3 +94,4 @@ linkro:
 # Recommendation (#74, API 8.1). Tie tolerances ("허용 폭") with their defaults; see docs/recommendation-74.md.
 #   linkro.recommendation.fare-tolerance-won: 100       FARE: within this of the cheapest counts as a tie (TIME rule decides)
 #   linkro.recommendation.distance-tolerance-m: 1000    DISTANCE: within this of the shortest counts as a tie
+#   linkro.recommendation.in-progress-max-seconds: 60   one calculation per room at a time; a hold older than this is taken over (#98)

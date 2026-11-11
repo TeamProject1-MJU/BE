@@ -7,13 +7,30 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
 1. `RoomAccess.requireMember`로 방 멤버 확인(ROOM_NOT_FOUND 404 / NOT_ROOM_MEMBER 403).
 2. 요청 검사(`RecommendationRequest.validate`): 범위·`memberLimits.userId`가 방 멤버인지. 틀리면 VALIDATION_ERROR 400.
 3. 사전 검사(계산 전, run을 남기지 않음): 멤버 2명 미만 `TOO_FEW_MEMBERS`(422) → 출발역 없는 멤버가 있으면 `DEPARTURE_MISSING`(422, `error.details.missingUserIds`) → 약속 시각 직전 60분(설정값) 안에 도착하는 열차가 전 노선에 하나도 없으면 `NO_SERVICE_TIME`(422, #96, 아래 "운행하지 않는 시간대").
-4. `ConstraintResolver`: `conditionText`가 있으면 `AiClient.interpretCondition` 1회. 서버가 범위를 검증하고 역 이름→stationId(`stations.name`, 끝의 "역" 무시, 같은 이름의 역이 여럿이면 버림), 닉네임→userId(방 멤버, 중복 닉네임이면 버림)로 매핑. 매핑 못 한 항목은 버리고 POST `message`에 알린다. 같은 항목이 `filter`에도 있으면 filter 값이 우선(항목 단위). AI 실패(어떤 예외든)는 filter만 적용하고 `conditionParseFailed=true`.
-5. `RecommendationEngine`: 이동 시간은 열차 시각표로 계산한다(#96, 아래 "열차 시각표 기반 이동 시간"). 시각표가 없을 때만 참여자당 `shortestPathsFrom` 1회(고정 소요시간)이고, 전원이 도달 가능한 역 = 후보. 방 멤버의 출발역은 후보에서 뺀다(어느 기준으로도 추천하지 않고, nearbyAlternatives에도 넣지 않는다). 이 출발역 제외는 서버 규칙이라 `appliedConstraints.excludeStationIds`에는 넣지 않는다. 그 필드는 사용자가 조건으로 뺀 역만 담는다(명세 v1.12 §8.1). 제약(참여자 **한 명당** 최대 시간·환승·요금, 개인별 한도, 제외 역)을 모두 통과한 역만 남긴다. 요금은 `FareCalculator.fareOf`(경로 API와 같은 `GraphFareCalculator`)로 계산한다.
-6. 기준별 최적역(TIME / FARE / DISTANCE, 명세 8.1 표). 허용 폭은 설정 `linkro.recommendation.fare-tolerance-won`(100), `distance-tolerance-m`(1000).
-7. 결과마다 `participantTimes`(혼잡도는 `CongestionLookup`, 출발 예정 시각은 TIMETABLE이면 첫 열차 출발 − 역 접근 시간, ESTIMATE면 약속 시각 − travelMinutes(약속이 없으면 요청 시각)), `nearbyAlternatives`(앞·뒤 한 정거장, 후보 집합에 있는 역만), 설명 문장.
-8. 설명: `AiClient.explainRecommendation`을 추천 1건당 **1회**만 호출한다(결과가 없으면 호출 없음). 요청에 모든 기준(`ExplanationRequest.items`: criterion, stationName, facts)을 담고, 응답(`ExplanationResult.texts`)은 기준별 문장이다. 기준마다 문장 안 숫자를 그 기준의 facts와 대조해서 다르거나 비었거나 빠졌으면 그 기준만 템플릿 + `explanationSource: TEMPLATE`, 호출 전체가 실패하면 모든 기준이 템플릿이다.
-9. `RecommendationRepository.save`가 run과 결과 행을 짧은 트랜잭션 하나로 저장. 계산·AI 호출은 트랜잭션 밖.
-10. 저장 뒤 `RecommendationCreatedEvent`를 Spring `ApplicationEventPublisher`로 발행(결과가 없는 run도). WebSocket `RECOMMENDATION_CREATED`는 이 이벤트를 듣는 쪽(11장)이 보낸다. 리스너 예외는 로그만 남기고 응답에 영향을 주지 않는다.
+4. **방 단위 동시 요청 보호(#98)**: 위 검사를 모두 통과한 뒤, 계산을 시작하기 직전에 `RecommendationInFlightGuard.tryAcquire(roomId)`를 건다. 아래 "동시 요청 보호" 참고.
+5. `ConstraintResolver`: `conditionText`가 있으면 `AiClient.interpretCondition` 1회. 서버가 범위를 검증하고 역 이름→stationId(`stations.name`, 끝의 "역" 무시, 같은 이름의 역이 여럿이면 버림), 닉네임→userId(방 멤버, 중복 닉네임이면 버림)로 매핑. 매핑 못 한 항목은 버리고 POST `message`에 알린다. 같은 항목이 `filter`에도 있으면 filter 값이 우선(항목 단위). AI 실패(어떤 예외든)는 filter만 적용하고 `conditionParseFailed=true`.
+6. `RecommendationEngine`: 이동 시간은 열차 시각표로 계산한다(#96, 아래 "열차 시각표 기반 이동 시간"). 시각표가 없을 때만 참여자당 `shortestPathsFrom` 1회(고정 소요시간)이고, 전원이 도달 가능한 역 = 후보. 방 멤버의 출발역은 후보에서 뺀다(어느 기준으로도 추천하지 않고, nearbyAlternatives에도 넣지 않는다). 이 출발역 제외는 서버 규칙이라 `appliedConstraints.excludeStationIds`에는 넣지 않는다. 그 필드는 사용자가 조건으로 뺀 역만 담는다(명세 v1.12 §8.1). 제약(참여자 **한 명당** 최대 시간·환승·요금, 개인별 한도, 제외 역)을 모두 통과한 역만 남긴다. 요금은 `FareCalculator.fareOf`(경로 API와 같은 `GraphFareCalculator`)로 계산한다.
+7. 기준별 최적역(TIME / FARE / DISTANCE, 명세 8.1 표). 허용 폭은 설정 `linkro.recommendation.fare-tolerance-won`(100), `distance-tolerance-m`(1000).
+8. 결과마다 `participantTimes`(혼잡도는 `CongestionLookup`, 출발 예정 시각은 TIMETABLE이면 첫 열차 출발 − 역 접근 시간, ESTIMATE면 약속 시각 − travelMinutes(약속이 없으면 요청 시각)), `nearbyAlternatives`(앞·뒤 한 정거장, 후보 집합에 있는 역만), 설명 문장.
+9. 설명: `AiClient.explainRecommendation`을 추천 1건당 **1회**만 호출한다(결과가 없으면 호출 없음). 요청에 모든 기준(`ExplanationRequest.items`: criterion, stationName, facts)을 담고, 응답(`ExplanationResult.texts`)은 기준별 문장이다. 기준마다 문장 안 숫자를 그 기준의 facts와 대조해서 다르거나 비었거나 빠졌으면 그 기준만 템플릿 + `explanationSource: TEMPLATE`, 호출 전체가 실패하면 모든 기준이 템플릿이다.
+10. `RecommendationRepository.save`가 run과 결과 행을 짧은 트랜잭션 하나로 저장. 계산·AI 호출은 트랜잭션 밖.
+11. 저장 뒤 `RecommendationCreatedEvent`를 Spring `ApplicationEventPublisher`로 발행(결과가 없는 run도). WebSocket `RECOMMENDATION_CREATED`는 이 이벤트를 듣는 쪽(11장)이 보낸다. 리스너 예외는 로그만 남기고 응답에 영향을 주지 않는다.
+
+## 동시 요청 보호 (#98)
+
+- **목적**: 같은 방에서 추천 생성이 진행 중이면 새 요청은 계산·AI 호출·저장 없이 거절한다. 연타나 여러 멤버가 동시에 눌러도 AI 호출과 run이 한 번만 생긴다.
+- **응답**: 409 `RECOMMENDATION_IN_PROGRESS`, "추천을 계산하는 중입니다. 잠시 후 다시 시도해 주세요."
+- **거는 위치**
+  - 방 멤버 확인, 요청 검사(400), `TOO_FEW_MEMBERS`, `DEPARTURE_MISSING`, `NO_SERVICE_TIME` 뒤에 건다.
+  - 조건 해석 AI·계산·설명 AI·저장·응답 조립 전체를 감싼다.
+  - 검사 실패는 가드를 점유하지 않는다.
+- **해제**
+  - `finally`에서 해제한다(성공, 비즈니스 예외, 런타임 예외 모두).
+  - 이벤트 발행 실패는 기존대로 `publish`가 로그만 남기므로 해제에 영향이 없다.
+- **최대 점유 시간**: 설정 `linkro.recommendation.in-progress-max-seconds`(기본 60, 양수)가 지나면 점유가 만료되고, 다음 요청이 가져간다(WARN 로그).
+  - 점유마다 고유 토큰이 있어서, 만료된 이전 요청이 늦게 해제해도 새 점유는 풀리지 않는다.
+- **조회 API**(`GET latest`, `GET {runId}`)는 가드와 관계없이 동작한다.
+- **한계**: 메모리(`ConcurrentHashMap`) 기반이라 서버 1대일 때만 보호된다. 서버가 여러 대가 되면 DB나 외부 락이 필요하다.
 
 ## 저장 (V6 그대로, 마이그레이션 없음)
 
@@ -135,6 +152,7 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
 
 | 프로퍼티 | 기본값 | 의미 |
 | --- | --- | --- |
+| `linkro.recommendation.in-progress-max-seconds` | 60 | 방 단위 추천 생성 가드의 최대 점유 시간(#98) |
 | `linkro.subway.timetable.enabled` | true | false면 시각표를 적재하지 않고 기존 고정 소요시간으로 계산한다(시연 직전 비상 복귀용) |
 | `linkro.subway.timetable.station-access-seconds` | 0 | 출발해서 첫 승강장에 서기까지. 역별 자료가 없어 0이다 |
 | `linkro.subway.timetable.no-service-window-minutes` | 60 | 약속 직전 이 시간 안에 도착하는 열차가 없으면 `NO_SERVICE_TIME`(양수여야 하며, 아니면 기동 실패) |

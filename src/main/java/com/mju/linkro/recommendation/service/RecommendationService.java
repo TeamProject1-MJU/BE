@@ -76,6 +76,7 @@ public class RecommendationService {
     private final StationLookup stations;
     private final CongestionLookup congestion;
     private final ApplicationEventPublisher events;
+    private final RecommendationInFlightGuard inFlight;
     private final JsonMapper json;
     private final Clock clock;
 
@@ -83,14 +84,15 @@ public class RecommendationService {
     public RecommendationService(RoomAccess rooms, RoomReadRepository roomReads, RecommendationRepository repository,
                                  ConstraintResolver constraints, RecommendationEngine engine, ExplanationWriter explanations,
                                  StationLookup stations, CongestionLookup congestion, ApplicationEventPublisher events,
-                                 JsonMapper json) {
-        this(rooms, roomReads, repository, constraints, engine, explanations, stations, congestion, events, json, Clock.systemUTC());
+                                 RecommendationInFlightGuard inFlight, JsonMapper json) {
+        this(rooms, roomReads, repository, constraints, engine, explanations, stations, congestion, events, inFlight, json,
+                Clock.systemUTC());
     }
 
     RecommendationService(RoomAccess rooms, RoomReadRepository roomReads, RecommendationRepository repository,
                           ConstraintResolver constraints, RecommendationEngine engine, ExplanationWriter explanations,
                           StationLookup stations, CongestionLookup congestion, ApplicationEventPublisher events,
-                          JsonMapper json, Clock clock) {
+                          RecommendationInFlightGuard inFlight, JsonMapper json, Clock clock) {
         this.rooms = rooms;
         this.roomReads = roomReads;
         this.repository = repository;
@@ -100,6 +102,7 @@ public class RecommendationService {
         this.stations = stations;
         this.congestion = congestion;
         this.events = events;
+        this.inFlight = inFlight;
         this.json = json;
         this.clock = clock;
     }
@@ -128,46 +131,53 @@ public class RecommendationService {
             throw new BusinessException(ErrorCode.NO_SERVICE_TIME);
         }
 
-        Resolved resolved = constraints.resolve(request, members);
-        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
-        Evaluation evaluation = engine.evaluate(members, resolved.applied(), room.getAppointmentAt(), now);
-        UUID runId = UuidCreator.getTimeOrderedEpoch();
-        // Everything is computed first, then one AI call explains all criteria of this recommendation.
-        record Drafted(Criterion criterion, Candidate best, StationInfo station, List<ParticipantTime> trips,
-                       List<NearbyAlternative> nearby, Facts facts) {}
-        List<Drafted> drafted = new ArrayList<>();
-        for (Criterion criterion : Criterion.values()) {
-            Optional<Candidate> best = evaluation.best(criterion);
-            if (best.isEmpty()) {
-                continue;
+        // All checks above passed: from here on one request per room calculates, calls the AI and saves (#98).
+        RecommendationInFlightGuard.Ticket ticket = inFlight.tryAcquire(roomId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.RECOMMENDATION_IN_PROGRESS));
+        try {
+            Resolved resolved = constraints.resolve(request, members);
+            Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+            Evaluation evaluation = engine.evaluate(members, resolved.applied(), room.getAppointmentAt(), now);
+            UUID runId = UuidCreator.getTimeOrderedEpoch();
+            // Everything is computed first, then one AI call explains all criteria of this recommendation.
+            record Drafted(Criterion criterion, Candidate best, StationInfo station, List<ParticipantTime> trips,
+                           List<NearbyAlternative> nearby, Facts facts) {}
+            List<Drafted> drafted = new ArrayList<>();
+            for (Criterion criterion : Criterion.values()) {
+                Optional<Candidate> best = evaluation.best(criterion);
+                if (best.isEmpty()) {
+                    continue;
+                }
+                StationInfo station = stations.require(best.get().stationId());
+                List<ParticipantTime> trips = participantTimes(best.get(), room.getAppointmentAt(), now);
+                drafted.add(new Drafted(criterion, best.get(), station, trips, nearby(best.get(), evaluation),
+                        facts(criterion, trips, best.get())));
             }
-            StationInfo station = stations.require(best.get().stationId());
-            List<ParticipantTime> trips = participantTimes(best.get(), room.getAppointmentAt(), now);
-            drafted.add(new Drafted(criterion, best.get(), station, trips, nearby(best.get(), evaluation),
-                    facts(criterion, trips, best.get())));
-        }
-        Map<Criterion, Explanation> explained = explanations.explain(
-                drafted.stream().map(item -> new ExplanationWriter.Item(item.facts(), item.station().name())).toList());
-        List<ResultRow> results = new ArrayList<>();
-        for (Drafted item : drafted) {
-            Explanation explanation = explained.get(item.criterion());
-            results.add(new ResultRow(UuidCreator.getTimeOrderedEpoch(), runId, item.criterion().name(), item.station().id(),
-                    metric(item.criterion(), item.best()), write(item.trips().stream().map(StoredTrip::of).toList()), write(item.nearby()),
-                    explanation.text(), explanation.source()));
-        }
+            Map<Criterion, Explanation> explained = explanations.explain(
+                    drafted.stream().map(item -> new ExplanationWriter.Item(item.facts(), item.station().name())).toList());
+            List<ResultRow> results = new ArrayList<>();
+            for (Drafted item : drafted) {
+                Explanation explanation = explained.get(item.criterion());
+                results.add(new ResultRow(UuidCreator.getTimeOrderedEpoch(), runId, item.criterion().name(), item.station().id(),
+                        metric(item.criterion(), item.best()), write(item.trips().stream().map(StoredTrip::of).toList()), write(item.nearby()),
+                        explanation.text(), explanation.source()));
+            }
 
-        RunCriteria criteria = new RunCriteria(request.text(), request.filter(), resolved.applied(),
-                resolved.parseFailed(), room.getAppointmentAt() == null ? null : room.getAppointmentAt().toString(),
-                rows.stream().map(row -> new RunCriteria.Participant(row.userId(), row.stationId())).toList(),
-                evaluation.unreachableByTrain());
-        RunRow run = new RunRow(runId, roomId, userId, write(criteria), now);
-        repository.save(run, results);
-        publish(new RecommendationCreatedEvent(roomId, runId, userId, now));
+            RunCriteria criteria = new RunCriteria(request.text(), request.filter(), resolved.applied(),
+                    resolved.parseFailed(), room.getAppointmentAt() == null ? null : room.getAppointmentAt().toString(),
+                    rows.stream().map(row -> new RunCriteria.Participant(row.userId(), row.stationId())).toList(),
+                    evaluation.unreachableByTrain());
+            RunRow run = new RunRow(runId, roomId, userId, write(criteria), now);
+            repository.save(run, results);
+            publish(new RecommendationCreatedEvent(roomId, runId, userId, now));
 
-        String dropped = resolved.dropped().isEmpty() ? null : "적용하지 못한 조건: " + String.join(", ", resolved.dropped()) + ".";
-        // The response is read back like GET does, so the stale fields come from the room as it is now.
-        MeetingRoom current = rooms.requireMember(roomId, userId);
-        return render(run, results, true, current, roomReads.members(List.of(roomId)), dropped);
+            String dropped = resolved.dropped().isEmpty() ? null : "적용하지 못한 조건: " + String.join(", ", resolved.dropped()) + ".";
+            // The response is read back like GET does, so the stale fields come from the room as it is now.
+            MeetingRoom current = rooms.requireMember(roomId, userId);
+            return render(run, results, true, current, roomReads.members(List.of(roomId)), dropped);
+        } finally {
+            inFlight.release(ticket);
+        }
     }
 
     /** API 8.2: the room's latest run, or null (data: null) when it has none. */

@@ -15,6 +15,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class RecommendationProperties {
     private int fareToleranceWon = 100;
     private int distanceToleranceM = 1_000;
+    /** Longest a recommendation calculation holds its room (#98) before the next request may take over. */
+    private int inProgressMaxSeconds = 60;
 
     public RecommendationProperties() {}
 
