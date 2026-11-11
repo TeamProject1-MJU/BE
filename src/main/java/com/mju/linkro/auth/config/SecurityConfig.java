@@ -35,6 +35,8 @@ public class SecurityConfig {
 				.dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
 				.requestMatchers(JwtAuthenticationFilter::isPublic).permitAll()
 				.requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs", "/v3/api-docs/**").permitAll()
+				// WebSocket handshake: the token is checked at STOMP CONNECT (realtime/StompAuthInterceptor).
+				.requestMatchers("/ws").permitAll()
 				.requestMatchers("/api/v1/**").authenticated()
 				.anyRequest().denyAll())
 			// Constructed only here: never registered as a Servlet filter bean.

@@ -19,6 +19,11 @@ public class CorsConfig {
 
     /** Trims each comma-separated origin and drops trailing slashes so it matches the browser's Origin header. */
     static List<String> parseAllowedOrigins(String raw) {
+        return parseAllowedOrigins(raw, "CORS_ALLOWED_ORIGINS (cors.allowed-origins)");
+    }
+
+    /** Also used for the WebSocket origins; {@code setting} names the setting in the error message. */
+    public static List<String> parseAllowedOrigins(String raw, String setting) {
         List<String> origins = raw == null ? List.of() : Arrays.stream(raw.split(","))
                 .map(String::trim)
                 .map(origin -> origin.replaceAll("/+$", ""))
@@ -27,11 +32,11 @@ public class CorsConfig {
                 .toList();
         if (origins.isEmpty()) {
             throw new IllegalArgumentException(
-                    "CORS_ALLOWED_ORIGINS (cors.allowed-origins) must list at least one origin, e.g. https://linkro.vercel.app");
+                    setting + " must list at least one origin, e.g. https://linkro.vercel.app");
         }
         if (origins.stream().anyMatch(origin -> origin.contains("*"))) {
             throw new IllegalArgumentException(
-                    "CORS_ALLOWED_ORIGINS (cors.allowed-origins) must not contain \"*\"; list each frontend origin explicitly");
+                    setting + " must not contain \"*\"; list each frontend origin explicitly");
         }
         return origins;
     }

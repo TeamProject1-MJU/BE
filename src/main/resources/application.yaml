@@ -33,6 +33,10 @@ auth:
 cors:
   allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
 
+# WebSocket/STOMP handshake origins (#42), a setting of their own. Same format, no "*". Unset: the CORS list above.
+websocket:
+  allowed-origins: ${WS_ALLOWED_ORIGINS:${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}}
+
 logging:
   level:
     # The JDK HTTP client behind RestClient (SimpleClientHttpRequestFactory -> HttpURLConnection) logs whole request

@@ -44,7 +44,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
 		throws ServletException, IOException {
 		try {
-			var userId = jwtProvider.parseUserId(extractToken(request));
+			var userId = jwtProvider.parseUserId(bearerToken(request.getHeader(HttpHeaders.AUTHORIZATION)));
 			if (users.findById(userId).filter(user -> user.getDeletedAt() == null).isEmpty()) {
 				throw new BusinessException(ErrorCode.TOKEN_INVALID);
 			}
@@ -73,8 +73,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 		return HttpMethod.POST.matches(request.getMethod()) && PUBLIC_POST_PATHS.contains(path);
 	}
 
-	private static String extractToken(HttpServletRequest request) {
-		String header = request.getHeader(HttpHeaders.AUTHORIZATION);
+	/** The token of an {@code Authorization: Bearer ...} value; also used for the STOMP CONNECT header. */
+	public static String bearerToken(String header) {
 		if (header == null || !header.regionMatches(true, 0, BEARER_PREFIX, 0, BEARER_PREFIX.length())) {
 			throw new BusinessException(ErrorCode.AUTH_REQUIRED);
 		}

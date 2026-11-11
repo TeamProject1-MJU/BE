@@ -1,5 +1,8 @@
 package com.mju.linkro.room.service;
 
+import com.mju.linkro.realtime.RoomEventPayloads.RoomUpdated;
+import com.mju.linkro.realtime.RoomEventType;
+import com.mju.linkro.realtime.RoomEvents;
 import com.mju.linkro.room.domain.*;
 import com.mju.linkro.room.dto.RoomResponses.*;
 import com.mju.linkro.room.dto.RoomWriteRequest;
@@ -20,6 +23,7 @@ public class RoomService {
     private final RoomAccess access;
     private final MeetingRoomRepository rooms;
     private final RoomReadRepository reads;
+    private final RoomEvents events;
 
     public List<Summary> list(UUID userId) {
         List<MeetingRoom> participating = rooms.findParticipating(userId);
@@ -61,9 +65,16 @@ public class RoomService {
         MeetingRoom room = access.lockOwner(roomId, userId);
         String name = request.validatedName(false);
         var appointmentAt = request.validatedAppointmentAt();
+        String oldName = room.getName();
+        var oldAppointmentAt = room.getAppointmentAt();
         if (request.name() != null) room.rename(name);
         if (request.appointmentAt() != null) room.schedule(appointmentAt);
-        // #43: ROOM_UPDATED publication belongs here, inside the successful mutation boundary.
+        // Sending the values already stored changes nothing, so it sends no event.
+        if (oldName.equals(room.getName()) && Objects.equals(oldAppointmentAt, room.getAppointmentAt())) return;
+        Long selectedId = room.getSelectedStationId();
+        events.publish(roomId, RoomEventType.ROOM_UPDATED, new RoomUpdated(roomId, room.getName(), room.getStatus(),
+                reads.members(List.of(roomId)).size(), room.getMaxMembers(), room.getAppointmentAt(),
+                selectedId == null ? null : reads.stations(List.of(selectedId)).get(selectedId)));
     }
 
     private static RoomRole role(List<MemberRow> rows, UUID userId) {
