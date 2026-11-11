@@ -49,6 +49,13 @@ public class OpenApiConfig {
     @Bean
     OpenApiCustomizer roomMembershipErrorExamples() {
         return document -> {
+            var selection = document.getPaths().get("/api/v1/rooms/{roomId}/selected-station");
+            if (selection != null) {
+                addMembershipErrorExamples(selection.getPut(), ErrorCode.NOT_ROOM_MEMBER, ErrorCode.NOT_ROOM_OWNER,
+                        ErrorCode.ROOM_NOT_FOUND, ErrorCode.STATION_NOT_FOUND, ErrorCode.STATION_UNSUPPORTED, ErrorCode.ROOM_BUSY);
+                addMembershipErrorExamples(selection.getDelete(), ErrorCode.NOT_ROOM_MEMBER, ErrorCode.NOT_ROOM_OWNER,
+                        ErrorCode.ROOM_NOT_FOUND, ErrorCode.ROOM_BUSY);
+            }
             var withdrawal = document.getPaths().get("/api/v1/users/me");
             if (withdrawal != null) addMembershipErrorExamples(withdrawal.getDelete(), ErrorCode.ROOM_BUSY);
             if (withdrawal != null) addMembershipErrorExamples(withdrawal.getPatch(), ErrorCode.ROOM_BUSY);

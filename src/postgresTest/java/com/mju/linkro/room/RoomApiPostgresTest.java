@@ -271,10 +271,11 @@ class RoomApiPostgresTest {
         for (MockHttpServletRequestBuilder req : List.of(delete("/api/v1/rooms/" + room))) {
             mvc.perform(auth(req, owner)).andExpect(status().isMethodNotAllowed()).andExpect(jsonPath("$.error.code").value("METHOD_NOT_ALLOWED"));
         }
-        for (MockHttpServletRequestBuilder req : List.of(patch("/api/v1/rooms/" + room + "/members/me/departure"),
-                put("/api/v1/rooms/" + room + "/selected-station"))) {
+        for (MockHttpServletRequestBuilder req : List.of(patch("/api/v1/rooms/" + room + "/members/me/departure"))) {
             mvc.perform(auth(req, owner)).andExpect(status().isNotFound()).andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
         }
+        mvc.perform(auth(put("/api/v1/rooms/" + room + "/selected-station"), owner))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
         User deleted = users.findById(member).orElseThrow(); deleted.softDelete(); users.saveAndFlush(deleted);
         for (UUID user : List.of(member, UUID.randomUUID())) {
             mvc.perform(auth(get("/api/v1/rooms"), user)).andExpect(status().isUnauthorized()).andExpect(jsonPath("$.error.code").value("TOKEN_INVALID"));
