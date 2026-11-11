@@ -26,6 +26,7 @@ import static org.assertj.core.api.Assertions.*;
  * appointment − minutes, every member ESTIMATE.
  */
 @Testcontainers
+@org.springframework.context.annotation.Import(FixedRecommendationClock.class)
 @SpringBootTest(properties = {
         "spring.config.import=", "spring.jpa.hibernate.ddl-auto=validate", "spring.jpa.open-in-view=false",
         "spring.jpa.show-sql=false", "auth.kakao.app-id=1234", "auth.jwt.access-token-ttl=15m",

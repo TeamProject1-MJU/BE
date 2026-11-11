@@ -648,4 +648,53 @@ class RecommendationServiceTest {
             assertThat(line).doesNotContain("민감한조건");
         });
     }
+
+    // ---- past appointment (#100) ----
+
+    @Test
+    void aPastAppointmentIsRefusedWithoutAiRunOrGuard() {
+        room.schedule(clock.now.minusSeconds(1));
+        assertThatThrownBy(() -> create(new RecommendationRequest("40분 이내", null))).isInstanceOfSatisfying(BusinessException.class,
+                exception -> assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.APPOINTMENT_PASSED));
+        assertThat(repository.saves).isZero();
+        verify(ai, times(0)).interpretCondition(any());
+        verify(ai, times(0)).explainRecommendation(any());
+        // The guard was never taken.
+        guard.release(guard.tryAcquire(roomId).orElseThrow());
+    }
+
+    @Test
+    void anAppointmentNowOrLaterIsCalculated() {
+        // Same second as now (now is 00:00:00.500, the appointment 00:00:00): allowed.
+        clock.now = clock.now.plusMillis(500);
+        room.schedule(clock.now.truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+        assertThat(create(null).results()).isNotEmpty();
+        room.schedule(clock.now.plusSeconds(60));
+        assertThat(create(null).results()).isNotEmpty();
+        room.schedule(null);
+        assertThat(create(null).results()).isNotEmpty();
+        assertThat(repository.saves).isEqualTo(3);
+    }
+
+    @Test
+    void earlierChecksComeBeforeThePastAppointment() {
+        room.schedule(clock.now.minusSeconds(3600));
+        members.set(1, member(USER_B, "인준", null));
+        assertThatThrownBy(() -> create(null)).isInstanceOfSatisfying(BusinessException.class,
+                exception -> assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.DEPARTURE_MISSING));
+        members.remove(1);
+        assertThatThrownBy(() -> create(null)).isInstanceOfSatisfying(BusinessException.class,
+                exception -> assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.TOO_FEW_MEMBERS));
+        assertThatThrownBy(() -> create(new RecommendationRequest(null, new Filter(0, null, null, null, null))))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+    }
+
+    @Test
+    void storedRunsAreStillReadAfterTheAppointmentPassed() {
+        RecommendationResponse created = create(null);
+        clock.now = APPOINTMENT.plusSeconds(3600);
+        assertThat(service.latest(USER_A, roomId).runId()).isEqualTo(created.runId());
+        assertThat(service.byRun(USER_A, roomId, UUID.fromString(created.runId())).runId()).isEqualTo(created.runId());
+    }
 }

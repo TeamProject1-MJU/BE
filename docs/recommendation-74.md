@@ -6,7 +6,7 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
 
 1. `RoomAccess.requireMember`로 방 멤버 확인(ROOM_NOT_FOUND 404 / NOT_ROOM_MEMBER 403).
 2. 요청 검사(`RecommendationRequest.validate`): 범위·`memberLimits.userId`가 방 멤버인지. 틀리면 VALIDATION_ERROR 400.
-3. 사전 검사(계산 전, run을 남기지 않음): 멤버 2명 미만 `TOO_FEW_MEMBERS`(422) → 출발역 없는 멤버가 있으면 `DEPARTURE_MISSING`(422, `error.details.missingUserIds`) → 약속 시각 직전 60분(설정값) 안에 도착하는 열차가 전 노선에 하나도 없으면 `NO_SERVICE_TIME`(422, #96, 아래 "운행하지 않는 시간대").
+3. 사전 검사(계산 전, run을 남기지 않음): 멤버 2명 미만 `TOO_FEW_MEMBERS`(422) → 출발역 없는 멤버가 있으면 `DEPARTURE_MISSING`(422, `error.details.missingUserIds`) → 방의 약속 시각이 지금보다 이전이면 `APPOINTMENT_PASSED`(422, #100, 아래 "지난 약속") → 약속 시각 직전 60분(설정값) 안에 도착하는 열차가 전 노선에 하나도 없으면 `NO_SERVICE_TIME`(422, #96, 아래 "운행하지 않는 시간대").
 4. **방 단위 동시 요청 보호(#98)**: 위 검사를 모두 통과한 뒤, 계산을 시작하기 직전에 `RecommendationInFlightGuard.tryAcquire(roomId)`를 건다. 아래 "동시 요청 보호" 참고.
 5. `ConstraintResolver`: `conditionText`가 있으면 `AiClient.interpretCondition` 1회. 서버가 범위를 검증하고 역 이름→stationId(`stations.name`, 끝의 "역" 무시, 같은 이름의 역이 여럿이면 버림), 닉네임→userId(방 멤버, 중복 닉네임이면 버림)로 매핑. 매핑 못 한 항목은 버리고 POST `message`에 알린다. 같은 항목이 `filter`에도 있으면 filter 값이 우선(항목 단위). AI 실패(어떤 예외든)는 filter만 적용하고 `conditionParseFailed=true`.
 6. `RecommendationEngine`: 이동 시간은 열차 시각표로 계산한다(#96, 아래 "열차 시각표 기반 이동 시간"). 시각표가 없을 때만 참여자당 `shortestPathsFrom` 1회(고정 소요시간)이고, 전원이 도달 가능한 역 = 후보. 방 멤버의 출발역은 후보에서 뺀다(어느 기준으로도 추천하지 않고, nearbyAlternatives에도 넣지 않는다). 이 출발역 제외는 서버 규칙이라 `appliedConstraints.excludeStationIds`에는 넣지 않는다. 그 필드는 사용자가 조건으로 뺀 역만 담는다(명세 v1.12 §8.1). 제약(참여자 **한 명당** 최대 시간·환승·요금, 개인별 한도, 제외 역)을 모두 통과한 역만 남긴다. 요금은 `FareCalculator.fareOf`(경로 API와 같은 `GraphFareCalculator`)로 계산한다.
@@ -112,6 +112,18 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
   - TRANSFER step은 하차부터 다음 승차까지(도보 + 대기)다.
   - step 합 = 첫 승차부터 마지막 하차까지 = `totalSeconds`(불변식 유지)다.
   - 정차역 `offsetSec`은 첫 열차 출발 기준이고, 혼잡도는 첫 열차 출발 시각으로 조회한다.
+
+### 지난 약속 (`APPOINTMENT_PASSED`, #100)
+
+- **조건**: 방의 약속 시각이 현재 시각보다 이전이면 거절한다. 초 단위로 비교하므로 같은 초는 허용한다.
+- **응답**: 422 `APPOINTMENT_PASSED`, "약속 시각이 이미 지났습니다. 약속 시간을 다시 설정해 주세요."
+  - 다른 방 상태 규칙(`TOO_FEW_MEMBERS`, `DEPARTURE_MISSING`, `NO_SERVICE_TIME`)과 같은 422다. 400(`VALIDATION_ERROR`)은 요청 값 오류에만 쓴다.
+- **검사 위치**: `DEPARTURE_MISSING` 뒤, `NO_SERVICE_TIME` 앞이다.
+  - 동시 요청 가드를 얻기 전이라 가드를 점유하지 않는다.
+  - 계산·AI 호출·run 저장을 하지 않는다.
+- **약속 시각이 없는 방**은 기존대로 요청 시각에 출발하는 기준으로 계산한다.
+- **조회 API**(`GET latest`, `GET {runId}`)는 영향이 없다. 지난 약속의 run도 그대로 조회된다.
+- **방 API**: 방 생성·수정은 지금도 과거 약속 시각을 허용한다(이번 범위 밖).
 
 ### 운행하지 않는 시간대 (`NO_SERVICE_TIME`)
 
