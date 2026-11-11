@@ -372,6 +372,39 @@ class RecommendationServiceTest {
         assertThat(service.latest(USER_A, roomId).message()).isEqualTo("조건에 맞는 중간역이 없습니다. 조건을 완화해 보세요.");
     }
 
+    /** A stored run without results, as an older or a timetable run left it; GET builds the message from it. */
+    String latestMessageOfAnEmptyRun(boolean parseFailed, Integer unreachable, Boolean beforeFirstTrain) {
+        RunCriteria criteria = new RunCriteria(null, null, com.mju.linkro.recommendation.dto.RecommendationResponse.AppliedConstraints.none(), parseFailed, APPOINTMENT.toString(),
+                List.of(), unreachable, beforeFirstTrain);
+        repository.runs.add(new RecommendationRepository.RunRow(UUID.randomUUID(), roomId, USER_A,
+                JsonMapper.builder().build().writeValueAsString(criteria), Instant.parse("2026-11-01T00:00:00Z")));
+        String message = service.latest(USER_A, roomId).message();
+        repository.runs.clear();
+        return message;
+    }
+
+    @Test
+    void anEmptyRunBecauseOfTheFirstTrainsGetsItsOwnMessage() {
+        // #115: only when every station was out because of the first trains; the other empty runs keep their messages.
+        assertThat(latestMessageOfAnEmptyRun(false, 238, true))
+                .isEqualTo("첫차 시각이 가까워 약속 시각까지 도착할 수 있는 역이 없습니다. 약속 시간을 늦춰 주세요.");
+        assertThat(latestMessageOfAnEmptyRun(false, 238, false))
+                .isEqualTo("약속 시각까지 열차로 도착할 수 없는 역 238곳을 제외했습니다. 조건에 맞는 중간역이 없습니다. 조건을 완화해 보세요.");
+        assertThat(latestMessageOfAnEmptyRun(false, 238, null))     // runs saved before #115
+                .isEqualTo("약속 시각까지 열차로 도착할 수 없는 역 238곳을 제외했습니다. 조건에 맞는 중간역이 없습니다. 조건을 완화해 보세요.");
+        assertThat(latestMessageOfAnEmptyRun(false, null, null)).isEqualTo("조건에 맞는 중간역이 없습니다. 조건을 완화해 보세요.");
+        // Other notices are kept in front of it.
+        assertThat(latestMessageOfAnEmptyRun(true, 238, true))
+                .isEqualTo("자연어 조건을 해석하지 못해 적용하지 못했습니다. 첫차 시각이 가까워 약속 시각까지 도착할 수 있는 역이 없습니다. 약속 시간을 늦춰 주세요.");
+    }
+
+    @Test
+    void aFixedCostRunNeverClaimsTheFirstTrains() {
+        RecommendationResponse response = create(new RecommendationRequest(null, new Filter(1, null, null, null, null)));
+        assertThat(response.results()).isEmpty();
+        assertThat(repository.runs.get(0).criteriaJson()).contains("\"beforeFirstTrain\":false");
+    }
+
     // ---------------------------------------------------------------- AI fallbacks
 
     @Test
