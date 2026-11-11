@@ -34,7 +34,7 @@ public class OpenApiConfig {
             // OAS 3.1 requires a union. A $ref sibling would still reject null.
             // springdoc 3.1.1 does not emit a referenced null-only model from annotations.
             var schemas = document.getComponents().getSchemas();
-            for (String model : new String[]{RoomResponses.SUMMARY_SCHEMA, RoomResponses.DETAIL_SCHEMA, RoomResponses.MEMBER_SCHEMA}) {
+            for (String model : new String[]{RoomResponses.SUMMARY_SCHEMA, RoomResponses.DETAIL_SCHEMA, RoomResponses.MEMBER_SCHEMA, "StationProposalListing"}) {
                 Schema<?> schema = schemas.get(model);
                 if (schema == null) continue;
                 Schema<Object> nullValue = new Schema<>();
@@ -49,6 +49,16 @@ public class OpenApiConfig {
     @Bean
     OpenApiCustomizer roomMembershipErrorExamples() {
         return document -> {
+            var proposals = document.getPaths().get("/api/v1/rooms/{roomId}/station-proposals");
+            if (proposals != null) {
+                addMembershipErrorExamples(proposals.getPost(), ErrorCode.NOT_ROOM_MEMBER, ErrorCode.ROOM_NOT_FOUND,
+                        ErrorCode.STATION_NOT_FOUND, ErrorCode.STATION_UNSUPPORTED, ErrorCode.RESULT_NOT_FOUND,
+                        ErrorCode.ALREADY_PROPOSED, ErrorCode.PROPOSAL_LIMIT_EXCEEDED, ErrorCode.ROOM_BUSY);
+                addMembershipErrorExamples(proposals.getGet(), ErrorCode.NOT_ROOM_MEMBER, ErrorCode.ROOM_NOT_FOUND);
+            }
+            var proposal = document.getPaths().get("/api/v1/rooms/{roomId}/station-proposals/{proposalId}");
+            if (proposal != null) addMembershipErrorExamples(proposal.getDelete(), ErrorCode.NOT_ROOM_MEMBER,
+                    ErrorCode.NOT_PROPOSAL_OWNER, ErrorCode.ROOM_NOT_FOUND, ErrorCode.PROPOSAL_NOT_FOUND, ErrorCode.ROOM_BUSY);
             var selection = document.getPaths().get("/api/v1/rooms/{roomId}/selected-station");
             if (selection != null) {
                 addMembershipErrorExamples(selection.getPut(), ErrorCode.NOT_ROOM_MEMBER, ErrorCode.NOT_ROOM_OWNER,
