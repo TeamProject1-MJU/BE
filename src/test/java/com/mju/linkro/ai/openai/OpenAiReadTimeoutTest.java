@@ -87,7 +87,8 @@ class OpenAiReadTimeoutTest {
         OpenAiProperties defaults = new OpenAiProperties();
         assertThat(defaults.getConnectTimeout()).isEqualTo(Duration.ofSeconds(2));
         assertThat(defaults.getReadTimeout()).isEqualTo(Duration.ofSeconds(8));
-        assertThat(defaults.getVisionReadTimeout()).isEqualTo(Duration.ofSeconds(4));
+        assertThat(defaults.getVisionReadTimeout()).isEqualTo(Duration.ofSeconds(10));
+        assertThat(defaults.getVisionReasoningEffort()).isEqualTo("low");
         assertThat(defaults.getExplainReadTimeout()).isEqualTo(Duration.ofSeconds(6));
     }
 }

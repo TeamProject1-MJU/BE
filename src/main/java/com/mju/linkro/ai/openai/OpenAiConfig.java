@@ -24,7 +24,7 @@ public class OpenAiConfig {
     static OpenAiClient client(OpenAiProperties props, String baseUrl) {
         return new OpenAiClient(restClient(props, props.getReadTimeout(), baseUrl),
                 restClient(props, props.getVisionReadTimeout(), baseUrl),
-                restClient(props, props.getExplainReadTimeout(), baseUrl), props.getApiKey(), props.getModel());
+                restClient(props, props.getExplainReadTimeout(), baseUrl), props.getApiKey(), props.getModel(), props.getVisionReasoningEffort());
     }
 
     // Separate clients because the calls have different read timeouts (Kakao client pattern).

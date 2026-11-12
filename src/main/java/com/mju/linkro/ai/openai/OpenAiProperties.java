@@ -29,10 +29,21 @@ public class OpenAiProperties {
     @NotNull
     private Duration readTimeout = Duration.ofSeconds(8);
     @NotNull
-    private Duration visionReadTimeout = Duration.ofSeconds(4);
+    private Duration visionReadTimeout = Duration.ofSeconds(10);
+    /**
+     * Sign reads only (OPENAI_VISION_REASONING_EFFORT): the reasoning.effort sent with the photo. An empty value
+     * (docker-compose passes an unset variable as empty) keeps "low"; use "none" to ask for no reasoning.
+     */
+    private String visionReasoningEffort = "low";
     /** explainRecommendation only (#99): past it the recommendation uses template sentences. */
     @NotNull
     private Duration explainReadTimeout = Duration.ofSeconds(6);
+
+    public void setVisionReasoningEffort(String visionReasoningEffort) {
+        if (visionReasoningEffort != null && !visionReasoningEffort.isBlank()) {
+            this.visionReasoningEffort = visionReasoningEffort.strip();
+        }
+    }
 
     @Override
     public String toString() {
