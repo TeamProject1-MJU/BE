@@ -28,21 +28,21 @@ class StompSessionsTest {
     @Test void subscriptionCountsOnlyAfterItIsRecordedAndNotAfterClose() {
         sessions.opened(socket("s1"));
         assertThat(sessions.authenticated("s1", alice)).isTrue();
-        assertThat(sessions.isSubscribed("s1", "sub-0")).isFalse();
+        assertThat(sessions.isSubscribed("s1", "sub-0", room)).isFalse();
         sessions.subscribed("s1", "sub-0", room);
-        assertThat(sessions.isSubscribed("s1", "sub-0")).isTrue();
+        assertThat(sessions.isSubscribed("s1", "sub-0", room)).isTrue();
         sessions.unsubscribed("s1", "sub-0");
-        assertThat(sessions.isSubscribed("s1", "sub-0")).isFalse();
+        assertThat(sessions.isSubscribed("s1", "sub-0", room)).isFalse();
         sessions.subscribed("s1", "sub-1", room);
         sessions.closed("s1");
-        assertThat(sessions.isSubscribed("s1", "sub-1")).isFalse();
+        assertThat(sessions.isSubscribed("s1", "sub-1", room)).isFalse();
         assertThat(sessions.userOf("s1")).isNull();
     }
 
     @Test void unknownSessionCannotAuthenticateOrSubscribe() {
         assertThat(sessions.authenticated("ghost", alice)).isFalse();
         sessions.subscribed("ghost", "sub-0", room);
-        assertThat(sessions.isSubscribed("ghost", "sub-0")).isFalse();
+        assertThat(sessions.isSubscribed("ghost", "sub-0", room)).isFalse();
     }
 
     @Test void dropRoomRemovesOnlyThatUsersSubscriptionsToThatRoom() {
@@ -56,11 +56,32 @@ class StompSessionsTest {
             sessions.subscribed(id, "room", room);
             sessions.subscribed(id, "other", other);
         }
-        sessions.dropRoom(alice, room);
-        assertThat(sessions.isSubscribed("a1", "room")).isFalse();
-        assertThat(sessions.isSubscribed("a2", "room")).isFalse();
-        assertThat(sessions.isSubscribed("a1", "other")).isTrue();
-        assertThat(sessions.isSubscribed("b1", "room")).isTrue();
+        assertThat(sessions.dropRoom(alice, room)).containsExactlyInAnyOrder(
+                new StompSessions.Dropped("a1", "room"), new StompSessions.Dropped("a2", "room"));
+        assertThat(sessions.isSubscribed("a1", "room", room)).isFalse();
+        assertThat(sessions.isSubscribed("a2", "room", room)).isFalse();
+        assertThat(sessions.isSubscribed("a1", "other", other)).isTrue();
+        assertThat(sessions.isSubscribed("b1", "room", room)).isTrue();
+    }
+
+    @Test void aSubscriptionCountsOnlyForTheRoomItWasRecordedFor() {
+        sessions.opened(socket("s1"));
+        sessions.authenticated("s1", alice);
+        sessions.subscribed("s1", "sub-0", room);
+        assertThat(sessions.isSubscribed("s1", "sub-0", room)).isTrue();
+        assertThat(sessions.isSubscribed("s1", "sub-0", other)).isFalse();
+        assertThat(sessions.isSubscribed("s1", "sub-0", null)).isFalse();
+    }
+
+    @Test void aSubscriptionIdCannotBeRecordedTwiceOnOneConnection() {
+        sessions.opened(socket("s1"));
+        sessions.authenticated("s1", alice);
+        assertThat(sessions.subscribed("s1", "sub-0", room)).isTrue();
+        assertThat(sessions.subscribed("s1", "sub-0", other)).isFalse();
+        assertThat(sessions.subscribed("s1", "sub-0", room)).isFalse();
+        assertThat(sessions.isSubscribed("s1", "sub-0", room)).as("the first record is untouched").isTrue();
+        sessions.unsubscribed("s1", "sub-0");
+        assertThat(sessions.subscribed("s1", "sub-0", other)).as("free again after UNSUBSCRIBE").isTrue();
     }
 
     @Test void closeShutsEveryConnectionOfThatUserOnly() throws Exception {

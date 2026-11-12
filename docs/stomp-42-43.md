@@ -36,11 +36,13 @@ CONNECT·SUBSCRIBE·SEND가 거절되면 서버가 ERROR 프레임을 보내고 
 
 ### 세션·구독 관리
 
-`StompSessions`가 STOMP 세션 id → 사용자, 구독 id → 방을 기억해요. 구독은 멤버십 검사 뒤에 기록하고, 이벤트는 기록된 구독에만 나가요(`StompDeliveryFilter`). 연결이 끊기면 그 세션 기록이 모두 지워져요.
+`StompSessions`가 STOMP 세션 id → 사용자, 구독 id → 방을 기억해요. 구독은 멤버십 검사 전에 기록하고 검사에 실패하면 지워요. 이벤트는 **세션·구독 id·방(destination)이 모두 기록과 같을 때만** 나가요(`StompDeliveryFilter`). 연결이 끊기면 그 세션 기록이 모두 지워져요.
+- **구독 id는 연결마다 하나씩만 써요.** 이미 쓰는 구독 id로 다시 SUBSCRIBE하면 `VALIDATION_ERROR` ERROR 프레임을 보내고 연결을 닫아요(STOMP는 id가 연결 안에서 유일해야 해요). UNSUBSCRIBE나 방 나가기 뒤에는 같은 id를 다시 써도 돼요.
 
-- **방 나가기 커밋 후**: 그 사용자의 그 방 구독 기록을 모든 연결에서 지워요. 연결은 열려 있고 다른 방은 그대로예요. 나간 사람은 자기 퇴장 이벤트(`MEMBER_LEFT`)와 퇴장 SYSTEM 메시지도 받지 않아요.
+- **방 나가기 커밋 후**: 그 사용자의 그 방 구독 기록을 모든 연결에서 지우고, **Spring 브로커의 구독 목록에서도 같은 구독을 바로 빼요**(`RoomEvents.dropSubscriptions`). 브로커에 남겨 두면, 클라이언트가 같은 구독 id(`sub-0`)로 다른 방을 구독할 때 브로커가 새 구독을 무시하고 나간 방 이벤트가 계속 오기 때문이에요. 연결은 열려 있고 다른 방은 그대로예요. 나간 사람은 자기 퇴장 이벤트(`MEMBER_LEFT`)와 퇴장 SYSTEM 메시지도 받지 않아요.
 - **회원 탈퇴 커밋 후**: 그 사용자의 모든 연결을 닫아요(close status 1008, 사유 `ACCOUNT_WITHDRAWN`). 방마다 나가기와 같은 이벤트가 먼저 나가요.
 - 구독 기록을 멤버십 검사보다 먼저 하므로, 검사 중에 나가기가 커밋돼도 구독이 남지 않아요.
+- **CONNECT와 탈퇴가 겹칠 때**: 연결을 사용자에게 먼저 등록하고 그다음에 "탈퇴하지 않은 사용자인지"를 확인해요. 탈퇴가 확인 전에 커밋되면 확인에서 `TOKEN_INVALID`로 거절하고, 확인 뒤에 커밋되면 탈퇴 처리의 연결 닫기가 이 연결을 찾아 닫아요. (확인 뒤에 등록하면 그 사이에 탈퇴가 끝나 닫을 연결을 못 찾고 연결이 살아남았어요.)
 - 로그아웃은 앱이 연결을 닫는 기존 정책 그대로예요.
 
 ## 이벤트 (#43)
@@ -68,7 +70,10 @@ CONNECT·SUBSCRIBE·SEND가 거절되면 서버가 ERROR 프레임을 보내고 
 | `SELECTED_STATION_CHANGED` | `{station, confirmedAt}` (해제 시 둘 다 null) | **아직 연결 안 함** (아래) |
 
 - 마지막 멤버가 나가 방이 삭제될 때는 `MEMBER_LEFT`를 보내지 않아요. 받을 사람이 없어요.
-- 같은 트랜잭션의 SYSTEM 메시지(#76)와 이벤트는 모두 커밋 뒤에 나가요. 순서는 SYSTEM 메시지의 `MESSAGE_CREATED`가 먼저이고 그 방의 상태 이벤트가 뒤예요(입장·후보 제안 등). 프론트는 순서에 기대지 않는 게 좋아요.
+- 같은 트랜잭션의 SYSTEM 메시지(#76)와 이벤트는 모두 커밋 뒤에 나가요. **한 트랜잭션 안에서는 보낸 순서 그대로 받아요.** SYSTEM 메시지의 `MESSAGE_CREATED`가 먼저이고 상태 이벤트가 뒤예요(입장: 메시지 → `MEMBER_JOINED`, 후보 제안: 메시지 → `STATION_PROPOSAL_CREATED`, 방장이 나갈 때: 나감 메시지 → 새 방장 메시지 → `MEMBER_LEFT` → `OWNER_CHANGED`).
+  - 이유: 서비스가 `systemMessages`를 먼저 부르고 `events.publish`를 뒤에 부르면 커밋 뒤 콜백이 등록된 순서(메시지 → 상태)로 같은 스레드에서 차례로 `send()`돼요. 메시지 쪽은 `MessageCreatedEvent`를 동기 리스너(`RoomEventListeners`)가 받아 `send()`하므로 같은 스레드·같은 순서예요. 그리고 `RealtimeConfig`가 `setPreservePublishOrder(true)`를 켜서 브로커·outbound 스레드가 순서를 바꾸지 못해요.
+  - 새 이벤트를 붙일 때도 **SYSTEM 메시지를 먼저, `events.publish`를 나중에** 부르세요. 순서는 이 호출 순서가 정해요.
+  - 보장하지 않는 것: 서로 다른 트랜잭션·요청 사이의 순서(동시에 두 사람이 보낸 채팅과 방 이벤트 등)와 AI 답변이 도착하는 시점. 그건 커밋 순서·스레드 타이밍에 따라 달라요.
 - `RECOMMENDATION_CREATED`가 오면 8.2를 다시 조회하고, 멤버·출발역·방 수정 이벤트를 받으면 최근 추천의 `isStale`을 다시 조회하는 건 명세대로 프론트 몫이에요.
 
 ### 발행 규칙 (`RoomEvents`)
@@ -99,5 +104,5 @@ heartbeat 10초와 메시지 크기 제한(16KB)은 코드 상수예요. heartbe
 
 ## 테스트
 
-- 단위(`StompSessionsTest`): 구독 기록·해제, 방 구독만 지우기, 연결 종료와 닫기 실패, payload JSON 모양. 기존 서비스 테스트는 `RoomEvents` mock을 받도록 고쳤고, `/ws`가 Security에서 열린 것에 맞춰 `JwtAuthenticationFilterTest`의 비공개 경로 목록에서 `/ws`만 뺐어요.
-- PostgreSQL(`StompPostgresTest`): 내장 서버와 Spring `WebSocketStompClient`로 실제 연결해요. 토큰 없음·형식 틀림·만료·위조·없는 사용자·탈퇴 사용자 CONNECT 거절, heartbeat, 허용·비허용 Origin, 멤버 구독과 채팅 POST 뒤 `MESSAGE_CREATED` 수신, 비멤버·없는 방·잘못된 목적지 거절, 신원 헤더 위조 무시, 클라이언트 SEND 차단, 나가기 뒤 기존 구독 수신 중단(연결은 유지), 방장 퇴장 시 `MEMBER_LEFT`+`OWNER_CHANGED`, 탈퇴 시 두 연결 모두 닫힘, 입장·출발역·방 수정(바뀐 때만)·후보 제안/삭제 이벤트, 추천 이벤트 전달, 다른 방 이벤트 차단, 롤백 시 이벤트 없음, 커밋 전에는 안 나감, 전송 실패해도 DB 변경 유지.
+- 단위(`StompSessionsTest`, `StompDeliveryFilterTest`): 구독 기록·해제, 같은 구독 id 중복 기록 거절, 방까지 같아야 구독으로 인정, 방 구독만 지우기, 연결 종료와 닫기 실패, 다른 방으로 재사용된 구독 id의 프레임 차단, payload JSON 모양. 기존 서비스 테스트는 `RoomEvents` mock을 받도록 고쳤고, `/ws`가 Security에서 열린 것에 맞춰 `JwtAuthenticationFilterTest`의 비공개 경로 목록에서 `/ws`만 뺐어요.
+- PostgreSQL(`StompPostgresTest`): 내장 서버와 Spring `WebSocketStompClient`로 실제 연결해요. 토큰 없음·형식 틀림·만료·위조·없는 사용자·탈퇴 사용자 CONNECT 거절, heartbeat, 허용·비허용 Origin, 멤버 구독과 채팅 POST 뒤 `MESSAGE_CREATED` 수신, 비멤버·없는 방·잘못된 목적지 거절, 신원 헤더 위조 무시, 클라이언트 SEND 차단, 나가기 뒤 기존 구독 수신 중단(연결은 유지), 방장 퇴장 시 `MEMBER_LEFT`+`OWNER_CHANGED`, 탈퇴 시 두 연결 모두 닫힘, 입장·출발역·방 수정(바뀐 때만)·후보 제안/삭제 이벤트, 추천 이벤트 전달, 다른 방 이벤트 차단, 롤백 시 이벤트 없음, 커밋 전에는 안 나감, 전송 실패해도 DB 변경 유지. 리뷰 반영 테스트: 구독 id 재사용(A `sub-0` 구독 → A 나가기 → B `sub-0` 구독 → A에 발행해도 안 옴, 브로커 목록에서도 빠짐), 브로커에 옛 구독이 남은 상태에서도 전달 차단, 구독 id 중복 거절, CONNECT 확인과 등록 사이·등록 직후 탈퇴 경합, 순서(입장·후보 제안·나가기·방장 위임을 도착한 순서 그대로 비교, 한 트랜잭션 300개 이벤트 순서).

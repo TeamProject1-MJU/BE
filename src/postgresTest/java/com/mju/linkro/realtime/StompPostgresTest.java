@@ -42,7 +42,9 @@ import org.springframework.messaging.simp.stomp.StompFrameHandler;
 import org.springframework.messaging.simp.stomp.StompHeaders;
 import org.springframework.messaging.simp.stomp.StompSession;
 import org.springframework.messaging.simp.stomp.StompSessionHandlerAdapter;
+import org.springframework.messaging.simp.broker.SimpleBrokerMessageHandler;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -87,6 +89,9 @@ class StompPostgresTest {
     @Autowired RoomEvents roomEvents;
     @Autowired ApplicationEventPublisher publisher;
     @Autowired PlatformTransactionManager transactions;
+    @Autowired SimpleBrokerMessageHandler brokerHandler;
+    /** Pass-through unless a test scripts it (the CONNECT race tests). */
+    @MockitoSpyBean StompSessions sessionsSpy;
 
     final JsonMapper mapper = JsonMapper.builder().build();
     final HttpClient http = HttpClient.newHttpClient();
@@ -144,6 +149,29 @@ class StompPostgresTest {
             Thread.sleep(500);
         }
 
+        /** Subscribes with a chosen subscription id (the client library picks sub-0, sub-1 ... by default). */
+        void subscribe(UUID roomId, String subscriptionId) throws Exception {
+            StompHeaders headers = new StompHeaders();
+            headers.setDestination("/topic/rooms/" + roomId);
+            headers.setId(subscriptionId);
+            session.subscribe(headers, new StompFrameHandler() {
+                @Override public Type getPayloadType(StompHeaders headers) { return JsonNode.class; }
+                @Override public void handleFrame(StompHeaders headers, Object payload) { events.add((JsonNode) payload); }
+            });
+            Thread.sleep(500);
+        }
+
+        /** The next {@code count} events in the exact order they arrived. Fails when one is missing after 5 seconds. */
+        List<JsonNode> received(int count) throws Exception {
+            List<JsonNode> got = new java.util.ArrayList<>();
+            for (int i = 0; i < count; i++) {
+                JsonNode event = events.poll(5, TimeUnit.SECONDS);
+                assertThat(event).as("event %d of %d within 5s, got so far %s", i + 1, count, labels(got)).isNotNull();
+                got.add(event);
+            }
+            return got;
+        }
+
         /** The next event of this type; events of other types that come first are kept for later calls. */
         JsonNode next(String type) throws Exception {
             for (int i = 0; i < 20; i++) {
@@ -171,6 +199,14 @@ class StompPostgresTest {
             assertThat(headers).as("no ERROR frame within 5s").isNotNull();
             return headers.getFirst("message");
         }
+    }
+
+    /** "TYPE", or "MESSAGE_CREATED:SENDER_TYPE" for chat messages, for asserting the exact arrival order. */
+    static List<String> labels(List<JsonNode> events) {
+        return events.stream().map(event -> {
+            String type = event.get("type").asString();
+            return "MESSAGE_CREATED".equals(type) ? type + ":" + event.get("payload").get("senderType").asString() : type;
+        }).toList();
     }
 
     Client connect(String authorization) throws Exception {
@@ -350,10 +386,11 @@ class StompPostgresTest {
         stayer.subscribe(room);
 
         assertThat(rest(member, "DELETE", "/rooms/" + room + "/members/me", null).statusCode()).isEqualTo(200);
-        JsonNode left = stayer.next("MEMBER_LEFT");
-        assertThat(left.get("payload").get("userId").asString()).isEqualTo(member.toString());
-        assertThat(left.get("payload").has("newOwnerId")).isFalse();
-        assertThat(stayer.next("MESSAGE_CREATED").get("payload").get("senderType").asString()).isEqualTo("SYSTEM");
+        List<JsonNode> leaving = stayer.received(2);
+        assertThat(labels(leaving)).containsExactly("MESSAGE_CREATED:SYSTEM", "MEMBER_LEFT");
+        assertThat(leaving.get(0).get("payload").get("content").asString()).contains("민지님이 나갔어요");
+        assertThat(leaving.get(1).get("payload").get("userId").asString()).isEqualTo(member.toString());
+        assertThat(leaving.get(1).get("payload").has("newOwnerId")).isFalse();
 
         sendChat(owner, "나간 사람은 못 봐요");
         assertThat(stayer.next("MESSAGE_CREATED").get("payload").get("content").asString()).isEqualTo("나간 사람은 못 봐요");
@@ -372,10 +409,15 @@ class StompPostgresTest {
         Client stayer = connectAs(member);
         stayer.subscribe(room);
         assertThat(rest(owner, "DELETE", "/rooms/" + room + "/members/me", null).statusCode()).isEqualTo(200);
-        JsonNode left = stayer.next("MEMBER_LEFT");
+        // Both SYSTEM messages first (left, new owner), then MEMBER_LEFT, then OWNER_CHANGED.
+        List<JsonNode> got = stayer.received(4);
+        assertThat(labels(got)).containsExactly("MESSAGE_CREATED:SYSTEM", "MESSAGE_CREATED:SYSTEM", "MEMBER_LEFT", "OWNER_CHANGED");
+        assertThat(got.get(0).get("payload").get("content").asString()).contains("방장님이 나갔어요");
+        assertThat(got.get(1).get("payload").get("content").asString()).contains("민지님이 새 방장이 됐어요");
+        JsonNode left = got.get(2);
         assertThat(left.get("payload").get("userId").asString()).isEqualTo(owner.toString());
         assertThat(left.get("payload").get("newOwnerId").asString()).isEqualTo(member.toString());
-        JsonNode changed = stayer.next("OWNER_CHANGED");
+        JsonNode changed = got.get(3);
         assertThat(changed.get("payload").get("previousOwnerId").asString()).isEqualTo(owner.toString());
         assertThat(changed.get("payload").get("newOwnerId").asString()).isEqualTo(member.toString());
     }
@@ -400,10 +442,11 @@ class StompPostgresTest {
         Client client = connectAs(owner);
         client.subscribe(room);
         assertThat(rest(outsider, "POST", "/rooms/join", "{\"roomCode\":\"S00001\"}").statusCode()).isEqualTo(200);
-        JsonNode joined = client.next("MEMBER_JOINED");
-        assertThat(joined.get("payload").get("userId").asString()).isEqualTo(outsider.toString());
-        assertThat(joined.get("payload").get("nickname").asString()).isEqualTo("외부인");
-        assertThat(client.next("MESSAGE_CREATED").get("payload").get("content").asString()).contains("외부인님이 입장했어요");
+        List<JsonNode> got = client.received(2);
+        assertThat(labels(got)).containsExactly("MESSAGE_CREATED:SYSTEM", "MEMBER_JOINED");
+        assertThat(got.get(0).get("payload").get("content").asString()).contains("외부인님이 입장했어요");
+        assertThat(got.get(1).get("payload").get("userId").asString()).isEqualTo(outsider.toString());
+        assertThat(got.get(1).get("payload").get("nickname").asString()).isEqualTo("외부인");
     }
 
     @Test void departureChangeSendsOnlyWhenTheStationChanged() throws Exception {
@@ -444,14 +487,17 @@ class StompPostgresTest {
         var created = rest(member, "POST", "/rooms/" + room + "/station-proposals", "{\"stationId\":" + station + "}");
         assertThat(created.statusCode()).isEqualTo(201);
         String proposalId = mapper.readTree(created.body()).get("data").get("id").asString();
-        JsonNode event = client.next("STATION_PROPOSAL_CREATED").get("payload");
+        List<JsonNode> got = client.received(2);
+        assertThat(labels(got)).containsExactly("MESSAGE_CREATED:SYSTEM", "STATION_PROPOSAL_CREATED");
+        JsonNode event = got.get(1).get("payload");
         assertThat(event.get("id").asString()).isEqualTo(proposalId);
         assertThat(event.get("station").get("id").asLong()).isEqualTo(station);
         assertThat(event.get("proposedBy").get("userId").asString()).isEqualTo(member.toString());
-        assertThat(client.next("MESSAGE_CREATED").get("payload").get("senderType").asString()).isEqualTo("SYSTEM");
 
         assertThat(rest(member, "DELETE", "/rooms/" + room + "/station-proposals/" + proposalId, null).statusCode()).isEqualTo(200);
-        assertThat(client.next("STATION_PROPOSAL_DELETED").get("payload").get("proposalId").asString()).isEqualTo(proposalId);
+        List<JsonNode> deleted = client.received(2);
+        assertThat(labels(deleted)).containsExactly("MESSAGE_CREATED:SYSTEM", "STATION_PROPOSAL_DELETED");
+        assertThat(deleted.get(1).get("payload").get("proposalId").asString()).isEqualTo(proposalId);
     }
 
     @Test void recommendationCreatedEventIsForwardedWithItsRunId() throws Exception {
@@ -507,5 +553,127 @@ class StompPostgresTest {
             roomEvents.publish(room, RoomEventType.ROOM_UPDATED, unserializable);
         });
         assertThat(jdbc.queryForObject("select nickname from users where id = ?", String.class, owner)).isEqualTo("바뀐이름");
+    }
+
+    // --- review fixes: reused subscription id, CONNECT race, event order -------------------------------------------
+
+    UUID otherRoomWithMember() {
+        UUID other = creation.create(owner, "S00002", "other", null).id();
+        members.saveAndFlush(new MeetingMember(other, member, RoomRole.MEMBER));
+        return other;
+    }
+
+    int brokerSubscriptionsOf(UUID roomId) {
+        var headers = org.springframework.messaging.simp.SimpMessageHeaderAccessor.create(org.springframework.messaging.simp.SimpMessageType.MESSAGE);
+        headers.setDestination("/topic/rooms/" + roomId);
+        var found = brokerHandler.getSubscriptionRegistry().findSubscriptions(
+                org.springframework.messaging.support.MessageBuilder.createMessage(new byte[0], headers.getMessageHeaders()));
+        return found.values().stream().mapToInt(List::size).sum();
+    }
+
+    /** subscribe A as sub-0, leave A, subscribe B as the same sub-0, then publish to A: nothing may arrive. */
+    @Test void aLeftRoomStaysSilentWhenTheClientReusesTheSubscriptionIdForAnotherRoom() throws Exception {
+        UUID roomB = otherRoomWithMember();
+        Client client = connectAs(member);
+        client.subscribe(room, "sub-0");
+        assertThat(brokerSubscriptionsOf(room)).as("registered with the broker").isEqualTo(1);
+
+        assertThat(rest(member, "DELETE", "/rooms/" + room + "/members/me", null).statusCode()).isEqualTo(200);
+        assertThat(brokerSubscriptionsOf(room)).as("the broker's own registry no longer holds the left room").isZero();
+
+        client.subscribe(roomB, "sub-0");
+        assertThat(brokerSubscriptionsOf(roomB)).isEqualTo(1);
+
+        roomEvents.publish(room, RoomEventType.ROOM_UPDATED, java.util.Map.of("where", "A"));
+        sendChat(owner, "방 A의 새 글");
+        client.assertNoEvent();
+
+        roomEvents.publish(roomB, RoomEventType.ROOM_UPDATED, java.util.Map.of("where", "B"));
+        assertThat(client.received(1).get(0).get("payload").get("where").asString()).isEqualTo("B");
+        client.assertNoEvent();
+    }
+
+    /**
+     * The state the review found: our record of room A is gone but the broker still holds sub-0 for A, and the client
+     * then subscribes room B as sub-0. Frames of A must not reach the client (the delivery check compares the room).
+     */
+    @Test void deliveryIsCheckedAgainstOurRecordEvenWhenTheBrokerStillHoldsTheOldSubscription() throws Exception {
+        UUID roomB = otherRoomWithMember();
+        Client client = connectAs(member);
+        client.subscribe(room, "sub-0");
+        // The broker registry as it was before the fix: our record dropped, the broker's subscription left behind.
+        var sessionIds = new java.util.ArrayList<String>();
+        var probe = org.springframework.messaging.simp.SimpMessageHeaderAccessor.create(org.springframework.messaging.simp.SimpMessageType.MESSAGE);
+        probe.setDestination("/topic/rooms/" + room);
+        brokerHandler.getSubscriptionRegistry().findSubscriptions(org.springframework.messaging.support.MessageBuilder
+                .createMessage(new byte[0], probe.getMessageHeaders())).keySet().forEach(sessionIds::add);
+        assertThat(sessionIds).hasSize(1);
+        sessionsSpy.unsubscribed(sessionIds.get(0), "sub-0");
+        // A second broker subscription with the same id for room B, recorded by us for B.
+        client.subscribe(roomB, "sub-0");
+        // The broker ignores a second subscription with an id it already holds, so B has no broker subscription here.
+        assertThat(brokerSubscriptionsOf(room)).isEqualTo(1);
+        assertThat(brokerSubscriptionsOf(roomB)).isZero();
+
+        roomEvents.publish(room, RoomEventType.ROOM_UPDATED, java.util.Map.of("where", "A"));
+        sendChat(owner, "방 A의 새 글");
+        client.assertNoEvent();
+    }
+
+    @Test void reusingASubscriptionIdWhileStillSubscribedIsRefused() throws Exception {
+        UUID roomB = otherRoomWithMember();
+        Client client = connectAs(member);
+        client.subscribe(room, "sub-0");
+        client.subscribe(roomB, "sub-0");
+        assertThat(client.error()).isEqualTo("VALIDATION_ERROR");
+        assertThat(client.closed.await(5, TimeUnit.SECONDS)).as("the server closes the connection after the ERROR").isTrue();
+    }
+
+    private void withdraw(UUID user) {
+        try {
+            assertThat(rest(user, "DELETE", "/users/me", null).statusCode()).isEqualTo(200);
+        } catch (Exception failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
+    /** The user is checked, then withdraws, then the connection is registered: the old order kept this one alive. */
+    @Test void aWithdrawalThatLandsBetweenTheActiveCheckAndTheRegistrationRefusesTheConnection() throws Exception {
+        org.mockito.Mockito.doAnswer(call -> {
+            withdraw(outsider);
+            return call.callRealMethod();
+        }).when(sessionsSpy).authenticated(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(outsider));
+
+        Client client = connect("Bearer " + jwt.createAccessToken(outsider));
+
+        assertThat(client.error()).isEqualTo("TOKEN_INVALID");
+        assertThat(client.connected.isDone()).as("never CONNECTED").isFalse();
+        assertThat(client.session).isNull();
+    }
+
+    /** The withdrawal commits right after the connection was registered: its close finds the connection. */
+    @Test void aWithdrawalRightAfterTheRegistrationDoesNotLeaveTheConnectionOpen() throws Exception {
+        org.mockito.Mockito.doAnswer(call -> {
+            Object registered = call.callRealMethod();
+            withdraw(outsider);
+            return registered;
+        }).when(sessionsSpy).authenticated(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(outsider));
+
+        Client client = connect("Bearer " + jwt.createAccessToken(outsider));
+
+        assertThat(client.connected.isDone()).as("never CONNECTED").isFalse();
+        assertThat(client.session == null || !client.session.isConnected()).isTrue();
+    }
+
+    /** One transaction, many events: every client sees them in the order they were sent (setPreservePublishOrder). */
+    @Test void manyEventsOfOneCommitArriveInSendOrder() throws Exception {
+        Client client = connectAs(member);
+        client.subscribe(room);
+        int count = 300;
+        new TransactionTemplate(transactions).executeWithoutResult(status -> {
+            for (int i = 0; i < count; i++) roomEvents.publish(room, RoomEventType.ROOM_UPDATED, java.util.Map.of("seq", i));
+        });
+        List<JsonNode> got = client.received(count);
+        for (int i = 0; i < count; i++) assertThat(got.get(i).get("payload").get("seq").asInt()).as("position %d", i).isEqualTo(i);
     }
 }

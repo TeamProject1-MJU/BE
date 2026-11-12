@@ -1,5 +1,7 @@
 package com.mju.linkro.realtime;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -10,8 +12,9 @@ import org.springframework.web.socket.WebSocketSession;
 
 /**
  * Who is connected and what they are subscribed to: STOMP session id -> user and (subscription id -> room).
- * A subscription is recorded only after its membership check, and an event is delivered only to a recorded
- * subscription ({@link StompDeliveryFilter}), so dropping a record stops that user's events at once.
+ * A subscription is recorded before its membership check (and removed again when the check fails), and an event is
+ * delivered only when session, subscription id and room all match a record ({@link StompDeliveryFilter}), so
+ * dropping a record stops that user's events at once.
  */
 @Slf4j
 @Component
@@ -35,7 +38,10 @@ class StompSessions {
         entries.remove(sessionId);
     }
 
-    /** Returns false when the session is already gone. */
+    /**
+     * Returns false when the session is already gone. From here on {@link #close} and {@link #dropRoom} find this
+     * connection, so CONNECT registers it before it re-checks that the user is still active.
+     */
     boolean authenticated(String sessionId, UUID userId) {
         Entry entry = entries.get(sessionId);
         if (entry == null) return false;
@@ -49,9 +55,14 @@ class StompSessions {
         return entry == null ? null : entry.userId;
     }
 
-    void subscribed(String sessionId, String subscriptionId, UUID roomId) {
+    /**
+     * Records a subscription. False when the session is gone or the subscription id is already in use on this
+     * connection: STOMP ids are unique per connection, and reusing one would leave two broker subscriptions behind
+     * one of our records.
+     */
+    boolean subscribed(String sessionId, String subscriptionId, UUID roomId) {
         Entry entry = entries.get(sessionId);
-        if (entry != null) entry.rooms.put(subscriptionId, roomId);
+        return entry != null && entry.rooms.putIfAbsent(subscriptionId, roomId) == null;
     }
 
     void unsubscribed(String sessionId, String subscriptionId) {
@@ -59,16 +70,28 @@ class StompSessions {
         if (entry != null && subscriptionId != null) entry.rooms.remove(subscriptionId);
     }
 
-    boolean isSubscribed(String sessionId, String subscriptionId) {
+    /** True only when this session's subscription id is recorded for exactly this room. */
+    boolean isSubscribed(String sessionId, String subscriptionId, UUID roomId) {
         Entry entry = entries.get(sessionId);
-        return entry != null && subscriptionId != null && entry.rooms.containsKey(subscriptionId);
+        return entry != null && subscriptionId != null && roomId != null && roomId.equals(entry.rooms.get(subscriptionId));
     }
 
-    /** Drops this user's subscriptions to one room on all of their connections. */
-    void dropRoom(UUID userId, UUID roomId) {
-        for (Entry entry : entries.values()) {
-            if (userId.equals(entry.userId)) entry.rooms.values().removeIf(roomId::equals);
+    /** One subscription of a user that was dropped. */
+    record Dropped(String sessionId, String subscriptionId) {}
+
+    /** Drops this user's subscriptions to one room on all of their connections and returns what was dropped. */
+    List<Dropped> dropRoom(UUID userId, UUID roomId) {
+        List<Dropped> dropped = new ArrayList<>();
+        for (Map.Entry<String, Entry> session : entries.entrySet()) {
+            Entry entry = session.getValue();
+            if (!userId.equals(entry.userId)) continue;
+            entry.rooms.entrySet().removeIf(subscription -> {
+                boolean match = roomId.equals(subscription.getValue());
+                if (match) dropped.add(new Dropped(session.getKey(), subscription.getKey()));
+                return match;
+            });
         }
+        return dropped;
     }
 
     /** Closes every connection of this user. */

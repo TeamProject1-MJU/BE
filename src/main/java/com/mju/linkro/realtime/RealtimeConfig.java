@@ -47,6 +47,9 @@ public class RealtimeConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void configureMessageBroker(MessageBrokerRegistry registry) {
+        // Events of one commit (SYSTEM message, then the state events) reach each client in the order they were sent.
+        // Without this the broker and outbound channel threads may deliver them in any order.
+        registry.setPreservePublishOrder(true);
         registry.enableSimpleBroker("/topic").setHeartbeatValue(new long[] {HEARTBEAT_MS, HEARTBEAT_MS})
                 .setTaskScheduler(heartbeatScheduler);
     }
