@@ -109,23 +109,35 @@ public class RouteSearchService {
             drafts = List.of(internal.build(origin.id(), destination.id()));
         }
         List<String> types = routeTypes(drafts);
+        boolean passed = appointmentPassed(room, now);
+        // Only a room appointment that has not passed is compared with arrivals.
+        Instant appointment = room == null || passed ? null : room.getAppointmentAt();
         List<Route> routes = new ArrayList<>();
         for (int i = 0; i < drafts.size(); i++) {
             RouteDraft draft = drafts.get(i);
-            routes.add(route("r" + (i + 1), types.get(i), draft, departure(room, query.departAt(), draft.totalTimeSec(), now)));
+            routes.add(route("r" + (i + 1), types.get(i), draft, departure(room, query.departAt(), draft.totalTimeSec(), now),
+                    appointment));
         }
-        boolean passed = appointmentPassed(room, now);
         return new RouteSearchResponse(source, routes, passed, passed ? APPOINTMENT_PASSED_NOTICE : null);
     }
 
     /**
      * The room's appointment itself is before now, compared in whole seconds like recommendations (APPOINTMENT_PASSED):
      * departures are then the request time and departAt is ignored. A planned departure (appointment − totalTimeSec)
-     * that has passed while the appointment has not is not reported (known limit, docs/route-search-81.md).
+     * that has passed while the appointment has not shows as {@link #arrivesAfter} instead.
      */
     static boolean appointmentPassed(MeetingRoom room, Instant now) {
         return room != null && room.getAppointmentAt() != null && room.getAppointmentAt().truncatedTo(ChronoUnit.SECONDS)
                 .isBefore(now.truncatedTo(ChronoUnit.SECONDS));
+    }
+
+    /**
+     * The final arrival (moved to the first train or not) is after the appointment, both in whole seconds. False without
+     * an appointment; leaving at appointment − totalTimeSec arrives exactly at it and is false.
+     */
+    static boolean arrivesAfter(Instant arrival, Instant appointment) {
+        return appointment != null
+                && arrival.truncatedTo(ChronoUnit.SECONDS).isAfter(appointment.truncatedTo(ChronoUnit.SECONDS));
     }
 
     /**
@@ -162,7 +174,8 @@ public class RouteSearchService {
         }
     }
 
-    private Route route(String routeId, String routeType, RouteDraft draft, Instant requested) {
+    /** @param appointment the room's appointment when it has not passed, else null */
+    private Route route(String routeId, String routeType, RouteDraft draft, Instant requested, Instant appointment) {
         FirstTrainTimer.Timing timing = firstTrains == null ? null : firstTrains.time(draft, requested).orElse(null);
         boolean noService = timing != null && timing.noService();
         Instant departure = noService ? timing.departure() : requested;
@@ -194,10 +207,11 @@ public class RouteSearchService {
             steps.add(new Step(step.type(), step.guidance(), step.durationSec(), step.distanceM(), step.line(), null,
                     step.directionCode(), stopList, step.path(), stationList));
         }
-        String arrivalAt = offsetTime(departure.plusSeconds(draft.totalTimeSec()));
+        Instant arrival = departure.plusSeconds(draft.totalTimeSec());
         int walkingMinutes = (int) Math.round(draft.walkingSeconds() / 60.0);
-        return new Route(routeId, routeType, new Summary(draft.totalTimeSec(), arrivalAt, draft.fare(), draft.fareSource(),
-                draft.transferCount(), walkingMinutes, congestion(summary), offsetTime(departure), noService, serviceNotice), steps);
+        return new Route(routeId, routeType, new Summary(draft.totalTimeSec(), offsetTime(arrival), draft.fare(), draft.fareSource(),
+                draft.transferCount(), walkingMinutes, congestion(summary), offsetTime(departure), noService, serviceNotice,
+                arrivesAfter(arrival, appointment)), steps);
     }
 
     private static String offsetTime(Instant at) {

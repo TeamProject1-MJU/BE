@@ -292,6 +292,8 @@ class RouteSearchPostgresTest {
         // Departure = 08:30 - 600 s = 08:20, so every stop is in the 08:00 slot of that Tuesday; arrival is the appointment.
         JsonNode route = data.get("routes").get(0);
         assertThat(route.get("summary").get("arrivalAt").asString()).isEqualTo("2027-01-05T08:30:00+09:00");
+        // Arriving exactly at the appointment is not after it.
+        assertThat(route.get("summary").get("arrivesAfterAppointment").asBoolean()).isFalse();
         JsonNode first = route.get("steps").get(0).get("stations").get(0);
         assertThat(first.get("slotDate").asString()).isEqualTo("2027-01-05");
         assertThat(first.get("slotStart").asString()).isEqualTo("08:00");
@@ -331,7 +333,7 @@ class RouteSearchPostgresTest {
         assertThat(root.get("components").get("schemas").get("RouteSearchData").toString()).contains("KAKAO", "INTERNAL");
         assertThat(root.get("components").get("schemas").get("RouteSearchData").toString()).contains("appointmentPassed", "notice");
         assertThat(root.get("components").get("schemas").get("RouteSummaryData").toString())
-                .contains("departureAt", "noService", "serviceNotice");
+                .contains("departureAt", "noService", "serviceNotice", "arrivesAfterAppointment");
     }
 
     // ---- #120: no service on the real timetable (2026-11-12 Thursday, 2026-11-14 Saturday) ----
@@ -376,6 +378,8 @@ class RouteSearchPostgresTest {
     private static void assertNoService(JsonNode data, String departureAt, String firstTrain) {
         JsonNode summary = data.get("routes").get(0).get("summary");
         assertThat(summary.get("noService").asBoolean()).as(departureAt).isTrue();
+        // No room: never after an appointment.
+        assertThat(summary.get("arrivesAfterAppointment").asBoolean()).isFalse();
         assertThat(summary.get("departureAt").asString()).isEqualTo(departureAt);
         assertThat(OffsetDateTime.parse(summary.get("arrivalAt").asString()))
                 .isEqualTo(OffsetDateTime.parse(departureAt).plusSeconds(summary.get("totalTimeSec").asInt()));
@@ -402,6 +406,21 @@ class RouteSearchPostgresTest {
         }
     }
 
+    /** Appointment Tuesday 05:40, 600 s route: leave 05:30, before the 05:36:00 first train -> arrive 05:46. */
+    @Test void aDawnAppointmentPushedToTheFirstTrainArrivesAfterIt() throws Exception {
+        String room = createRoom(member, "2027-01-04T20:40:00Z");
+        server.expect(ExpectedCount.once(), requestTo(startsWith(URL))).andRespond(withSuccess(KAKAO_OK, MediaType.APPLICATION_JSON));
+
+        JsonNode data = ok(search(gangnam, sadang, null, room), member);
+
+        JsonNode summary = data.get("routes").get(0).get("summary");
+        assertThat(data.get("appointmentPassed").asBoolean()).isFalse();
+        assertThat(summary.get("noService").asBoolean()).isTrue();
+        assertThat(summary.get("departureAt").asString()).isEqualTo("2027-01-05T05:36:00+09:00");
+        assertThat(summary.get("arrivalAt").asString()).isEqualTo("2027-01-05T05:46:00+09:00");
+        assertThat(summary.get("arrivesAfterAppointment").asBoolean()).isTrue();
+    }
+
     @Test void aPassedAppointmentIsReportedAndDepartAtIgnored() throws Exception {
         String room = createRoom(member, "2020-01-01T00:00:00Z");
         server.expect(ExpectedCount.once(), requestTo(startsWith(URL))).andRespond(withSuccess(KAKAO_OK, MediaType.APPLICATION_JSON));
@@ -411,6 +430,7 @@ class RouteSearchPostgresTest {
         assertThat(data.get("appointmentPassed").asBoolean()).isTrue();
         assertThat(data.get("notice").asString()).isEqualTo("약속 시각이 이미 지나 지금 출발 기준으로 안내합니다.");
         assertThat(data.get("routes").get(0).get("summary").get("departureAt").asString()).isNotEqualTo("2026-11-12T14:00:00+09:00");
+        assertThat(data.get("routes").get(0).get("summary").get("arrivesAfterAppointment").asBoolean()).isFalse();
     }
 
     // ---- helpers ----

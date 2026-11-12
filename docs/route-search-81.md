@@ -16,7 +16,7 @@
 | `departAt` | X | 혼잡도 기준 시각, 오프셋 포함 ISO-8601. 생략하면 요청 시각 |
 | `roomId` | X | 방 화면에서 호출할 때. 보내면 방 멤버를 확인하고 약속 시각 기준으로 출발 시각을 계산 |
 
-응답은 명세 6.1 형식이다: `routeSource`, `routes[]`. #120에서 `appointmentPassed`, `notice`와 `summary.departureAt`, `summary.noService`, `summary.serviceNotice`를 추가했다(필드 추가만, 기존 필드·구조·에러 코드는 그대로).
+응답은 명세 6.1 형식이다: `routeSource`, `routes[]`. #120에서 `appointmentPassed`, `notice`와 `summary.departureAt`, `summary.noService`, `summary.serviceNotice`, `summary.arrivesAfterAppointment`를 추가했다(필드 추가만, 기존 필드·구조·에러 코드는 그대로).
 - `routes[]`의 각 경로: `routeId`, `routeType`, `summary`, `steps[]`
 - `steps[]`의 각 단계: `type`, `guidance`, `durationSec`, `distanceM`, `line`, `direction`, `directionCode`, `stops`, `path`, `stations`
 
@@ -32,6 +32,7 @@
 - `summary.arrivalAt`: `departureAt` + `totalTimeSec`, Asia/Seoul 오프셋
 - `summary.noService`, `summary.serviceNotice`: 비운행이라 출발을 첫차 기준으로 바꿨으면 `true`와 안내 문구, 아니면 `false`·`null`
 - `appointmentPassed`, `notice`: 방 약속 시각 자체가 지났으면 `true`와 안내 문구, 아니면 `false`·`null`
+- `summary.arrivesAfterAppointment`: 방 약속 시각이 있고 `appointmentPassed`가 `false`인데 최종 `arrivalAt`이 약속보다 늦으면 `true`. 방·약속이 없으면 항상 `false`(아래 "방 약속이 지난 경우")
 - `walkingMinutes`: 도보 단계 시간 합을 분으로 반올림
 
 ## 처리 순서
@@ -161,8 +162,11 @@ INTERNAL 경로는 다음과 같이 만든다.
 
 - 방 약속 시각 자체가 요청 시각보다 앞서면(추천의 `APPOINTMENT_PASSED`와 같은 초 단위 비교, 같은 초는 지나지 않음) `appointmentPassed: true`, `notice: "약속 시각이 이미 지나 지금 출발 기준으로 안내합니다."`다. 출발은 요청 시각이고 `departAt`은 무시한다(전과 같은 동작).
 - 방에 약속 시각이 있으면 `departAt`은 약속이 지나지 않았어도 무시한다(기존 동작).
-- **알려진 한계**: 약속은 아직 남았지만 `약속 시각 − totalTimeSec`가 이미 지난 경우(지금 출발해도 늦는 경우)도 출발은 요청 시각으로 바뀐다. 이 경우는 표시하지 않는다(`appointmentPassed: false`). 경로별 `TOO_LATE_NOW` 같은 표시는 이번에 하지 않았다.
-- 약속 시각 기준 출발이 비운행이면(예: 약속 05:00) 출발이 첫차로 바뀌어 `arrivalAt`이 약속보다 늦을 수 있다. 별도 표시는 없고 `noService`·`serviceNotice`로 알린다.
+- **약속보다 늦게 도착 (`summary.arrivesAfterAppointment`)**: 경로마다 최종 `arrivalAt`(비운행으로 첫차로 밀린 값 포함)과 방 약속 시각을 둘 다 초 단위로 자른 뒤 비교해, 도착이 늦으면 `true`다.
+  - 정상 케이스(`약속 − totalTimeSec`에 출발해 약속 시각에 도착)는 같은 시각이라 `false`다.
+  - 약속 시각 기준 출발이 비운행이면(예: 약속 06:00, 40분 경로 → 05:20 출발 → 첫차 05:36) 출발이 첫차로 밀려 `arrivalAt`(06:16)이 약속보다 늦어진다. 이때 `noService`와 함께 `true`다.
+  - 약속은 아직 남았지만 `약속 시각 − totalTimeSec`가 이미 지나 출발이 요청 시각(지금)으로 바뀐 경우(이전 알려진 한계, 지금 출발해도 늦는 경우)도 같은 필드로 `true`가 된다. 별도의 `TOO_LATE_NOW` 값은 두지 않았다.
+  - `appointmentPassed: true`(약속 자체가 지남)이면 비교하지 않고 `false`다. 방이 없거나(`roomId` 없음) 약속 시각이 없으면 항상 `false`다.
 
 ## 설정과 실행
 
@@ -212,6 +216,7 @@ INTERNAL 경로는 다음과 같이 만든다.
   - 14:00·23:30 응답이 시각표 없이 만든 응답과 같음(새 필드 `false`/`null`)
   - 03:00이면 출발·도착만 바뀌고 소요시간·요금·환승·정차역은 그대로
   - `appointmentPassed`: 약속 시각 자체가 지났을 때만, 초 단위
+  - `arrivesAfterAppointment`: 새벽 약속(06:00, 40분)이 첫차로 밀림 → `true`, 내일 14:00 약속(도착 = 약속) → `false`, `약속 − 소요`가 지나 지금 출발 → `true`, 지난 약속 → `false`, 방 없음 → `false`, 초 단위 비교
 - `KakaoRouteMapperTest`
   - 정차역·방향·통과 시각, 환승
   - 버스 섞임, 9호선, 없는 역, 인접하지 않은 역, 출발역 불일치 → 제외
@@ -223,4 +228,4 @@ INTERNAL 경로는 다음과 같이 만든다.
   - 방 멤버(약속 시각 기준 슬롯), 비멤버 403, 없는 방 404
   - 역 검증(404, 422)이 카카오보다 먼저
   - 인증 없음 401, OpenAPI
-  - #120 실제 시각표: 강남→사당 KAKAO fixture·INTERNAL 모두 평일 03:00·05:00 → 05:36:00, 토요일 01:30 → 05:35:30. 14:00·23:30 → 그대로. 토요일 23:50 → 일요일 첫차 05:35:30(이 경로 막차 23:45 이후). 지난 약속 → `appointmentPassed`
+  - #120 실제 시각표: 강남→사당 KAKAO fixture·INTERNAL 모두 평일 03:00·05:00 → 05:36:00, 토요일 01:30 → 05:35:30. 14:00·23:30 → 그대로. 토요일 23:50 → 일요일 첫차 05:35:30(이 경로 막차 23:45 이후). 지난 약속 → `appointmentPassed`. 화요일 05:40 약속 → 첫차 05:36:00 출발, 05:46 도착, `arrivesAfterAppointment: true`. 약속 시각에 도착하는 방 조회 → `false`

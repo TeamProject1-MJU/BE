@@ -66,6 +66,10 @@ class RouteSearchServiceTest {
     // ---- whole responses with the timetable of FirstTrainTimerTest (INTERNAL 강남 -> 서초) ----
 
     private static RouteSearchService service(Instant now, FirstTrainTimer timer, RoomAccess rooms) {
+        return service(now, timer, rooms, FirstTrainTimerTest.gangnamToSeocho());
+    }
+
+    private static RouteSearchService service(Instant now, FirstTrainTimer timer, RoomAccess rooms, RouteDraft route) {
         StationLookup stations = mock(StationLookup.class);
         when(stations.requireSupported(31)).thenReturn(new StationInfo(31, "강남", 37.49, 127.02, true));
         when(stations.requireSupported(33)).thenReturn(new StationInfo(33, "서초", 37.49, 127.00, true));
@@ -73,7 +77,7 @@ class RouteSearchServiceTest {
         when(kakao.search(anyDouble(), anyDouble(), anyDouble(), anyDouble()))
                 .thenReturn(new KakaoRouteClient.Failed(KakaoRouteClient.Reason.NO_KEY));
         InternalRouteBuilder internal = mock(InternalRouteBuilder.class);
-        when(internal.build(31, 33)).thenReturn(FirstTrainTimerTest.gangnamToSeocho());
+        when(internal.build(31, 33)).thenReturn(route);
         CongestionLookup congestion = mock(CongestionLookup.class);
         when(congestion.congestionOf(any(), any())).thenReturn(CongestionResult.unsupported());
         return new RouteSearchService(rooms, stations, kakao, mock(KakaoRouteMapper.class), internal, congestion,
@@ -137,5 +141,80 @@ class RouteSearchServiceTest {
         assertThat(response.notice()).isEqualTo(RouteSearchService.APPOINTMENT_PASSED_NOTICE);
         // departAt is ignored: leaving now.
         assertThat(response.routes().get(0).summary().departureAt()).isEqualTo("2026-11-12T14:00:00+09:00");
+    }
+
+    // ---- arrivesAfterAppointment ----
+
+    /** 강남 -> 서초 of FirstTrainTimerTest, counted as a 40-minute route. */
+    private static RouteDraft fortyMinutes() {
+        RouteDraft base = FirstTrainTimerTest.gangnamToSeocho();
+        return new RouteDraft(base.steps(), 2400, base.fare(), base.fareSource(), base.transferCount(), base.fromStationId(),
+                base.toStationId());
+    }
+
+    private static RouteSearchResponse.Summary withAppointment(Instant now, Instant appointment, String departAt) {
+        MeetingRoom room = new MeetingRoom("ABC123", "방", UUID.randomUUID());
+        room.schedule(appointment);
+        RoomAccess rooms = mock(RoomAccess.class);
+        when(rooms.requireMember(any(), any())).thenReturn(room);
+        return service(now, FirstTrainTimerTest.TIMER, rooms, fortyMinutes()).search(UUID.randomUUID(),
+                new RouteSearchRequest(31L, 33L, departAt, UUID.randomUUID().toString())).routes().get(0).summary();
+    }
+
+    @Test
+    void aDawnAppointmentPushedToTheFirstTrainArrivesAfterIt() {
+        // Appointment 06:00, 40 minutes: leave 05:20, before the 05:36 first train -> arrive 06:16.
+        var summary = withAppointment(seoul("2026-11-12T02:00:00"), seoul("2026-11-12T06:00:00"), null);
+        assertThat(summary.noService()).isTrue();
+        assertThat(summary.departureAt()).isEqualTo("2026-11-12T05:36:00+09:00");
+        assertThat(summary.arrivalAt()).isEqualTo("2026-11-12T06:16:00+09:00");
+        assertThat(summary.arrivesAfterAppointment()).isTrue();
+    }
+
+    @Test
+    void enoughTimeArrivesExactlyAtTheAppointment() {
+        // Tomorrow 14:00: leave 13:20 (a train runs), arrive at 14:00 itself -> not after it.
+        var summary = withAppointment(seoul("2026-11-12T14:00:00"), seoul("2026-11-13T14:00:00"), null);
+        assertThat(summary.noService()).isFalse();
+        assertThat(summary.departureAt()).isEqualTo("2026-11-13T13:20:00+09:00");
+        assertThat(summary.arrivalAt()).isEqualTo("2026-11-13T14:00:00+09:00");
+        assertThat(summary.arrivesAfterAppointment()).isFalse();
+    }
+
+    @Test
+    void aPlannedDepartureAlreadyPastLeavesNowAndArrivesAfterTheAppointment() {
+        // Appointment 14:10 has not passed, but 14:10 − 40 min = 13:30 has: leave now (14:00), arrive 14:40.
+        var summary = withAppointment(seoul("2026-11-12T14:00:00"), seoul("2026-11-12T14:10:00"), null);
+        assertThat(summary.departureAt()).isEqualTo("2026-11-12T14:00:00+09:00");
+        assertThat(summary.arrivesAfterAppointment()).isTrue();
+    }
+
+    @Test
+    void aPassedAppointmentIsNotComparedWithArrivals() {
+        MeetingRoom room = new MeetingRoom("ABC123", "방", UUID.randomUUID());
+        room.schedule(seoul("2026-11-12T13:00:00"));
+        RoomAccess rooms = mock(RoomAccess.class);
+        when(rooms.requireMember(any(), any())).thenReturn(room);
+        RouteSearchResponse response = service(seoul("2026-11-12T14:00:00"), FirstTrainTimerTest.TIMER, rooms, fortyMinutes())
+                .search(UUID.randomUUID(), new RouteSearchRequest(31L, 33L, null, UUID.randomUUID().toString()));
+        assertThat(response.appointmentPassed()).isTrue();
+        assertThat(response.routes().get(0).summary().arrivesAfterAppointment()).isFalse();
+    }
+
+    @Test
+    void withoutARoomArrivalsAreNeverAfterAnAppointment() {
+        RouteSearchResponse response = service(seoul("2026-11-12T14:00:00"), FirstTrainTimerTest.TIMER, mock(RoomAccess.class),
+                fortyMinutes()).search(UUID.randomUUID(), new RouteSearchRequest(31L, 33L, "2026-11-12T03:00:00+09:00", null));
+        assertThat(response.routes().get(0).summary().noService()).isTrue();
+        assertThat(response.routes().get(0).summary().arrivesAfterAppointment()).isFalse();
+    }
+
+    @Test
+    void arrivesAfterComparesWholeSeconds() {
+        Instant appointment = Instant.parse("2026-11-12T05:00:00Z");
+        assertThat(RouteSearchService.arrivesAfter(appointment, appointment)).isFalse();
+        assertThat(RouteSearchService.arrivesAfter(appointment.plusMillis(900), appointment)).isFalse();
+        assertThat(RouteSearchService.arrivesAfter(appointment.plusSeconds(1), appointment)).isTrue();
+        assertThat(RouteSearchService.arrivesAfter(appointment.plusSeconds(1), null)).isFalse();
     }
 }
