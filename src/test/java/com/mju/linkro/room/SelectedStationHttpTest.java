@@ -36,6 +36,8 @@ class SelectedStationHttpTest {
     @MockitoBean RoomAccess access;
     @MockitoBean StationLookup stations;
     @MockitoBean com.mju.linkro.chat.service.ChatSystemMessages systemMessages;
+    @MockitoBean com.mju.linkro.room.repository.RoomReadRepository reads;   // H2 has no stations table
+    @MockitoBean com.mju.linkro.realtime.RoomEvents events;
     MockMvc mvc;
     UUID user,id;
     String path;

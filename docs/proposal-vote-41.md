@@ -45,6 +45,6 @@ OWNER와 MEMBER 모두 투표할 수 있고 본인 제안 후보에도 투표할
 
 GET station-proposals는 같은 투표 테이블의 count와 bool_or를 사용해요. PUT 결과와 GET의 voteCount·votedByMe는 같은 저장 상태를 반영해요. 응답 이후 다른 멤버 투표나 cascade 삭제가 일어나면 값이 달라질 수 있어요.
 
-## #43 연결 지점
+## #43 연결
 
-새 표 INSERT 성공 분기에만 `// #43:` 연결 지점을 둬요. 멱등 재요청에는 이벤트가 없어요. 후속 STATION_PROPOSAL_VOTE_CHANGED payload는 불변 값으로 만들고 WS는 커밋 성공 후 발행해야 해요. 현재 WS 이벤트와 SYSTEM 메시지는 구현하지 않아요.
+새 표 INSERT 성공 분기에서만 STATION_PROPOSAL_VOTE_CHANGED `{proposalId, voteCount, userId}`를 `RoomEvents.publish`로 발행해요. 투표 트랜잭션(REQUIRES_NEW)이 커밋된 뒤에만 나가고, 멱등 재요청·실패·유니크 위반 재시도(먼저 들어간 요청이 발행)에는 나가지 않아요. SYSTEM 메시지는 없어요. 자세한 규칙은 `docs/stomp-42-43.md`를 보세요.

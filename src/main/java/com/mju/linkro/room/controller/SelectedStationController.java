@@ -30,7 +30,7 @@ public class SelectedStationController {
     private final SelectedStationService service;
 
     @PutMapping
-    @Operation(summary = "최종 약속역 지정·변경", description = "현재 OWNER 확인 후 stationId를 검증합니다. 후보·투표와 무관하게 지원 역을 지정할 수 있습니다. 같은 역도 confirmedAt을 갱신합니다. 기존 기록을 보존합니다.",
+    @Operation(summary = "최종 약속역 지정·변경", description = "현재 OWNER 확인 후 stationId를 검증합니다. 후보·투표와 무관하게 지원 역을 지정할 수 있습니다. 같은 역도 confirmedAt을 갱신합니다. 기존 기록을 보존합니다. 커밋 뒤 SELECTED_STATION_CHANGED {station, confirmedAt}를 방 구독자에게 보내며 같은 역 재지정에도 보냅니다. SYSTEM 메시지는 역이 바뀔 때만 남깁니다.",
             requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true,
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = SelectedStationRequest.class), examples = @ExampleObject(value = "{\"stationId\":112}"))))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "ROOM_NOT_FOUND / STATION_NOT_FOUND", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
@@ -42,7 +42,7 @@ public class SelectedStationController {
 
     @DeleteMapping
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "ROOM_NOT_FOUND", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
-    @Operation(summary = "최종 약속역 해제", description = "방 락과 현재 OWNER 검사는 항상 수행합니다. 두 필드를 null로 하고 OPEN으로 계산합니다. 보충 계약(API v1.12 원문에 미명시): 이미 미확정이면 상태를 유지하고 200·data:null로 성공합니다. 무변경 시 #43 이벤트·SYSTEM 발행 대상에서 제외합니다. 후보·투표 등 기존 기록은 보존합니다.")
+    @Operation(summary = "최종 약속역 해제", description = "방 락과 현재 OWNER 검사는 항상 수행합니다. 두 필드를 null로 하고 OPEN으로 계산합니다. 실제로 해제된 때만 SELECTED_STATION_CHANGED {station:null, confirmedAt:null}를 보냅니다. 보충 계약(API v1.12 원문에 미명시): 이미 미확정이면 상태를 유지하고 200·data:null로 성공합니다. 무변경 시 #43 이벤트·SYSTEM 발행 대상에서 제외합니다. 후보·투표 등 기존 기록은 보존합니다.")
     public ApiResponse<Void> clear(@CurrentUser UUID userId, @PathVariable UUID roomId) {
         service.clear(roomId, userId);
         return ApiResponse.success();

@@ -66,8 +66,8 @@ CONNECT·SUBSCRIBE·SEND가 거절되면 서버가 ERROR 프레임을 보내고 
 | `RECOMMENDATION_CREATED` | `{runId}` | `RecommendationCreatedEvent` (8.1 POST만) |
 | `STATION_PROPOSAL_CREATED` | 후보 객체(7.14 응답) | `StationProposalService.create` |
 | `STATION_PROPOSAL_DELETED` | `{proposalId}` | `StationProposalService.delete` |
-| `STATION_PROPOSAL_VOTE_CHANGED` | `{proposalId, voteCount, userId}` | **아직 연결 안 함** (아래) |
-| `SELECTED_STATION_CHANGED` | `{station, confirmedAt}` (해제 시 둘 다 null) | **아직 연결 안 함** (아래) |
+| `STATION_PROPOSAL_VOTE_CHANGED` | `{proposalId, voteCount, userId}` | `ProposalVoteService.vote`, 새로 투표한 때만 (아래) |
+| `SELECTED_STATION_CHANGED` | `{station, confirmedAt}` (해제 시 둘 다 null) | `SelectedStationService.select·clear` (아래) |
 
 - 마지막 멤버가 나가 방이 삭제될 때는 `MEMBER_LEFT`를 보내지 않아요. 받을 사람이 없어요.
 - 같은 트랜잭션의 SYSTEM 메시지(#76)와 이벤트는 모두 커밋 뒤에 나가요. **한 트랜잭션 안에서는 보낸 순서 그대로 받아요.** SYSTEM 메시지의 `MESSAGE_CREATED`가 먼저이고 상태 이벤트가 뒤예요(입장: 메시지 → `MEMBER_JOINED`, 후보 제안: 메시지 → `STATION_PROPOSAL_CREATED`, 방장이 나갈 때: 나감 메시지 → 새 방장 메시지 → `MEMBER_LEFT` → `OWNER_CHANGED`).
@@ -87,12 +87,13 @@ events.disconnect(userId);                                     // 커밋 뒤, �
 - 쓰는 트랜잭션 안에서 부르면 그 트랜잭션이 커밋될 때만 나가고, 롤백되면 아무것도 안 나가요. 트랜잭션 밖에서 부르면 바로 나가요.
 - 전송이 실패해도(직렬화 오류, 브로커 오류) 로그만 남기고 호출한 쪽에는 예외가 가지 않아요. 이미 커밋된 DB 변경은 되돌아가지 않아요.
 - payload는 커밋 전에 값으로 만들어 넘겨요(불변 record). 채팅·추천은 기존 Spring 이벤트(`MessageCreatedEvent`, `RecommendationCreatedEvent`)를 `RoomEventListeners`가 받아 그대로 STOMP로 보내요. SYSTEM 메시지 저장은 #76의 `ChatSystemMessages`가 그대로 해요.
-- payload 모양은 `RoomEventPayloads`에 있어요(`ProposalVoteChanged`, `SelectedStationChanged`도 미리 만들어 뒀어요).
+- payload 모양은 `RoomEventPayloads`에 있어요(`ProposalVoteChanged`, `SelectedStationChanged` 포함).
 
-### 아직 연결하지 않은 것 (cij041109-del 몫)
+### 투표·약속역 이벤트 (#43)
 
-- **SELECTED_STATION_CHANGED** (#39 약속역 지정·변경·해제): `SelectedStationService`는 건드리지 않았어요. 연결할 때는 방 락 안에서 `events.publish(roomId, RoomEventType.SELECTED_STATION_CHANGED, new SelectedStationChanged(station, confirmedAt))`를 부르면 돼요. 해제는 `new SelectedStationChanged(null, null)`이고, 이미 미확정인 방의 반복 clear는 부르지 않아요. `station`은 `RoomReadRepository.stations(...)`의 `RoomResponses.Station`을 쓰면 방 상세의 `selectedStation`과 모양이 같아요.
-- **STATION_PROPOSAL_VOTE_CHANGED** (#41 투표 API): 투표 서비스가 아직 없어요. 만들 때 `events.publish(roomId, RoomEventType.STATION_PROPOSAL_VOTE_CHANGED, new ProposalVoteChanged(proposalId, voteCount, userId))`를 같은 트랜잭션에서 부르면 돼요.
+- **STATION_PROPOSAL_VOTE_CHANGED** `{proposalId, voteCount, userId}`: `userId`는 투표한 사람이고 `voteCount`는 그 투표가 반영된 뒤의 총 표 수예요. 이슈 #43과 명세 그대로의 이름·필드예요. **새 표가 들어간 때만** 나가요(같은 후보에 다시 투표한 멱등 요청, 다른 후보 재투표 409, 없는 후보 404, 멤버 아님 403은 안 나가요). 동시 요청이 유니크 위반으로 재시도되면 먼저 들어간 쪽만 보내요. 투표 변경·취소 API가 없어서 연결할 곳은 이것뿐이고, SYSTEM 메시지는 없어요. 멤버 탈퇴·후보 삭제로 표가 cascade 삭제될 때는 이 이벤트를 보내지 않아요(프론트는 `MEMBER_LEFT`·`STATION_PROPOSAL_DELETED`에서 후보를 다시 조회).
+- **SELECTED_STATION_CHANGED** `{station, confirmedAt}`: 지정·변경은 **같은 역을 다시 지정해도 매번** 나가요(`confirmedAt`이 바뀌어요). `station`은 방 상세의 `selectedStation`과 같은 모양(`id`, `name`, `isSupported`, `lines`)이고, `confirmedAt`은 마이크로초 단위로 잘라서 이후 GET이 돌려주는 값과 같아요. 해제는 `{station: null, confirmedAt: null}`(키는 있고 값만 null)이며 실제로 해제된 때만 나가요. 이미 미확정인 방의 반복 해제는 아무것도 안 보내요. 권한 없음·없는 역·미지원 역 같은 실패도 안 나가요.
+- 약속역 SYSTEM 메시지(#76의 기존 문구 `stationSelected`·`stationCleared`)는 **역이 실제로 바뀔 때만** 저장하고, 같은 역 재지정에는 없어요. 메시지가 먼저, `SELECTED_STATION_CHANGED`가 나중이에요(위 순서 규칙). 방장 락을 잡은 같은 트랜잭션이라 커밋 뒤에만 나가요.
 
 ## 설정
 
@@ -105,4 +106,4 @@ heartbeat 10초와 메시지 크기 제한(16KB)은 코드 상수예요. heartbe
 ## 테스트
 
 - 단위(`StompSessionsTest`, `StompDeliveryFilterTest`): 구독 기록·해제, 같은 구독 id 중복 기록 거절, 방까지 같아야 구독으로 인정, 방 구독만 지우기, 연결 종료와 닫기 실패, 다른 방으로 재사용된 구독 id의 프레임 차단, payload JSON 모양. 기존 서비스 테스트는 `RoomEvents` mock을 받도록 고쳤고, `/ws`가 Security에서 열린 것에 맞춰 `JwtAuthenticationFilterTest`의 비공개 경로 목록에서 `/ws`만 뺐어요.
-- PostgreSQL(`StompPostgresTest`): 내장 서버와 Spring `WebSocketStompClient`로 실제 연결해요. 토큰 없음·형식 틀림·만료·위조·없는 사용자·탈퇴 사용자 CONNECT 거절, heartbeat, 허용·비허용 Origin, 멤버 구독과 채팅 POST 뒤 `MESSAGE_CREATED` 수신, 비멤버·없는 방·잘못된 목적지 거절, 신원 헤더 위조 무시, 클라이언트 SEND 차단, 나가기 뒤 기존 구독 수신 중단(연결은 유지), 방장 퇴장 시 `MEMBER_LEFT`+`OWNER_CHANGED`, 탈퇴 시 두 연결 모두 닫힘, 입장·출발역·방 수정(바뀐 때만)·후보 제안/삭제 이벤트, 추천 이벤트 전달, 다른 방 이벤트 차단, 롤백 시 이벤트 없음, 커밋 전에는 안 나감, 전송 실패해도 DB 변경 유지. 리뷰 반영 테스트: 구독 id 재사용(A `sub-0` 구독 → A 나가기 → B `sub-0` 구독 → A에 발행해도 안 옴, 브로커 목록에서도 빠짐), 브로커에 옛 구독이 남은 상태에서도 전달 차단, 구독 id 중복 거절, CONNECT 확인과 등록 사이·등록 직후 탈퇴 경합, 순서(입장·후보 제안·나가기·방장 위임을 도착한 순서 그대로 비교, 한 트랜잭션 300개 이벤트 순서).
+- PostgreSQL(`StompPostgresTest`): 내장 서버와 Spring `WebSocketStompClient`로 실제 연결해요. 토큰 없음·형식 틀림·만료·위조·없는 사용자·탈퇴 사용자 CONNECT 거절, heartbeat, 허용·비허용 Origin, 멤버 구독과 채팅 POST 뒤 `MESSAGE_CREATED` 수신, 비멤버·없는 방·잘못된 목적지 거절, 신원 헤더 위조 무시, 클라이언트 SEND 차단, 나가기 뒤 기존 구독 수신 중단(연결은 유지), 방장 퇴장 시 `MEMBER_LEFT`+`OWNER_CHANGED`, 탈퇴 시 두 연결 모두 닫힘, 입장·출발역·방 수정(바뀐 때만)·후보 제안/삭제 이벤트, 추천 이벤트 전달, 다른 방 이벤트 차단, 롤백 시 이벤트 없음, 커밋 전에는 안 나감, 전송 실패해도 DB 변경 유지. 리뷰 반영 테스트: 구독 id 재사용(A `sub-0` 구독 → A 나가기 → B `sub-0` 구독 → A에 발행해도 안 옴, 브로커 목록에서도 빠짐), 브로커에 옛 구독이 남은 상태에서도 전달 차단, 구독 id 중복 거절, CONNECT 확인과 등록 사이·등록 직후 탈퇴 경합, 투표 이벤트(새 표만 `{proposalId, voteCount, userId}`, 반복·다른 후보·없는 후보·비멤버는 안 나감, 비멤버·나간 멤버 미수신, 롤백 시 없음)와 약속역 이벤트(지정 → 같은 역 재지정(SYSTEM 없이 `confirmedAt` 갱신) → 변경 → 해제 → 반복 해제 없음, 비방장·미지원 역 실패 시 없음, 비멤버·나간 멤버 미수신), 순서(입장·후보 제안·나가기·방장 위임을 도착한 순서 그대로 비교, 한 트랜잭션 300개 이벤트 순서).

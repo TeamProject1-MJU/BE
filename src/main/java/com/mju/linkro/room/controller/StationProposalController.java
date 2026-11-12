@@ -30,7 +30,7 @@ public class StationProposalController {
     private final ProposalVoteService votes;
 
     @PutMapping("/{proposalId}/vote")
-    @Operation(summary = "약속역 후보 참고용 투표 (7.17)", description = "방 전체에서 1표이며 같은 후보 재요청은 멱등이에요. 요청 본문은 없어요.")
+    @Operation(summary = "약속역 후보 참고용 투표 (7.17)", description = "방 전체에서 1표이며 같은 후보 재요청은 멱등이에요. 요청 본문은 없어요. 새 표가 들어가면 커밋 뒤 방 구독자에게 STATION_PROPOSAL_VOTE_CHANGED {proposalId, voteCount, userId}를 보내요(재요청은 안 보내요).")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "현재 투표 상태", content = @Content(mediaType = "application/json", schema = @Schema(implementation = VoteEnvelope.class)))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "NOT_ROOM_MEMBER", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "ROOM_NOT_FOUND / PROPOSAL_NOT_FOUND", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))

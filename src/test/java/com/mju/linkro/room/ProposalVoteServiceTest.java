@@ -17,7 +17,8 @@ class ProposalVoteServiceTest {
     final RoomAccess access=mock(RoomAccess.class);
     final StationProposalRepository proposals=mock(StationProposalRepository.class);
     final PlatformTransactionManager manager=mock(PlatformTransactionManager.class);
-    final ProposalVoteService service=new ProposalVoteService(access,proposals,manager);
+    final com.mju.linkro.realtime.RoomEvents events=mock(com.mju.linkro.realtime.RoomEvents.class);
+    final ProposalVoteService service=new ProposalVoteService(access,proposals,events,manager);
     final UUID room=UUID.randomUUID(),user=UUID.randomUUID(),id=UUID.randomUUID();
     @BeforeEach void setup() {
         when(manager.getTransaction(any())).thenAnswer(i->new SimpleTransactionStatus());
@@ -38,6 +39,36 @@ class ProposalVoteServiceTest {
         verify(proposals,times(1)).insertVote(any(),any(),any(),any());
         verify(manager,times(2)).getTransaction(argThat(d->d.getIsolationLevel()==TransactionDefinition.ISOLATION_READ_COMMITTED
             && d.getPropagationBehavior()==TransactionDefinition.PROPAGATION_REQUIRES_NEW && !d.isReadOnly()));
+    }
+    @Test void aNewVotePublishesTheVoteCountAfterTheStateIsReadAndARepeatDoesNot() {
+        when(proposals.voteState(room,id,user)).thenReturn(new Vote(id,3,true));
+        service.vote(room,user,id);
+        var order=inOrder(proposals,events);
+        order.verify(proposals).insertVote(any(),eq(room),eq(id),eq(user));
+        order.verify(proposals).voteState(room,id,user);
+        order.verify(events).publish(room,com.mju.linkro.realtime.RoomEventType.STATION_PROPOSAL_VOTE_CHANGED,
+            new com.mju.linkro.realtime.RoomEventPayloads.ProposalVoteChanged(id,3,user));
+        reset(events);
+        when(proposals.voteByUser(room,user)).thenReturn(Optional.of(id));
+        service.vote(room,user,id);
+        verifyNoInteractions(events);
+    }
+    @Test void rejectedVotesPublishNothing() {
+        when(proposals.author(room,id)).thenReturn(Optional.empty());
+        error(ErrorCode.PROPOSAL_NOT_FOUND);
+        when(proposals.author(room,id)).thenReturn(Optional.of(user));
+        when(proposals.voteByUser(room,user)).thenReturn(Optional.of(UUID.randomUUID()));
+        error(ErrorCode.ALREADY_VOTED);
+        doThrow(new BusinessException(ErrorCode.NOT_ROOM_MEMBER)).when(access).lockMember(room,user);
+        error(ErrorCode.NOT_ROOM_MEMBER);
+        verifyNoInteractions(events);
+    }
+    @Test void aRetryAfterAUniqueViolationDoesNotPublishTheVoteTheOtherRequestCast() {
+        var failure=new DataIntegrityViolationException("insert",new SQLException("constraint \"uq_vote_room_user\"","23505"));
+        doThrow(failure).when(proposals).insertVote(any(),any(),any(),any());
+        when(proposals.voteByUser(room,user)).thenReturn(Optional.empty(),Optional.of(id));
+        service.vote(room,user,id);
+        verifyNoInteractions(events);
     }
     @Test void candidateScopePrecedesExistingVoteAndOtherVoteIsRejected() {
         when(proposals.author(room,id)).thenReturn(Optional.empty());

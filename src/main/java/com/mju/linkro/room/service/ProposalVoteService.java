@@ -2,6 +2,9 @@ package com.mju.linkro.room.service;
 
 import com.github.f4b6a3.uuid.UuidCreator;
 import com.mju.linkro.common.exception.*;
+import com.mju.linkro.realtime.RoomEventPayloads.ProposalVoteChanged;
+import com.mju.linkro.realtime.RoomEventType;
+import com.mju.linkro.realtime.RoomEvents;
 import com.mju.linkro.room.dto.StationProposalResponses.Vote;
 import com.mju.linkro.room.repository.StationProposalRepository;
 import java.sql.SQLException;
@@ -14,11 +17,14 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class ProposalVoteService {
     private final RoomAccess access;
     private final StationProposalRepository proposals;
+    private final RoomEvents events;
     private final TransactionTemplate transaction;
 
-    public ProposalVoteService(RoomAccess access, StationProposalRepository proposals, PlatformTransactionManager manager) {
+    public ProposalVoteService(RoomAccess access, StationProposalRepository proposals, RoomEvents events,
+                               PlatformTransactionManager manager) {
         this.access = access;
         this.proposals = proposals;
+        this.events = events;
         transaction = new TransactionTemplate(manager);
         transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
         transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -38,13 +44,18 @@ public class ProposalVoteService {
         access.lockMember(roomId, userId);
         proposals.author(roomId, proposalId).orElseThrow(() -> new BusinessException(ErrorCode.PROPOSAL_NOT_FOUND));
         var existing = proposals.voteByUser(roomId, userId);
-        if (existing.isPresent()) {
+        boolean cast = existing.isEmpty();
+        if (!cast) {
             if (!existing.get().equals(proposalId)) throw new BusinessException(ErrorCode.ALREADY_VOTED);
         } else {
             proposals.insertVote(UuidCreator.getTimeOrderedEpoch(), roomId, proposalId, userId);
-            // #43: capture immutable STATION_PROPOSAL_VOTE_CHANGED payload only for this insert; publish after commit.
         }
-        return proposals.voteState(roomId, proposalId, userId);
+        Vote state = proposals.voteState(roomId, proposalId, userId);
+        // Only a new vote changes the count; a repeated request for the same candidate sends nothing. Goes out after
+        // this transaction commits (a failed attempt that is retried never published). There is no SYSTEM message
+        // for votes (#43), so there is no ordering to keep with one.
+        if (cast) events.publish(roomId, RoomEventType.STATION_PROPOSAL_VOTE_CHANGED, new ProposalVoteChanged(proposalId, state.voteCount(), userId));
+        return state;
     }
 
     private static boolean isVoteUniqueViolation(Throwable failure) {
