@@ -11,6 +11,13 @@ spring:
     enabled: true
     baseline-on-migrate: true
     baseline-version: 1
+  servlet:
+    multipart:
+      # Sign photo (API 9.1): 5MB. Spring's default is 1MB. Over the limit is IMAGE_INVALID (GlobalExceptionHandler).
+      max-file-size: 5MB
+      max-request-size: 6MB
+      # Above max-request-size, so an accepted upload stays in memory and is never written to the temp dir (spec 9.1: images are not stored). Default 0 writes every upload to disk.
+      file-size-threshold: 6MB
   jpa:
     open-in-view: false
     hibernate:
@@ -85,7 +92,7 @@ logging:
 # - openai with a blank OPENAI_API_KEY or OPENAI_MODEL fails startup. There is no default model id.
 # - explain-read-timeout (OPENAI_EXPLAIN_READ_TIMEOUT, default 6s) applies only to recommendation explanations (#99);
 #   past it the recommendation answers with template sentences. read-timeout stays for condition parsing and chat,
-#   vision-read-timeout for signs. 실제 응답 시간은 타이밍 로그의 explain 값을 보고 조정한다
+#   vision-read-timeout (default 10s) and vision-reasoning-effort (default low) for signs. 실제 응답 시간은 타이밍 로그의 explain 값을 보고 조정한다
 #   ("Recommendation timing: ... explain=…ms").
 # - The timeouts come from ~/BE/.env through docker-compose; an empty value keeps these defaults (OpenAiProperties).
 linkro:
@@ -96,7 +103,8 @@ linkro:
       model: ${OPENAI_MODEL:}
       connect-timeout: ${OPENAI_CONNECT_TIMEOUT:2s}
       read-timeout: ${OPENAI_READ_TIMEOUT:8s}
-      vision-read-timeout: ${OPENAI_VISION_READ_TIMEOUT:4s}
+      vision-read-timeout: ${OPENAI_VISION_READ_TIMEOUT:10s}
+      vision-reasoning-effort: ${OPENAI_VISION_REASONING_EFFORT:low}
       explain-read-timeout: ${OPENAI_EXPLAIN_READ_TIMEOUT:6s}
 
 # Recommendation (#74, API 8.1). Tie tolerances ("허용 폭") with their defaults; see docs/recommendation-74.md.

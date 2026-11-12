@@ -30,10 +30,12 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-}
       # OpenAI timeouts (optional, e.g. 6s). Unset or empty in ~/BE/.env keeps the application defaults
-      # (connect 2s, read 8s, vision 4s, explain 6s): an empty value is not bound.
+      # (connect 2s, read 8s, vision 10s, explain 6s): an empty value is not bound.
       OPENAI_CONNECT_TIMEOUT: ${OPENAI_CONNECT_TIMEOUT:-}
       OPENAI_READ_TIMEOUT: ${OPENAI_READ_TIMEOUT:-}
       OPENAI_VISION_READ_TIMEOUT: ${OPENAI_VISION_READ_TIMEOUT:-}
+      # Sign photo reasoning effort (none/low/medium/high/...). Empty means the application default (low).
+      OPENAI_VISION_REASONING_EFFORT: ${OPENAI_VISION_REASONING_EFFORT:-}
       OPENAI_EXPLAIN_READ_TIMEOUT: ${OPENAI_EXPLAIN_READ_TIMEOUT:-}
       # Subway switches (optional). Unset or empty in ~/BE/.env means mock, as before.
       LINKRO_SUBWAY_MODULE: ${LINKRO_SUBWAY_MODULE:-mock}

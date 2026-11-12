@@ -47,17 +47,21 @@ public class OpenAiClient implements AiClient {
     private final RestClient explainClient;
     private final String apiKey;
     private final String model;
+    /** Sent as reasoning.effort on sign reads only; null or blank sends nothing (the model's own default). */
+    private final String visionReasoningEffort;
 
     OpenAiClient(RestClient textClient, RestClient visionClient, String apiKey, String model) {
-        this(textClient, visionClient, textClient, apiKey, model);
+        this(textClient, visionClient, textClient, apiKey, model, null);
     }
 
-    OpenAiClient(RestClient textClient, RestClient visionClient, RestClient explainClient, String apiKey, String model) {
+    OpenAiClient(RestClient textClient, RestClient visionClient, RestClient explainClient, String apiKey, String model,
+                 String visionReasoningEffort) {
         this.textClient = textClient;
         this.visionClient = visionClient;
         this.explainClient = explainClient;
         this.apiKey = apiKey;
         this.model = model;
+        this.visionReasoningEffort = visionReasoningEffort == null || visionReasoningEffort.isBlank() ? null : visionReasoningEffort.strip();
     }
 
     @Override
@@ -106,7 +110,7 @@ public class OpenAiClient implements AiClient {
                 Map.of("type", "input_text", "text", expected),
                 Map.of("type", "input_image", "image_url", dataUrl, "detail", "low"));
         var input = List.of(Map.of("role", "user", "content", content));
-        String json = call(visionClient, SIGN_PROMPT, input, jsonFormat("sign", SIGN_SCHEMA));
+        String json = call(visionClient, SIGN_PROMPT, input, jsonFormat("sign", SIGN_SCHEMA), visionReasoningEffort);
         return parse(json, SignReading.class);
     }
 
@@ -122,11 +126,16 @@ public class OpenAiClient implements AiClient {
     }
 
     private String call(RestClient client, String instructions, Object input, Map<String, Object> format) {
+        return call(client, instructions, input, format, null);
+    }
+
+    private String call(RestClient client, String instructions, Object input, Map<String, Object> format, String reasoningEffort) {
         var body = new LinkedHashMap<String, Object>();
         body.put("model", model);
         body.put("instructions", instructions);
         body.put("input", input);
         if (format != null) body.put("text", Map.of("format", format));
+        if (reasoningEffort != null) body.put("reasoning", Map.of("effort", reasoningEffort));
         try {
             String response = client.post().uri("/v1/responses")
                     .headers(headers -> headers.setBearerAuth(apiKey))
