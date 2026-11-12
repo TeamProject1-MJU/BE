@@ -1,5 +1,13 @@
 package com.mju.linkro.room;
 
+import com.mju.linkro.realtime.RoomEvents;
+import com.mju.linkro.realtime.RoomEventType;
+import com.mju.linkro.realtime.RoomEventPayloads.SelectedStationChanged;
+import com.mju.linkro.room.repository.RoomReadRepository;
+import com.mju.linkro.room.dto.RoomResponses.Station;
+import java.util.List;
+import java.util.Map;
+
 import com.mju.linkro.common.exception.*;
 import com.mju.linkro.room.domain.*;
 import com.mju.linkro.room.dto.SelectedStationRequest;
@@ -19,7 +27,9 @@ class SelectedStationServiceTest {
     final RoomAccess access = mock(RoomAccess.class);
     final StationLookup stations = mock(StationLookup.class);
     final com.mju.linkro.chat.service.ChatSystemMessages systemMessages = mock(com.mju.linkro.chat.service.ChatSystemMessages.class);
-    final SelectedStationService service = new SelectedStationService(access, stations, systemMessages);
+    final RoomReadRepository reads = mock(RoomReadRepository.class);
+    final RoomEvents events = mock(RoomEvents.class);
+    final SelectedStationService service = new SelectedStationService(access, stations, systemMessages, reads, events);
     final UUID id = UUID.randomUUID(), user = UUID.randomUUID();
     final MeetingRoom room = spy(new MeetingRoom("ABC123", "room", user));
     final JsonMapper mapper = JsonMapper.builder().build();
@@ -37,13 +47,18 @@ class SelectedStationServiceTest {
         assertThat(room.getSelectedStationId()).isNull();
         assertThat(room.getConfirmedAt()).isNull();
         verifyNoInteractions(stations);
-        verify(systemMessages,times(1)).stationCleared(id,user);
+        var order = inOrder(systemMessages,events);
+        order.verify(systemMessages).stationCleared(id,user);
+        order.verify(events).publish(id, RoomEventType.SELECTED_STATION_CHANGED,
+            new SelectedStationChanged(null,null));
+        verifyNoMoreInteractions(events);
     }
 
     @Test void locksValidatesThenConfirmsAndReconfirmsSameStation() {
         when(access.lockOwner(id,user)).thenReturn(room);
         room.confirmStation(112L,Instant.EPOCH);
         clearInvocations(room);
+        when(stations.requireSupported(112L)).thenReturn(new StationInfo(112L,"station",0,0,true));
         service.select(id,user,request("{\"stationId\":112}"));
         var order=inOrder(access,stations,room);
         order.verify(access).lockOwner(id,user);
@@ -73,7 +88,7 @@ class SelectedStationServiceTest {
         assertThatThrownBy(()->service.select(id,user,request(body))).isInstanceOf(BusinessException.class)
                 .extracting(e->((BusinessException)e).getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR);
         verify(access).lockOwner(id,user);
-        verifyNoInteractions(stations,room);
+        verifyNoInteractions(stations,room,events);
     }
 
     @ParameterizedTest @ValueSource(strings={"NOT_ROOM_MEMBER","NOT_ROOM_OWNER","ROOM_NOT_FOUND","ROOM_BUSY"})
@@ -81,7 +96,7 @@ class SelectedStationServiceTest {
         when(access.lockOwner(id,user)).thenThrow(new BusinessException(ErrorCode.valueOf(code)));
         assertThatThrownBy(()->service.select(id,user,request("{}"))).isInstanceOf(BusinessException.class)
                 .extracting(e->((BusinessException)e).getErrorCode()).isEqualTo(ErrorCode.valueOf(code));
-        verifyNoInteractions(stations,room);
+        verifyNoInteractions(stations,room,events);
     }
 
     @ParameterizedTest @ValueSource(strings={"STATION_NOT_FOUND","STATION_UNSUPPORTED"})
@@ -90,6 +105,24 @@ class SelectedStationServiceTest {
         when(stations.requireSupported(112L)).thenThrow(new BusinessException(ErrorCode.valueOf(code)));
         assertThatThrownBy(()->service.select(id,user,request("{\"stationId\":112}"))).isInstanceOf(BusinessException.class)
                 .extracting(e->((BusinessException)e).getErrorCode()).isEqualTo(ErrorCode.valueOf(code));
-        verifyNoInteractions(room);
+        verifyNoInteractions(room,events);
     }
+    @Test void selectionPayloadAndSystemOrderingIncludingReselection() {
+        when(access.lockOwner(id,user)).thenReturn(room);
+        var station = new Station(112L,"station",true,List.of());
+        when(stations.requireSupported(anyLong())).thenAnswer(i -> new StationInfo(i.getArgument(0),"station",0,0,true));
+        var changed = new Station(113L,"changed",true,List.of());
+        when(reads.stations(List.of(112L))).thenReturn(Map.of(112L,station));
+        when(reads.stations(List.of(113L))).thenReturn(Map.of(113L,changed));
+        var order = inOrder(systemMessages,events);
+        for (long stationId : new long[]{112,112,113}) {
+            service.select(id,user,request("{\"stationId\":"+stationId+"}"));
+            if (stationId == 113) order.verify(systemMessages).stationSelected(id,user,"station",true);
+            else if (mockingDetails(events).getInvocations().size()==1) order.verify(systemMessages).stationSelected(id,user,"station",false);
+            order.verify(events).publish(id,RoomEventType.SELECTED_STATION_CHANGED,
+                new SelectedStationChanged(stationId == 113 ? changed : station,room.getConfirmedAt()));
+        }
+        verifyNoMoreInteractions(events,systemMessages);
+    }
+
 }
