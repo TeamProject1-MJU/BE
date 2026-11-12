@@ -89,6 +89,7 @@ class RouteSearchPostgresTest {
     @Autowired SwitchableKakaoRouteClient kakao;
     @Autowired com.mju.linkro.recommendation.service.RecommendationEngine engine;
     @Autowired com.mju.linkro.subway.api.StationFareLookup fareTable;
+    @Autowired com.mju.linkro.subway.api.TimetableRouteFinder timetableRoutes;
     private final JsonMapper mapper = JsonMapper.builder().build();
     MockMvc mvc;
     MockRestServiceServer server;
@@ -283,17 +284,21 @@ class RouteSearchPostgresTest {
     }
 
     @Test void roomMembersUseTheAppointmentAndOthersAreRejected() throws Exception {
-        // 2027-01-05 (Tuesday) 08:30 in Seoul.
+        // 2027-01-05 (Tuesday) 08:30 in Seoul. #122: an active appointment uses the timetable route (no Kakao call), so the
+        // route is the latest one arriving by 08:30 instead of Kakao's route ending exactly at 08:30.
+        java.time.Instant appointment = java.time.Instant.parse("2027-01-04T23:30:00Z");
         String room = createRoom(member, "2027-01-04T23:30:00Z");
-        server.expect(ExpectedCount.once(), requestTo(startsWith(URL))).andRespond(withSuccess(KAKAO_OK, MediaType.APPLICATION_JSON));
+        var expected = timetableRoutes.latestDepartures(sadang, appointment, Set.of(gangnam), 0).get(gangnam);
 
         JsonNode data = ok(search(gangnam, sadang, null, room), member);
 
-        // Departure = 08:30 - 600 s = 08:20, so every stop is in the 08:00 slot of that Tuesday; arrival is the appointment.
+        server.verify(); // no expectations: a Kakao request would have failed
+        assertThat(data.get("routeSource").asString()).isEqualTo("INTERNAL");
         JsonNode route = data.get("routes").get(0);
-        assertThat(route.get("summary").get("arrivalAt").asString()).isEqualTo("2027-01-05T08:30:00+09:00");
-        // Arriving exactly at the appointment is not after it.
+        assertThat(instant(route.get("summary").get("departureAt"))).isEqualTo(expected.leaveAt());
+        assertThat(instant(route.get("summary").get("arrivalAt"))).isEqualTo(expected.arriveAt()).isBeforeOrEqualTo(appointment);
         assertThat(route.get("summary").get("arrivesAfterAppointment").asBoolean()).isFalse();
+        // Boarding before 08:30 at 강남: every stop is in the 08:00 slot of that Tuesday.
         JsonNode first = route.get("steps").get(0).get("stations").get(0);
         assertThat(first.get("slotDate").asString()).isEqualTo("2027-01-05");
         assertThat(first.get("slotStart").asString()).isEqualTo("08:00");
@@ -431,6 +436,63 @@ class RouteSearchPostgresTest {
         assertThat(data.get("notice").asString()).isEqualTo("약속 시각이 이미 지나 지금 출발 기준으로 안내합니다.");
         assertThat(data.get("routes").get(0).get("summary").get("departureAt").asString()).isNotEqualTo("2026-11-12T14:00:00+09:00");
         assertThat(data.get("routes").get(0).get("summary").get("arrivesAfterAppointment").asBoolean()).isFalse();
+    }
+
+    /**
+     * #122: in a room with an active appointment the route of each member is the recommendation's trip to the same station
+     * (one latestDepartures search for all members): the same leaving and arrival seconds, stations, transfers, fare and
+     * minutes, without calling Kakao.
+     */
+    @Test void roomRouteIsTheRecommendationTrip() throws Exception {
+        long jongno = id("종로3가");
+        long nowon = id("노원");
+        java.time.Instant appointment = java.time.Instant.parse("2027-01-05T10:00:00Z"); // Tuesday 19:00 in Seoul
+        var members = List.of(new com.mju.linkro.recommendation.service.Candidate.Member(member, "a", gangnam),
+                new com.mju.linkro.recommendation.service.Candidate.Member(UUID.randomUUID(), "b", nowon));
+        var evaluation = engine.evaluate(members, com.mju.linkro.recommendation.dto.RecommendationResponse.AppliedConstraints.none(),
+                appointment, java.time.Instant.parse("2026-11-12T03:00:00Z"));
+        assertThat(evaluation.source()).isEqualTo("TIMETABLE");
+        String room = createRoom(member, "2027-01-05T10:00:00Z");
+
+        for (var trip : evaluation.candidates().get(jongno).trips()) {
+            long origin = trip.member().departureStationId();
+            JsonNode data = ok(search(origin, jongno, null, room), member);
+            assertThat(data.get("routeSource").asString()).isEqualTo("INTERNAL");
+            assertThat(data.get("routes").size()).isEqualTo(1);
+            JsonNode summary = data.get("routes").get(0).get("summary");
+            assertThat(instant(summary.get("departureAt"))).as("leaveAt from %d", origin).isEqualTo(trip.timed().leaveAt());
+            assertThat(instant(summary.get("arrivalAt"))).as("arriveAt from %d", origin).isEqualTo(trip.timed().arriveAt())
+                    .isBeforeOrEqualTo(appointment);
+            int total = summary.get("totalTimeSec").asInt();
+            assertThat(total).isEqualTo(Duration.between(trip.timed().leaveAt(), trip.timed().arriveAt()).toSeconds());
+            // travelMinutes of the recommendation rounds the same seconds up.
+            assertThat((total + 59) / 60).isEqualTo(trip.minutes());
+            assertThat(summary.get("transferCount").asInt()).isEqualTo(trip.path().transferCount());
+            assertThat(summary.get("fare").asInt()).isEqualTo(trip.fareWon());
+            assertThat(summary.get("arrivesAfterAppointment").asBoolean()).isFalse();
+            assertThat(responseStations(data.get("routes").get(0))).isEqualTo(pathStations(trip.path()));
+        }
+        assertThat(evaluation.candidates().get(jongno).trips()).hasSize(2);
+        server.verify(); // no expectations: a Kakao request would have failed
+    }
+
+    private static java.time.Instant instant(JsonNode offsetTime) {
+        return OffsetDateTime.parse(offsetTime.asString()).toInstant();
+    }
+
+    private static List<Long> responseStations(JsonNode route) {
+        List<Long> ids = new ArrayList<>();
+        route.get("steps").forEach(step -> step.get("stops").forEach(stop -> {
+            long id = stop.get("id").asLong();
+            if (ids.isEmpty() || ids.get(ids.size() - 1) != id) ids.add(id);
+        }));
+        return ids;
+    }
+
+    private static List<Long> pathStations(com.mju.linkro.subway.api.RoutePath path) {
+        List<Long> ids = new ArrayList<>();
+        path.stops().forEach(stop -> { if (ids.isEmpty() || ids.get(ids.size() - 1) != stop.stationId()) ids.add(stop.stationId()); });
+        return ids;
     }
 
     // ---- helpers ----
