@@ -87,6 +87,7 @@ class StompPostgresTest {
     @Autowired RoomCreationAttempt creation;
     @Autowired JdbcTemplate jdbc;
     @Autowired RoomEvents roomEvents;
+    @Autowired com.mju.linkro.room.service.ProposalVoteService voteService;
     @Autowired ApplicationEventPublisher publisher;
     @Autowired PlatformTransactionManager transactions;
     @Autowired SimpleBrokerMessageHandler brokerHandler;
@@ -749,17 +750,56 @@ class StompPostgresTest {
         leaver.assertNoEvent();
     }
 
-    /** A rolled-back vote transaction publishes nothing, a committed one does (the event is bound to the commit). */
-    @Test void aVoteInsideARolledBackOuterTransactionStillPublishesOnlyItsOwnCommit() throws Exception {
+    /**
+     * The real vote service runs in its own REQUIRES_NEW transaction, so an enclosing transaction that rolls back later
+     * cannot undo it: the vote row stays and its event goes out exactly once, at the vote's own commit.
+     * The outer transaction takes no room lock (it only reads), so it cannot block the vote's member lock.
+     */
+    @Test void aVoteCalledInsideAnOuterTransactionThatRollsBackIsStillCommittedAndAnnouncedOnce() throws Exception {
         String proposal = proposeStation();
-        Client watcher = connectAs(owner);
+        UUID proposalId = UUID.fromString(proposal);
+        Client watcher = connectAs(member);
         watcher.subscribe(room);
         var tx = new TransactionTemplate(transactions);
+
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx.executeWithoutResult(status -> {
-            roomEvents.publish(room, RoomEventType.STATION_PROPOSAL_VOTE_CHANGED,
-                    new RoomEventPayloads.ProposalVoteChanged(UUID.fromString(proposal), 99, member));
-            throw new IllegalStateException("boom");
-        })).hasMessage("boom");
+            // a real outer transaction on the same pool: a plain read, no lock
+            assertThat(jdbc.queryForObject("select count(*) from station_proposal_votes where proposal_id = ?::uuid", Integer.class, proposal)).isZero();
+            var vote = voteService.vote(room, owner, proposalId);
+            assertThat(vote.voteCount()).isEqualTo(1);
+            assertThat(vote.votedByMe()).isTrue();
+            throw new IllegalStateException("outer boom");
+        })).hasMessage("outer boom");
+
+        // the vote survived the outer rollback
+        assertThat(jdbc.queryForObject("select count(*) from station_proposal_votes where proposal_id = ?::uuid and user_id = ?::uuid and room_id = ?::uuid",
+                Integer.class, proposal, owner.toString(), room.toString())).isEqualTo(1);
+        // exactly one event, with the correct count and voter
+        JsonNode event = watcher.received(1).get(0);
+        assertThat(event.get("type").asString()).isEqualTo("STATION_PROPOSAL_VOTE_CHANGED");
+        assertThat(event.get("payload").get("proposalId").asString()).isEqualTo(proposal);
+        assertThat(event.get("payload").get("voteCount").asLong()).isEqualTo(1);
+        assertThat(event.get("payload").get("userId").asString()).isEqualTo(owner.toString());
+        watcher.assertNoEvent();
+
+        // the REST view agrees: count 1, voted by me; repeating the vote is idempotent and sends nothing
+        var again = rest(owner, "PUT", "/rooms/" + room + "/station-proposals/" + proposal + "/vote", null);
+        assertThat(again.statusCode()).isEqualTo(200);
+        JsonNode data = mapper.readTree(again.body()).get("data");
+        assertThat(data.get("voteCount").asLong()).isEqualTo(1);
+        assertThat(data.get("votedByMe").asBoolean()).isTrue();
+        watcher.assertNoEvent();
+    }
+
+    /** A vote that fails inside its own transaction (unknown candidate) rolls back and sends nothing, even in an outer transaction. */
+    @Test void aFailedVoteInsideAnOuterTransactionLeavesNoRowAndSendsNothing() throws Exception {
+        proposeStation();
+        Client watcher = connectAs(member);
+        watcher.subscribe(room);
+        var tx = new TransactionTemplate(transactions);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx.executeWithoutResult(status ->
+                voteService.vote(room, owner, UUID.randomUUID()))).isInstanceOf(com.mju.linkro.common.exception.BusinessException.class);
+        assertThat(jdbc.queryForObject("select count(*) from station_proposal_votes where room_id = ?::uuid", Integer.class, room.toString())).isZero();
         watcher.assertNoEvent();
     }
 
@@ -830,6 +870,44 @@ class StompPostgresTest {
         watcher.assertNoEvent();
     }
 
+    int systemMessageCount() {
+        return jdbc.queryForObject("select count(*) from room_messages where room_id = ?::uuid and sender_type = 'SYSTEM'", Integer.class, room.toString());
+    }
+
+    /** Sends a PUT that must fail with the exact status and error.code, then proves nothing was announced, stored or changed. */
+    void assertRefusedWithoutAnyTrace(String body, int status, String code) throws Exception {
+        Client watcher = connectAs(owner);
+        watcher.subscribe(room);
+        int before = systemMessageCount();
+        var response = rest(owner, "PUT", selectedPath(), body);
+        assertThat(response.statusCode()).as(body).isEqualTo(status);
+        assertThat(mapper.readTree(response.body()).get("success").asBoolean()).isFalse();
+        assertThat(mapper.readTree(response.body()).get("error").get("code").asString()).as(body).isEqualTo(code);
+        watcher.assertNoEvent();                                   // no SELECTED_STATION_CHANGED, no MESSAGE_CREATED
+        assertThat(systemMessageCount()).as("no SYSTEM chat message").isEqualTo(before);
+        assertThat(jdbc.queryForObject("select selected_station_id is null and confirmed_at is null from meeting_rooms where id = ?::uuid", Boolean.class, room.toString()))
+                .as("the room is still unconfirmed").isTrue();
+    }
+
+    /** A value that is not a JSON integer is an input error: 400 VALIDATION_ERROR. */
+    @Test void aStationIdThatIsNotAnIntegerIsAValidationErrorWithoutAnyEventOrMessage() throws Exception {
+        assertRefusedWithoutAnyTrace("{\"stationId\":\"112\"}", 400, "VALIDATION_ERROR");
+        assertRefusedWithoutAnyTrace("{\"stationId\":1.5}", 400, "VALIDATION_ERROR");
+        assertRefusedWithoutAnyTrace("{\"stationId\":null}", 400, "VALIDATION_ERROR");
+        assertRefusedWithoutAnyTrace("{}", 400, "VALIDATION_ERROR");
+    }
+
+    /**
+     * Per docs/selected-station-39.md any integer that is not a station ("정수로 표현 가능한 없는 ID") is STATION_NOT_FOUND (404),
+     * so a negative id is 404 too, not 400. Both cases are pinned here so a 500 can never pass.
+     */
+    @Test void aStationThatDoesNotExistIsStationNotFoundWithoutAnyEventOrMessage() throws Exception {
+        long missing = jdbc.queryForObject("select coalesce(max(id), 0) + 1000 from stations", Long.class);
+        assertRefusedWithoutAnyTrace("{\"stationId\":" + missing + "}", 404, "STATION_NOT_FOUND");
+        assertRefusedWithoutAnyTrace("{\"stationId\":-1}", 404, "STATION_NOT_FOUND");
+        assertRefusedWithoutAnyTrace("{\"stationId\":0}", 404, "STATION_NOT_FOUND");
+    }
+
     @Test void aRefusedSelectionSendsNothingAndNonMembersAndLeftMembersGetNothing() throws Exception {
         long station = twoStations().get(0);
         Client stranger = connectAs(outsider);
@@ -841,7 +919,6 @@ class StompPostgresTest {
         stayer.subscribe(room);
 
         assertThat(rest(member, "PUT", selectedPath(), "{\"stationId\":" + station + "}").statusCode()).as("not the owner").isEqualTo(403);
-        assertThat(rest(owner, "PUT", selectedPath(), "{\"stationId\":-1}").statusCode()).as("unknown station").isGreaterThanOrEqualTo(400);
         stayer.assertNoEvent();
         leaver.assertNoEvent();
 
