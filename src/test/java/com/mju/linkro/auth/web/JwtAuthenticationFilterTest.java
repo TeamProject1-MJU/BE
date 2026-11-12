@@ -265,7 +265,7 @@ class JwtAuthenticationFilterTest {
 	}
 
 	@ParameterizedTest
-	@ValueSource(strings = {"/", "/unknown", "/ws", "/ws/connect", "/swagger-ui-extra", "/v3/api-docsx", "/error"})
+	@ValueSource(strings = {"/", "/unknown", "/ws/connect", "/swagger-ui-extra", "/v3/api-docsx", "/error"})
 	void unlistedExternalPathsRequireAuthentication(String path) throws Exception {
 		assertFailure(mvc.perform(get(path)), "AUTH_REQUIRED", ErrorCode.AUTH_REQUIRED.getMessage());
 	}

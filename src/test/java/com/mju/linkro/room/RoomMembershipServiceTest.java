@@ -17,11 +17,13 @@ class RoomMembershipServiceTest {
     private final MeetingMemberRepository members = mock(MeetingMemberRepository.class);
     private final RoomReadRepository reads = mock(RoomReadRepository.class);
     private final com.mju.linkro.chat.service.ChatSystemMessages systemMessages = mock(com.mju.linkro.chat.service.ChatSystemMessages.class);
-    private final RoomMembershipService service = new RoomMembershipService(access, mock(com.mju.linkro.user.service.UserAccess.class), members, reads, systemMessages);
+    private final com.mju.linkro.user.service.UserAccess users = mock(com.mju.linkro.user.service.UserAccess.class);
+    private final RoomMembershipService service = new RoomMembershipService(access, users, members, reads, systemMessages, mock(com.mju.linkro.realtime.RoomEvents.class));
     private final UUID room = UUID.randomUUID(), user = UUID.randomUUID();
 
     @Test void locksBeforeDuplicateCountAndSave() {
         MeetingRoom entity = mock(MeetingRoom.class);
+        when(users.lockActive(user)).thenReturn(new com.mju.linkro.user.domain.User("kakao", "민지"));
         when(access.lockByCode("ABC123")).thenReturn(entity);
         when(entity.getId()).thenReturn(room);
         when(entity.getMaxMembers()).thenReturn(4);

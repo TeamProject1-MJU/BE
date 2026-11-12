@@ -2,6 +2,9 @@ package com.mju.linkro.room.service;
 
 import com.mju.linkro.chat.service.ChatSystemMessages;
 import com.mju.linkro.common.exception.*;
+import com.mju.linkro.realtime.RoomEventPayloads.*;
+import com.mju.linkro.realtime.RoomEventType;
+import com.mju.linkro.realtime.RoomEvents;
 import com.mju.linkro.room.domain.*;
 import com.mju.linkro.room.dto.RoomMembershipRequests.*;
 import com.mju.linkro.room.dto.RoomResponses.Joined;
@@ -26,16 +29,17 @@ public class RoomMembershipService {
     private final MeetingMemberRepository members;
     private final RoomReadRepository reads;
     private final ChatSystemMessages systemMessages;
+    private final RoomEvents events;
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Joined join(UUID userId, String code) {
-        users.lockActive(userId);
+        var user = users.lockActive(userId);
         MeetingRoom room = access.lockByCode(code);
         if (members.findCurrentRole(room.getId(), userId).isPresent()) throw new BusinessException(ErrorCode.ALREADY_JOINED);
         if (members.countByRoomId(room.getId()) >= room.getMaxMembers()) throw new BusinessException(ErrorCode.ROOM_FULL);
         members.saveAndFlush(new MeetingMember(room.getId(), userId, RoomRole.MEMBER));
         systemMessages.joined(room.getId(), userId);
-        // #43: register MEMBER_JOINED for delivery after successful commit here.
+        events.publish(room.getId(), RoomEventType.MEMBER_JOINED, new MemberJoined(userId, user.getNickname()));
         return new Joined(room.getId());
     }
 
@@ -46,10 +50,10 @@ public class RoomMembershipService {
         var station = reads.stations(List.of(stationId)).get(stationId);
         if (station == null) throw new BusinessException(ErrorCode.STATION_NOT_FOUND);
         if (!station.isSupported()) throw new BusinessException(ErrorCode.STATION_UNSUPPORTED);
-        members.findByRoomIdAndUserId(roomId, userId).orElseThrow(() -> new BusinessException(ErrorCode.NOT_ROOM_MEMBER))
-                .changeDepartureStation(stationId);
-        // Reapplying the same station succeeds without changing the stored value.
-        // #43: compare the previous station ID with stationId before mutation; register
-        // DEPARTURE_UPDATED after successful commit only when the actual value changed.
+        var member = members.findByRoomIdAndUserId(roomId, userId).orElseThrow(() -> new BusinessException(ErrorCode.NOT_ROOM_MEMBER));
+        boolean changed = !stationId.equals(member.getDepartureStationId());
+        member.changeDepartureStation(stationId);
+        // Reapplying the same station succeeds without changing the stored value, and sends no event.
+        if (changed) events.publish(roomId, RoomEventType.DEPARTURE_UPDATED, new DepartureUpdated(userId, station));
     }
 }

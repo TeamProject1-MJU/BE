@@ -2,6 +2,9 @@ package com.mju.linkro.room.service;
 
 import com.mju.linkro.chat.service.ChatSystemMessages;
 import com.mju.linkro.common.exception.*;
+import com.mju.linkro.realtime.RoomEventPayloads.*;
+import com.mju.linkro.realtime.RoomEventType;
+import com.mju.linkro.realtime.RoomEvents;
 import com.mju.linkro.room.domain.*;
 import com.mju.linkro.room.dto.RoomResponses.Left;
 import com.mju.linkro.room.repository.*;
@@ -17,6 +20,7 @@ public class RoomLeaveProcessor {
     private final MeetingMemberRepository members;
     private final MeetingRoomRepository rooms;
     private final ChatSystemMessages systemMessages;
+    private final RoomEvents events;
 
     @Transactional(propagation = Propagation.MANDATORY)
     public Left leaveLocked(MeetingRoom room, UUID userId) {
@@ -28,9 +32,11 @@ public class RoomLeaveProcessor {
         members.delete(member);
         // Hibernate executes UPDATE before DELETE: release the unique OWNER slot first.
         members.flush();
+        // The leaver stops receiving this room's events first, so even MEMBER_LEFT below goes only to the others.
+        events.dropSubscriptions(room.getId(), userId);
         if (members.countByRoomId(room.getId()) == 0) {
             rooms.delete(room);
-            // #43: MEMBER_LEFT only after commit; never persist SYSTEM into this deleted room.
+            // The last member left: no SYSTEM message in the deleted room and nobody left to tell.
             return new Left(true, null);
         }
         UUID newOwnerId = null;
@@ -41,8 +47,8 @@ public class RoomLeaveProcessor {
             newOwnerId = successor.getUserId();
         }
         systemMessages.left(room.getId(), userId, newOwnerId);
-        // #43: MEMBER_LEFT / OWNER_CHANGED after commit.
-        // Register immutable payloads with the OUTERMOST transaction; rollback must emit nothing.
+        events.publish(room.getId(), RoomEventType.MEMBER_LEFT, new MemberLeft(userId, newOwnerId));
+        if (newOwnerId != null) events.publish(room.getId(), RoomEventType.OWNER_CHANGED, new OwnerChanged(userId, newOwnerId));
         return new Left(false, newOwnerId);
     }
 }

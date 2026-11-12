@@ -1,6 +1,7 @@
 package com.mju.linkro.user.service;
 
 import com.mju.linkro.auth.repository.RefreshTokenRepository;
+import com.mju.linkro.realtime.RoomEvents;
 import com.mju.linkro.room.domain.MeetingRoom;
 import com.mju.linkro.room.repository.MeetingMemberRepository;
 import com.mju.linkro.room.service.RoomAccess;
@@ -33,6 +34,7 @@ public class UserService {
 	private final MeetingMemberRepository members;
 	private final RoomAccess roomAccess;
 	private final RoomLeaveProcessor leaveProcessor;
+	private final RoomEvents events;
 
 	@Transactional(readOnly = true)
 	public UserProfileResponse getMe(UUID userId) {
@@ -63,7 +65,8 @@ public class UserService {
 		}
 		user.softDelete();
 		refreshTokenRepository.revokeAllByUserId(userId, Instant.now());
-		// #42/#43: events and WS disconnect only after the outermost commit.
+		// The room events (MEMBER_LEFT, ...) came from leaveLocked; after the commit this user's connections are closed.
+		events.disconnect(userId);
 	}
 
 	/** A valid access token for a withdrawn or missing user is treated like an invalid token. */

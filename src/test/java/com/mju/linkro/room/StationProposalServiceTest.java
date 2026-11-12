@@ -26,7 +26,7 @@ class StationProposalServiceTest {
     final RoomReadRepository reads = mock(RoomReadRepository.class);
     final RoomProperties properties = new RoomProperties();
     final com.mju.linkro.chat.service.ChatSystemMessages systemMessages = mock(com.mju.linkro.chat.service.ChatSystemMessages.class);
-    final StationProposalService service = new StationProposalService(access, stations, proposals, members, reads, properties, systemMessages);
+    final StationProposalService service = new StationProposalService(access, stations, proposals, members, reads, properties, systemMessages, mock(com.mju.linkro.realtime.RoomEvents.class));
     final UUID room = UUID.randomUUID(), user = UUID.randomUUID(), result = UUID.randomUUID(), id = UUID.randomUUID();
     StationProposalRequest request(String body) { return JsonMapper.builder().build().readValue(body, StationProposalRequest.class); }
     void error(Runnable action, ErrorCode code) {

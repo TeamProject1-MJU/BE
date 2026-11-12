@@ -28,6 +28,7 @@ services:
       JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-}
       KAKAO_APP_ID: ${KAKAO_APP_ID:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}}
       LINKRO_AI_MODULE: ${LINKRO_AI_MODULE:-mock}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-}

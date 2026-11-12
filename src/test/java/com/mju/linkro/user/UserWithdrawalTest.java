@@ -18,7 +18,7 @@ class UserWithdrawalTest {
     MeetingMemberRepository members=mock(MeetingMemberRepository.class);
     RoomLeaveProcessor processor=mock(RoomLeaveProcessor.class);
     RefreshTokenRepository tokens=mock(RefreshTokenRepository.class);
-    UserService service=new UserService(mock(UserRepository.class),tokens,users,members,access,processor);
+    UserService service=new UserService(mock(UserRepository.class),tokens,users,members,access,processor,mock(com.mju.linkro.realtime.RoomEvents.class));
 
     @Test void acquiresEveryRoomBeforeFirstMutationAndSkipsMissingRoomOrMembership() {
         User user=new User("kakao","name"); UUID id=user.getId();
