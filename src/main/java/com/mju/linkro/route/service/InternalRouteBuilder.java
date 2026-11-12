@@ -26,7 +26,14 @@ public class InternalRouteBuilder {
 
     /** @throws com.mju.linkro.common.exception.BusinessException ROUTE_NOT_FOUND (404) and the finder's other errors */
     public RouteDraft build(long originStationId, long destinationStationId) {
-        RoutePath path = finder.shortestPath(originStationId, destinationStationId);
+        return toDraft(finder.shortestPath(originStationId, destinationStationId), originStationId, destinationStationId);
+    }
+
+    /**
+     * Any route of our graph (fixed-cost or timetable, #122) in the response shape: totalTimeSec is the path's
+     * totalSeconds and the fare is the fare-table fare of the station pair, as recommendations charge it.
+     */
+    public RouteDraft toDraft(RoutePath path, long originStationId, long destinationStationId) {
         List<StepDraft> steps = new ArrayList<>();
         int index = 0;
         for (PathStep step : path.steps()) {

@@ -29,6 +29,10 @@ import org.springframework.stereotype.Service;
  *
  * <p>With the train timetable loaded (graph module, {@code linkro.subway.timetable.enabled}), each route is ridden on it
  * at its departure; when no train runs it then, the departure moves to the first train (#120, {@link FirstTrainTimer}).
+ *
+ * <p>Room appointment mode (#122): with a room whose appointment has not passed and the timetable router, the route is
+ * the one recommendations use ({@link TimetableRouteFinder#latestDepartures}, the same bean and so the same station
+ * access setting) and Kakao is not called. When the timetable has no route arriving in time, the flow above is used.
  */
 @Slf4j
 @Service
@@ -46,22 +50,32 @@ public class RouteSearchService {
     private final Clock clock;
     /** Null without the train timetable: departures are never moved. */
     private final FirstTrainTimer firstTrains;
+    /** Null without the timetable router: room appointments use the flow without it. */
+    private final TimetableRouteFinder timetableRoutes;
 
     @Autowired
     public RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
                               InternalRouteBuilder internal, CongestionStatsRepository stats, CongestionResolver resolver,
-                              Optional<TrainTimetable> timetable, Optional<TimetableClock> timetableClock) {
+                              Optional<TrainTimetable> timetable, Optional<TimetableClock> timetableClock,
+                              Optional<TimetableRouteFinder> timetableRoutes) {
         this(rooms, stations, kakao, mapper, internal, new DbCongestionLookup(stats, resolver), Clock.systemUTC(),
-                timetable.isPresent() && timetableClock.isPresent() ? new FirstTrainTimer(timetable.get(), timetableClock.get()) : null);
+                timetable.isPresent() && timetableClock.isPresent() ? new FirstTrainTimer(timetable.get(), timetableClock.get()) : null,
+                timetableRoutes.orElse(null));
     }
 
     RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
                        InternalRouteBuilder internal, CongestionLookup congestion, Clock clock) {
-        this(rooms, stations, kakao, mapper, internal, congestion, clock, null);
+        this(rooms, stations, kakao, mapper, internal, congestion, clock, null, null);
     }
 
     RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
                        InternalRouteBuilder internal, CongestionLookup congestion, Clock clock, FirstTrainTimer firstTrains) {
+        this(rooms, stations, kakao, mapper, internal, congestion, clock, firstTrains, null);
+    }
+
+    RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
+                       InternalRouteBuilder internal, CongestionLookup congestion, Clock clock, FirstTrainTimer firstTrains,
+                       TimetableRouteFinder timetableRoutes) {
         this.rooms = rooms;
         this.stations = stations;
         this.kakao = kakao;
@@ -70,6 +84,7 @@ public class RouteSearchService {
         this.congestion = congestion;
         this.clock = clock;
         this.firstTrains = firstTrains;
+        this.timetableRoutes = timetableRoutes;
     }
 
     public RouteSearchResponse search(UUID userId, RouteSearchRequest request) {
@@ -80,6 +95,14 @@ public class RouteSearchService {
         StationInfo origin = stations.requireSupported(query.originStationId());
         StationInfo destination = stations.requireSupported(query.destinationStationId());
         Instant now = clock.instant();
+        boolean passed = appointmentPassed(room, now);
+
+        Optional<TimedRoute> timed = roomAppointmentRoute(room, passed, origin.id(), destination.id());
+        if (timed.isPresent()) {
+            log.info("Route search {} -> {} uses the timetable route for the room appointment", origin.id(), destination.id());
+            return new RouteSearchResponse(RouteSource.INTERNAL,
+                    List.of(timedRoute("r1", timed.get(), origin.id(), destination.id())), false, null);
+        }
 
         RouteSource source = RouteSource.KAKAO;
         List<RouteDraft> drafts = List.of();
@@ -109,7 +132,6 @@ public class RouteSearchService {
             drafts = List.of(internal.build(origin.id(), destination.id()));
         }
         List<String> types = routeTypes(drafts);
-        boolean passed = appointmentPassed(room, now);
         // Only a room appointment that has not passed is compared with arrivals.
         Instant appointment = room == null || passed ? null : room.getAppointmentAt();
         List<Route> routes = new ArrayList<>();
@@ -119,6 +141,36 @@ public class RouteSearchService {
                     appointment));
         }
         return new RouteSearchResponse(source, routes, passed, passed ? APPOINTMENT_PASSED_NOTICE : null);
+    }
+
+    /**
+     * Room appointment mode (#122): the latest-departure route recommendations give the member from {@code originId} to
+     * {@code destinationId} for the room's appointment. Empty, so the flow without it is used, when there is no timetable
+     * router, no room or appointment, the appointment has passed, both stations are the same, or no train arrives in time
+     * on the appointment's service day.
+     */
+    private Optional<TimedRoute> roomAppointmentRoute(MeetingRoom room, boolean appointmentPassed, long originId, long destinationId) {
+        if (timetableRoutes == null || room == null || room.getAppointmentAt() == null || appointmentPassed || originId == destinationId) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(timetableRoutes.latestDepartures(destinationId, room.getAppointmentAt(), Set.of(originId), 0)
+                .get(originId));
+    }
+
+    /**
+     * A timetable route as recommendations show it (RecommendationService#participantTimes): departure = leaveAt,
+     * arrival = arriveAt, stop congestion from boardAt (stop offsets count from it), fare from {@link InternalRouteBuilder}'s
+     * StationPairFare like the engine. totalTimeSec = arriveAt − leaveAt; walkingMinutes counts walks only, not the
+     * platform waits inside its transfer steps. It arrives by the appointment, so arrivesAfterAppointment is false.
+     */
+    private Route timedRoute(String routeId, TimedRoute timed, long originId, long destinationId) {
+        RouteDraft path = internal.toDraft(timed.path(), originId, destinationId);
+        int total = (int) Duration.between(timed.leaveAt(), timed.arriveAt()).toSeconds();
+        RouteDraft draft = new RouteDraft(path.steps(), total, path.fare(), path.fareSource(), path.transferCount(),
+                path.fromStationId(), path.toStationId());
+        int walkSeconds = timed.legs().stream().mapToInt(TimedLeg::walkSec).sum();
+        return route(routeId, routeTypes(List.of(draft)).get(0), draft, timed.leaveAt(), timed.boardAt(), timed.arriveAt(),
+                walkSeconds, false, null, false);
     }
 
     /**
@@ -180,13 +232,24 @@ public class RouteSearchService {
         boolean noService = timing != null && timing.noService();
         Instant departure = noService ? timing.departure() : requested;
         String serviceNotice = noService ? serviceNotice(timing.boardAt()) : null;
+        Instant arrival = departure.plusSeconds(draft.totalTimeSec());
+        return route(routeId, routeType, draft, departure, departure, arrival, draft.walkingSeconds(), noService, serviceNotice,
+                arrivesAfter(arrival, appointment));
+    }
+
+    /**
+     * The response route. {@code congestionFrom} is the time the stop offsets of the draft count from: the departure for
+     * Kakao and fixed-cost routes, the first boarding for timetable routes.
+     */
+    private Route route(String routeId, String routeType, RouteDraft draft, Instant departure, Instant congestionFrom,
+                        Instant arrival, int walkingSeconds, boolean noService, String serviceNotice, boolean arrivesAfterAppointment) {
         List<PathStop> stops = draft.subwayStops();
         List<StopCongestion> perStop = List.of();
         CongestionResult summary = CongestionResult.unsupported();
         if (!stops.isEmpty()) {
             CongestionResult result = congestion.congestionOf(
                     new RoutePath(List.of(), stops, draft.totalTimeSec(), draft.transferCount(), 0, draft.fromStationId(), draft.toStationId()),
-                    departure);
+                    congestionFrom);
             summary = result;
             perStop = result.stops();
         }
@@ -207,11 +270,10 @@ public class RouteSearchService {
             steps.add(new Step(step.type(), step.guidance(), step.durationSec(), step.distanceM(), step.line(), null,
                     step.directionCode(), stopList, step.path(), stationList));
         }
-        Instant arrival = departure.plusSeconds(draft.totalTimeSec());
-        int walkingMinutes = (int) Math.round(draft.walkingSeconds() / 60.0);
+        int walkingMinutes = (int) Math.round(walkingSeconds / 60.0);
         return new Route(routeId, routeType, new Summary(draft.totalTimeSec(), offsetTime(arrival), draft.fare(), draft.fareSource(),
                 draft.transferCount(), walkingMinutes, congestion(summary), offsetTime(departure), noService, serviceNotice,
-                arrivesAfter(arrival, appointment)), steps);
+                arrivesAfterAppointment), steps);
     }
 
     private static String offsetTime(Instant at) {
