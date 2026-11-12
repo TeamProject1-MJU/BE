@@ -66,8 +66,8 @@ CONNECT·SUBSCRIBE·SEND가 거절되면 서버가 ERROR 프레임을 보내고 
 | `RECOMMENDATION_CREATED` | `{runId}` | `RecommendationCreatedEvent` (8.1 POST만) |
 | `STATION_PROPOSAL_CREATED` | 후보 객체(7.14 응답) | `StationProposalService.create` |
 | `STATION_PROPOSAL_DELETED` | `{proposalId}` | `StationProposalService.delete` |
-| `STATION_PROPOSAL_VOTE_CHANGED` | `{proposalId, voteCount, userId}` | **아직 연결 안 함** (아래) |
-| `SELECTED_STATION_CHANGED` | `{station, confirmedAt}` (해제 시 둘 다 null) | **아직 연결 안 함** (아래) |
+| `STATION_PROPOSAL_VOTE_CHANGED` | `{proposalId, voteCount, userId}` | `ProposalVoteService.voteLocked`, 새 INSERT만 |
+| `SELECTED_STATION_CHANGED` | `{station, confirmedAt}` (해제 시 둘 다 null) | `SelectedStationService.select/clear` |
 
 - 마지막 멤버가 나가 방이 삭제될 때는 `MEMBER_LEFT`를 보내지 않아요. 받을 사람이 없어요.
 - 같은 트랜잭션의 SYSTEM 메시지(#76)와 이벤트는 모두 커밋 뒤에 나가요. **한 트랜잭션 안에서는 보낸 순서 그대로 받아요.** SYSTEM 메시지의 `MESSAGE_CREATED`가 먼저이고 상태 이벤트가 뒤예요(입장: 메시지 → `MEMBER_JOINED`, 후보 제안: 메시지 → `STATION_PROPOSAL_CREATED`, 방장이 나갈 때: 나감 메시지 → 새 방장 메시지 → `MEMBER_LEFT` → `OWNER_CHANGED`).
@@ -89,10 +89,10 @@ events.disconnect(userId);                                     // 커밋 뒤, �
 - payload는 커밋 전에 값으로 만들어 넘겨요(불변 record). 채팅·추천은 기존 Spring 이벤트(`MessageCreatedEvent`, `RecommendationCreatedEvent`)를 `RoomEventListeners`가 받아 그대로 STOMP로 보내요. SYSTEM 메시지 저장은 #76의 `ChatSystemMessages`가 그대로 해요.
 - payload 모양은 `RoomEventPayloads`에 있어요(`ProposalVoteChanged`, `SelectedStationChanged`도 미리 만들어 뒀어요).
 
-### 아직 연결하지 않은 것 (cij041109-del 몫)
+### 약속역·투표 발행 조건 (#125)
 
-- **SELECTED_STATION_CHANGED** (#39 약속역 지정·변경·해제): `SelectedStationService`는 건드리지 않았어요. 연결할 때는 방 락 안에서 `events.publish(roomId, RoomEventType.SELECTED_STATION_CHANGED, new SelectedStationChanged(station, confirmedAt))`를 부르면 돼요. 해제는 `new SelectedStationChanged(null, null)`이고, 이미 미확정인 방의 반복 clear는 부르지 않아요. `station`은 `RoomReadRepository.stations(...)`의 `RoomResponses.Station`을 쓰면 방 상세의 `selectedStation`과 모양이 같아요.
-- **STATION_PROPOSAL_VOTE_CHANGED** (#41 투표 API): 투표 서비스가 아직 없어요. 만들 때 `events.publish(roomId, RoomEventType.STATION_PROPOSAL_VOTE_CHANGED, new ProposalVoteChanged(proposalId, voteCount, userId))`를 같은 트랜잭션에서 부르면 돼요.
+- **SELECTED_STATION_CHANGED**: 같은 역 재지정에도 항상 발행해요. SYSTEM 메시지는 실제 역이 바뀔 때만 저장하며 상태 이벤트보다 먼저 나가요. `station`은 `RoomReadRepository.stations(...)`의 `RoomResponses.Station`이며, `confirmedAt`은 `room.confirmStation`에 넘긴 값이에요. 해제는 실제 변경된 경우만 null/null을 발행하고 이미 열린 방에서는 발행하지 않아요.
+- **STATION_PROPOSAL_VOTE_CHANGED**: 새 INSERT 뒤 `voteState` 응답과 같은 `voteCount`로 발행해요. 같은 후보 재투표와 `ALREADY_VOTED`에서는 발행하지 않아요. 외부 트랜잭션 유무와 관계없이 `REQUIRES_NEW` 안에서 동기화를 등록하여 해당 트랜잭션 커밋 뒤 발행해요. 유니크 위반으로 롤백된 시도는 발행하지 않고 재시도에서 INSERT가 성공한 경우만 발행해요.
 
 ## 설정
 

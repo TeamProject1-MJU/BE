@@ -1,5 +1,8 @@
 package com.mju.linkro.room.service;
 
+import com.mju.linkro.realtime.RoomEvents;
+import com.mju.linkro.realtime.RoomEventType;
+import com.mju.linkro.realtime.RoomEventPayloads.ProposalVoteChanged;
 import com.github.f4b6a3.uuid.UuidCreator;
 import com.mju.linkro.common.exception.*;
 import com.mju.linkro.room.dto.StationProposalResponses.Vote;
@@ -15,8 +18,10 @@ public class ProposalVoteService {
     private final RoomAccess access;
     private final StationProposalRepository proposals;
     private final TransactionTemplate transaction;
+    private final RoomEvents events;
 
-    public ProposalVoteService(RoomAccess access, StationProposalRepository proposals, PlatformTransactionManager manager) {
+    public ProposalVoteService(RoomAccess access, StationProposalRepository proposals, PlatformTransactionManager manager, RoomEvents events) {
+        this.events = events;
         this.access = access;
         this.proposals = proposals;
         transaction = new TransactionTemplate(manager);
@@ -42,7 +47,10 @@ public class ProposalVoteService {
             if (!existing.get().equals(proposalId)) throw new BusinessException(ErrorCode.ALREADY_VOTED);
         } else {
             proposals.insertVote(UuidCreator.getTimeOrderedEpoch(), roomId, proposalId, userId);
-            // #43: capture immutable STATION_PROPOSAL_VOTE_CHANGED payload only for this insert; publish after commit.
+            Vote state = proposals.voteState(roomId, proposalId, userId);
+            events.publish(roomId, RoomEventType.STATION_PROPOSAL_VOTE_CHANGED,
+                    new ProposalVoteChanged(proposalId, state.voteCount(), userId));
+            return state;
         }
         return proposals.voteState(roomId, proposalId, userId);
     }

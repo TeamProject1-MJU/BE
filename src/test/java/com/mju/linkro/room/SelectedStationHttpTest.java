@@ -1,5 +1,10 @@
 package com.mju.linkro.room;
 
+import com.mju.linkro.room.repository.RoomReadRepository;
+import com.mju.linkro.room.dto.RoomResponses.Station;
+import java.util.List;
+import java.util.Map;
+
 import com.mju.linkro.auth.jwt.JwtProvider;
 import com.mju.linkro.common.exception.*;
 import com.mju.linkro.room.domain.*;
@@ -35,6 +40,7 @@ class SelectedStationHttpTest {
     @Autowired UserRepository users;
     @MockitoBean RoomAccess access;
     @MockitoBean StationLookup stations;
+    @MockitoBean RoomReadRepository reads;
     @MockitoBean com.mju.linkro.chat.service.ChatSystemMessages systemMessages;
     MockMvc mvc;
     UUID user,id;
@@ -42,6 +48,8 @@ class SelectedStationHttpTest {
     @BeforeEach void setup() {
         mvc=MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
         user=users.saveAndFlush(new User(UUID.randomUUID().toString(),"owner")).getId();
+        when(reads.stations(List.of(112L))).thenReturn(Map.of(112L,
+            new Station(112L,"station",true,List.of())));
         id=UUID.randomUUID(); path="/api/v1/rooms/"+id+"/selected-station";
         when(access.lockOwner(id,user)).thenReturn(new MeetingRoom("H12345","room",user));
         when(stations.requireSupported(112L)).thenReturn(new com.mju.linkro.subway.api.StationInfo(112L,"사당",0,0,true));

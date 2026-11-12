@@ -500,6 +500,61 @@ class StompPostgresTest {
         assertThat(deleted.get(1).get("payload").get("proposalId").asString()).isEqualTo(proposalId);
     }
 
+
+    @Test void selectedStationChangesReachBothSubscribersAfterSystemMessage() throws Exception {
+        Client first = connectAs(owner), second = connectAs(member);
+        first.subscribe(room);
+        second.subscribe(room);
+        List<Long> stations = jdbc.queryForList("select id from stations where is_supported order by id limit 2",Long.class);
+        String path = "/rooms/" + room + "/selected-station";
+        for (long station : List.of(stations.get(0),stations.get(0),stations.get(1))) {
+            boolean repeated = station == stations.get(0) && jdbc.queryForObject(
+                "select selected_station_id from meeting_rooms where id = ?",Long.class,room) != null;
+            assertThat(rest(owner,"PUT",path,"{\"stationId\":"+station+"}").statusCode()).isEqualTo(200);
+            for (Client client : List.of(first,second)) {
+                List<JsonNode> got = client.received(repeated ? 1 : 2);
+                assertThat(labels(got)).containsExactlyElementsOf(repeated ? List.of("SELECTED_STATION_CHANGED")
+                    : List.of("MESSAGE_CREATED:SYSTEM","SELECTED_STATION_CHANGED"));
+                JsonNode payload = got.get(got.size()-1).get("payload");
+                assertThat(payload.get("station").get("id").asLong()).isEqualTo(station);
+                assertThat(payload.get("station").get("lines").isArray()).isTrue();
+                assertThat(payload.get("confirmedAt").asString()).isNotBlank();
+            }
+        }
+        assertThat(rest(owner,"DELETE",path,null).statusCode()).isEqualTo(200);
+        for (Client client : List.of(first,second)) {
+            List<JsonNode> got = client.received(2);
+            assertThat(labels(got)).containsExactly("MESSAGE_CREATED:SYSTEM","SELECTED_STATION_CHANGED");
+            assertThat(got.get(1).get("payload").get("station").isNull()).isTrue();
+            assertThat(got.get(1).get("payload").get("confirmedAt").isNull()).isTrue();
+        }
+        assertThat(rest(owner,"DELETE",path,null).statusCode()).isEqualTo(200);
+        for (Client client : List.of(first,second)) assertThat(client.events.poll(300,TimeUnit.MILLISECONDS)).isNull();
+    }
+
+    @Test void newVoteReachesBothSubscribersButRepeatedVoteIsSilent() throws Exception {
+        long station = jdbc.queryForObject("select id from stations where is_supported order by id limit 1",Long.class);
+        var created = rest(member,"POST","/rooms/"+room+"/station-proposals","{\"stationId\":"+station+"}");
+        assertThat(created.statusCode()).isEqualTo(201);
+        String proposal = mapper.readTree(created.body()).get("data").get("id").asString();
+        Client first = connectAs(owner), second = connectAs(member);
+        first.subscribe(room);
+        second.subscribe(room);
+        String path = "/rooms/"+room+"/station-proposals/"+proposal+"/vote";
+        var response = rest(member,"PUT",path,null);
+        assertThat(response.statusCode()).isEqualTo(200);
+        long count = mapper.readTree(response.body()).get("data").get("voteCount").asLong();
+        for (Client client : List.of(first,second)) {
+            JsonNode event = client.received(1).get(0);
+            assertThat(event.get("type").asString()).isEqualTo("STATION_PROPOSAL_VOTE_CHANGED");
+            assertThat(event.get("payload").get("proposalId").asString()).isEqualTo(proposal);
+            assertThat(event.get("payload").get("voteCount").asLong()).isEqualTo(count);
+            assertThat(event.get("payload").get("userId").asString()).isEqualTo(member.toString());
+        }
+        assertThat(rest(member,"PUT",path,null).statusCode()).isEqualTo(200);
+        for (Client client : List.of(first,second)) assertThat(client.events.poll(300,TimeUnit.MILLISECONDS)).isNull();
+    }
+
     @Test void recommendationCreatedEventIsForwardedWithItsRunId() throws Exception {
         Client client = connectAs(member);
         client.subscribe(room);
