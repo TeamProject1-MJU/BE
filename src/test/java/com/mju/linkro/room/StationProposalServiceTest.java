@@ -25,7 +25,8 @@ class StationProposalServiceTest {
     final MeetingMemberRepository members = mock(MeetingMemberRepository.class);
     final RoomReadRepository reads = mock(RoomReadRepository.class);
     final RoomProperties properties = new RoomProperties();
-    final StationProposalService service = new StationProposalService(access, stations, proposals, members, reads, properties);
+    final com.mju.linkro.chat.service.ChatSystemMessages systemMessages = mock(com.mju.linkro.chat.service.ChatSystemMessages.class);
+    final StationProposalService service = new StationProposalService(access, stations, proposals, members, reads, properties, systemMessages);
     final UUID room = UUID.randomUUID(), user = UUID.randomUUID(), result = UUID.randomUUID(), id = UUID.randomUUID();
     StationProposalRequest request(String body) { return JsonMapper.builder().build().readValue(body, StationProposalRequest.class); }
     void error(Runnable action, ErrorCode code) {
@@ -38,6 +39,7 @@ class StationProposalServiceTest {
         when(proposals.resultBelongsToRoom(result,room)).thenReturn(true);
         when(proposals.insert(any(),eq(room),eq(112L),eq(user),nullable(UUID.class))).thenReturn(created);
         assertThat(service.create(room,user,request("{\"stationId\":112}"))).isEqualTo(created);
+        verify(systemMessages).proposalCreated(room,"멤버","역");
         service.create(room,user,request("{\"stationId\":112,\"resultId\":\""+result+"\"}"));
         var order=inOrder(access,stations,proposals);
         order.verify(access).lockMember(room,user);
@@ -86,10 +88,12 @@ class StationProposalServiceTest {
         when(members.findCurrentRole(room,user)).thenReturn(Optional.of(RoomRole.MEMBER));
         error(()->service.delete(room,user,id),ErrorCode.NOT_PROPOSAL_OWNER);
         when(members.findCurrentRole(room,user)).thenReturn(Optional.of(RoomRole.OWNER));
+        when(proposals.stationName(room,id)).thenReturn(Optional.of("사당"));
         service.delete(room,user,id);
         when(proposals.author(room,id)).thenReturn(Optional.of(user));
         service.delete(room,user,id);
         verify(proposals,times(2)).delete(room,id);
+        verify(systemMessages,times(2)).proposalDeleted(room,user,"사당");
         verify(access,times(4)).lockMember(room,user);
     }
 

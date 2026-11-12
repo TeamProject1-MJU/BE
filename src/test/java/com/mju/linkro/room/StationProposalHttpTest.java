@@ -36,6 +36,7 @@ class StationProposalHttpTest {
     @Autowired UserRepository users;
     @MockitoBean RoomAccess access;
     @MockitoBean StationLookup stations;
+    @MockitoBean com.mju.linkro.chat.service.ChatSystemMessages systemMessages;
     @MockitoBean StationProposalRepository proposals;
     @MockitoBean MeetingMemberRepository members;
     MockMvc mvc;
@@ -52,6 +53,7 @@ class StationProposalHttpTest {
             new Created(id,new Station(112,"역"),new Author(user,"멤버"),invocation.getArgument(4),Instant.EPOCH));
         when(proposals.resultBelongsToRoom(result,room)).thenReturn(true);
         when(proposals.author(room,id)).thenReturn(Optional.of(user));
+        when(proposals.stationName(room,id)).thenReturn(Optional.of("역"));
         when(proposals.list(room,user,null)).thenReturn(List.of());
     }
     MockHttpServletRequestBuilder auth(MockHttpServletRequestBuilder request) {

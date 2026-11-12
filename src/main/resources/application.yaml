@@ -1,3 +1,7 @@
+server:
+  # Finish running requests at shutdown; the @링크로 answers get their own wait (linkro.chat.ai-shutdown-wait) after that.
+  shutdown: graceful
+
 spring:
   application:
     name: linkro

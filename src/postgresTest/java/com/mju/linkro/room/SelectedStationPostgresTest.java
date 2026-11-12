@@ -86,7 +86,8 @@ class SelectedStationPostgresTest {
         return new TransactionTemplate(manager).execute(status->{
             var result=new ArrayList<String>();
             for(String table:List.of("meeting_members","station_proposals","station_proposal_votes","recommendation_runs","recommendation_results","room_messages"))
-                result.addAll(jdbc.queryForList("select row_to_json(t)::text from "+table+" t order by id",String.class));
+                // SYSTEM messages of the selection itself (#76) are not history.
+                result.addAll(jdbc.queryForList("select row_to_json(t)::text from "+table+" t"+(table.equals("room_messages")?" where sender_type<>'SYSTEM'":"")+" order by id",String.class));
             return result;
         });
     }

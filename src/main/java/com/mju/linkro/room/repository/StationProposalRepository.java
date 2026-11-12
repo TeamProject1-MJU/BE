@@ -61,6 +61,11 @@ public class StationProposalRepository {
                 Map.of("id", proposalId, "room", roomId), (rs,n) -> rs.getObject(1, UUID.class)).stream().findFirst();
     }
 
+    public Optional<String> stationName(UUID roomId, UUID proposalId) {
+        return jdbc.query("select s.name from station_proposals p join stations s on s.id=p.station_id where p.id=:id and p.room_id=:room",
+                Map.of("id", proposalId, "room", roomId), (rs,n) -> rs.getString(1)).stream().findFirst();
+    }
+
     public Optional<UUID> voteByUser(UUID roomId, UUID userId) {
         return jdbc.query("select proposal_id from station_proposal_votes where room_id=:room and user_id=:user",
                 Map.of("room", roomId, "user", userId), (rs,n) -> rs.getObject(1, UUID.class)).stream().findFirst();

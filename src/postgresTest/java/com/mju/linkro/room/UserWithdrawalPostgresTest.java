@@ -402,7 +402,7 @@ class UserWithdrawalPostgresTest {
         withdrawal.withdraw(target); assertGone();
         assertThat(jdbc.queryForObject("select count(*) from recommendation_runs",Long.class)).isEqualTo(1);
         assertThat(jdbc.queryForObject("select count(*) from recommendation_results",Long.class)).isEqualTo(1);
-        assertThat(jdbc.queryForObject("select count(*) from room_messages",Long.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from room_messages where sender_type<>'SYSTEM'",Long.class)).isEqualTo(1);
         assertThat(rooms.findById(last)).isEmpty();
         assertThat(members.findCurrentRole(owned,other)).contains(RoomRole.OWNER);
         assertThat(members.findCurrentRole(joined,other)).contains(RoomRole.OWNER);

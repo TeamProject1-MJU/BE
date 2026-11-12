@@ -20,6 +20,9 @@ auth:
     secret: dGVzdC1vbmx5LXNlY3JldC0wMTIzNDU2Nzg5YWJjZGVmZ2hpams=
     access-token-ttl: 15m
 linkro:
+  chat:
+    # Tests start with no old messages; the sweep has its own tests.
+    answer-sweep-window: 0s
   holiday:
     kasi:
       # Tests never call the real KASI API, even when .env or the shell has KASI_SPECIAL_DAY_KEY.

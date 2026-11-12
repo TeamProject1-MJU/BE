@@ -18,7 +18,7 @@ class RoomLeaveServiceTest {
         when(members.findByRoomIdAndUserId(room.getId(),user)).thenReturn(Optional.of(departing));
         when(members.findCurrentRole(room.getId(),user)).thenReturn(Optional.of(RoomRole.MEMBER));
         when(members.countByRoomId(room.getId())).thenReturn(1L);
-        var result=new RoomLeaveProcessor(members,rooms).leaveLocked(room,user);
+        var result=new RoomLeaveProcessor(members,rooms,mock(com.mju.linkro.chat.service.ChatSystemMessages.class)).leaveLocked(room,user);
         assertThat(result.roomDeleted()).isFalse(); assertThat(result.newOwnerId()).isNull();
         verify(members).delete(departing); verify(members).flush();
         verify(members,never()).findSuccessor(any(),any()); verifyNoInteractions(rooms);
@@ -32,7 +32,7 @@ class RoomLeaveServiceTest {
         var departing=new MeetingMember(room.getId(),user,RoomRole.OWNER);
         when(members.findByRoomIdAndUserId(room.getId(),user)).thenReturn(Optional.of(departing));
         when(members.findCurrentRole(room.getId(),user)).thenReturn(Optional.of(RoomRole.OWNER));
-        var result=new RoomLeaveProcessor(members,rooms).leaveLocked(room,user);
+        var result=new RoomLeaveProcessor(members,rooms,mock(com.mju.linkro.chat.service.ChatSystemMessages.class)).leaveLocked(room,user);
         var order=inOrder(members,rooms);
         order.verify(members).delete(departing); order.verify(members).flush(); order.verify(rooms).delete(room);
         assertThat(result.roomDeleted()).isTrue(); assertThat(result.newOwnerId()).isNull();
@@ -65,7 +65,7 @@ class RoomLeaveServiceTest {
         when(members.findCurrentRole(id,user)).thenReturn(Optional.of(RoomRole.OWNER));
         when(members.countByRoomId(id)).thenReturn(1L);
         when(members.findSuccessor(id,user)).thenReturn(Optional.of(successor));
-        var result=new RoomLeaveService(access,new RoomLeaveProcessor(members,rooms)).leave(id,user);
+        var result=new RoomLeaveService(access,new RoomLeaveProcessor(members,rooms,mock(com.mju.linkro.chat.service.ChatSystemMessages.class))).leave(id,user);
         var order=inOrder(access,members,successor);
         order.verify(access).lockMember(id,user);
         order.verify(members).findByRoomIdAndUserId(id,user);
