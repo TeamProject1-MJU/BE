@@ -468,9 +468,10 @@ class RouteSearchPostgresTest extends RouteSearchPostgresSupport {
         JsonNode past = error(arrive(gangnam, sadang, "2020-01-01T09:00:00+09:00", null, null), 400);
         assertThat(past.get("details").get("arriveAt").asString()).isEqualTo("arriveAt은 지금 이후여야 합니다.");
 
-        String far = java.time.OffsetDateTime.now(java.time.ZoneOffset.ofHours(9)).plusDays(31).withNano(0).toString();
-        JsonNode tooFar = error(arrive(gangnam, sadang, far, null, null), 400);
-        assertThat(tooFar.get("details").get("arriveAt").asString()).isEqualTo("arriveAt은 지금부터 30일 이내여야 합니다.");
+        // A fixed date far past any 365-day limit (the boundary itself is tested with a fixed clock in
+        // RouteSearchArrivalTimetableTest).
+        JsonNode tooFar = error(arrive(gangnam, sadang, "2099-01-01T09:00:00+09:00", null, null), 400);
+        assertThat(tooFar.get("details").get("arriveAt").asString()).startsWith("arriveAt은 오늘부터 365일 뒤(").endsWith(")까지여야 합니다.");
         server.verify();
     }
 

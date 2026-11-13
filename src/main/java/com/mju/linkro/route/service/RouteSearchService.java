@@ -60,18 +60,21 @@ public class RouteSearchService {
     private final FirstTrainTimer firstTrains;
     /** Null without the timetable router: room appointments use the flow without it. */
     private final TimetableRouteFinder timetableRoutes;
-    /** How far ahead of now arriveAt may be ({@code linkro.route.arrive-at-max-days}). */
-    private final Duration arriveAtMaxAhead;
+    /**
+     * How many days after today (Seoul) arriveAt's date may be ({@code linkro.route.arrive-at-max-days}, default 365).
+     * Only days: {@link com.mju.linkro.subway.congestion.HolidayCalendar} does not tell which dates it covers.
+     */
+    private final int arriveAtMaxDays;
 
     @Autowired
     public RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
                               InternalRouteBuilder internal, CongestionStatsRepository stats, CongestionResolver resolver,
                               Optional<TrainTimetable> timetable, Optional<TimetableClock> timetableClock,
                               Optional<TimetableRouteFinder> timetableRoutes,
-                              @Value("${linkro.route.arrive-at-max-days:30}") int arriveAtMaxDays) {
+                              @Value("${linkro.route.arrive-at-max-days:365}") int arriveAtMaxDays) {
         this(rooms, stations, kakao, mapper, internal, new DbCongestionLookup(stats, resolver), Clock.systemUTC(),
                 timetable.isPresent() && timetableClock.isPresent() ? new FirstTrainTimer(timetable.get(), timetableClock.get()) : null,
-                timetableRoutes.orElse(null), Duration.ofDays(arriveAtMaxDays));
+                timetableRoutes.orElse(null), arriveAtMaxDays);
     }
 
     RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
@@ -87,13 +90,13 @@ public class RouteSearchService {
     RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
                        InternalRouteBuilder internal, CongestionLookup congestion, Clock clock, FirstTrainTimer firstTrains,
                        TimetableRouteFinder timetableRoutes) {
-        this(rooms, stations, kakao, mapper, internal, congestion, clock, firstTrains, timetableRoutes, Duration.ofDays(30));
+        this(rooms, stations, kakao, mapper, internal, congestion, clock, firstTrains, timetableRoutes, 365);
     }
 
     RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
                        InternalRouteBuilder internal, CongestionLookup congestion, Clock clock, FirstTrainTimer firstTrains,
-                       TimetableRouteFinder timetableRoutes, Duration arriveAtMaxAhead) {
-        if (arriveAtMaxAhead.isNegative() || arriveAtMaxAhead.isZero()) {
+                       TimetableRouteFinder timetableRoutes, int arriveAtMaxDays) {
+        if (arriveAtMaxDays <= 0) {
             throw new IllegalArgumentException("linkro.route.arrive-at-max-days must be positive");
         }
         this.rooms = rooms;
@@ -105,12 +108,12 @@ public class RouteSearchService {
         this.clock = clock;
         this.firstTrains = firstTrains;
         this.timetableRoutes = timetableRoutes;
-        this.arriveAtMaxAhead = arriveAtMaxAhead;
+        this.arriveAtMaxDays = arriveAtMaxDays;
     }
 
     public RouteSearchResponse search(UUID userId, RouteSearchRequest request) {
         Instant now = clock.instant();
-        RouteSearchRequest.Valid query = request.validate(now, arriveAtMaxAhead);
+        RouteSearchRequest.Valid query = request.validate(now, arriveAtMaxDays);
         // roomId is optional; when sent, ROOM_NOT_FOUND (404) / NOT_ROOM_MEMBER (403) as in the room APIs.
         MeetingRoom room = query.roomId() == null ? null : rooms.requireMember(query.roomId(), userId);
         // Both stations are checked before Kakao: the INTERNAL fallback only covers supported stations.

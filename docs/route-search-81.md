@@ -15,7 +15,7 @@
 | `destinationStationId` | O | 도착역 ID (`is_supported = true`) |
 | `departAt` | X | 출발 시각, 오프셋 포함 ISO-8601. 생략하면 요청 시각. 혼자 모드는 이 시각 이후 첫 열차로 경로를 찾고, 그 밖에는 혼잡도 기준 시각이다. 지난 시각도 그대로 쓴다. `arriveAt`과 함께 보낼 수 없다 |
 | `roomId` | X | 방 화면에서 호출할 때. 보내면 방 멤버를 확인하고 약속 시각 기준으로 출발 시각을 계산. `arriveAt`이 있으면 멤버 확인만 한다 |
-| `arriveAt` | X | 도착 시각(#130), 오프셋 포함 ISO-8601. 이 시각까지 도착하는 가장 늦은 출발 경로(아래 "도착 시각 지정"). 지금 이후, 설정 일수(기본 30일) 이내 |
+| `arriveAt` | X | 도착 시각(#130), 오프셋 포함 ISO-8601. 이 시각까지 도착하는 가장 늦은 출발 경로(아래 "도착 시각 지정"). 지금 이후이고, 날짜(Asia/Seoul)가 오늘 + 설정 일수(기본 365일) 이하 |
 
 응답은 명세 6.1 형식이다: `routeSource`, `routes[]`. #120에서 `appointmentPassed`, `notice`와 `summary.departureAt`, `summary.noService`, `summary.serviceNotice`, `summary.arrivesAfterAppointment`를 추가했다(필드 추가만, 기존 필드·구조·에러 코드는 그대로).
 - `routes[]`의 각 경로: `routeId`, `routeType`, `summary`, `steps[]`
@@ -40,7 +40,7 @@
 
 ## 처리 순서
 
-1. 요청 검증: 400 `VALIDATION_ERROR`. 필드별 사유를 한 번에 돌려준다. `departAt`과 `arriveAt`을 함께 보내면 두 필드 모두, `arriveAt`이 지금 이전(초 단위, 같은 초는 허용)이거나 설정 일수보다 먼 미래면 `arriveAt`에 사유를 준다.
+1. 요청 검증: 400 `VALIDATION_ERROR`. 필드별 사유를 한 번에 돌려준다. `departAt`과 `arriveAt`을 함께 보내면 두 필드 모두, `arriveAt`이 지금 이전(초 단위, 같은 초는 허용)이거나 날짜가 오늘 + 설정 일수보다 뒤면 `arriveAt`에 사유를 준다.
 2. `roomId`가 있으면 `RoomAccess.requireMember`로 확인한다. 방 API와 같다.
    - 방 없음: 404 `ROOM_NOT_FOUND`
    - 방은 있는데 멤버가 아님: 403 `NOT_ROOM_MEMBER`
@@ -62,7 +62,7 @@
 
 | HTTP | 코드 | 언제 |
 | --- | --- | --- |
-| 400 | `VALIDATION_ERROR` | 역 ID 없음·1 미만, `departAt`·`arriveAt` 형식 오류, `departAt`과 `arriveAt`을 함께 보냄, `arriveAt`이 지금 이전이거나 설정 일수(기본 30일)보다 먼 미래, `roomId`가 UUID가 아님, 본문 형식 오류 |
+| 400 | `VALIDATION_ERROR` | 역 ID 없음·1 미만, `departAt`·`arriveAt` 형식 오류, `departAt`과 `arriveAt`을 함께 보냄, `arriveAt`이 지금 이전이거나 날짜가 오늘 + 설정 일수(기본 365일)보다 뒤, `roomId`가 UUID가 아님, 본문 형식 오류 |
 | 401 | `AUTH_REQUIRED` 등 | 인증 없음·토큰 오류 |
 | 403 | `NOT_ROOM_MEMBER` | `roomId` 방의 멤버가 아님 |
 | 404 | `ROOM_NOT_FOUND` / `STATION_NOT_FOUND` / `ROUTE_NOT_FOUND` | 방 없음 / 역 없음 / 내부 그래프로도 경로 없음 |
@@ -232,7 +232,12 @@ INTERNAL 경로는 다음과 같이 만든다.
   - `ARRIVAL_UNREACHABLE`: 열차는 다니지만 그 시각까지 도착할 수 없다(예: 평일 05:40 강남→사당, 첫차 05:36:00 출발이 사당에 05:46 도착).
 - **카카오**: 호출하지 않는다. 쿨다운 상태도 바뀌지 않는다. 로그는 INFO 한 줄(`Route search {출발역 ID} -> {도착역 ID} uses INTERNAL: timetable route arriving by the requested time`)이다.
 - **시각표 라우터가 없으면**(mock 모드, 시각표 끔) `arriveAt`을 무시하고 WARN 한 줄(`Route search {출발역 ID} -> {도착역 ID} ignores arriveAt: no timetable router ...`)을 남긴 뒤 지금 흐름(약속방 모드·카카오·INTERNAL)으로 간다. 출발역과 도착역이 같으면 `arriveAt`과 관계없이 이전과 같은 응답(INTERNAL 빈 경로)이다.
-- **범위 (`linkro.route.arrive-at-max-days`, 기본 30일)**: 휴일 달력은 올해와 내년을 갱신한다(`HolidayRefresher`, KASI 키가 없으면 `subway-holidays.properties`의 2026~2027년). 그래서 가장 짧을 때도 약 1년 앞까지 있어 30일은 달력 범위 안이다. 다만 KASI 갱신이 꺼진 채 2027년 12월이 되면 2028년 공휴일이 없어(주말만 반영) 30일 안의 1월 1일 같은 공휴일을 평일로 본다.
+- **범위 (`linkro.route.arrive-at-max-days`, 기본 365일)**: `arriveAt`의 날짜(Asia/Seoul)가 오늘 + 365일 이하면 그날 어느 시각이든 통과하고, 그다음 날부터 400이다(예: 오늘 2026-11-12 → 2027-11-12 23:59:59 통과, 2027-11-13 00:00 거절, 문구 `arriveAt은 오늘부터 365일 뒤(2027-11-12)까지여야 합니다.`).
+  - **휴일 달력 범위로 자르지 않는다**: 휴일 달력(`HolidayCalendar`, `RefreshableHolidayCalendar`)은 덮는 마지막 날을 알려 주지 않는다(`dayTypeOf`, `isHoliday`, `holidays(year)`, `isRefreshed(year)`뿐이고, 목록이 없는 연도는 빈 목록이다). 그래서 상한은 날수만 쓴다.
+  - **달력 범위**: KASI 갱신이 켜져 있으면 올해와 내년(`HolidayRefresher`, 매일 03:00), 꺼져 있으면 `subway-holidays.properties`의 2026~2027년이다.
+  - **12월 31일 경계**: 갱신이 켜져 있으면 12월 31일의 상한은 다음 해 12월 31일(다음 해가 윤년이면 12월 30일)이라 "올해와 내년" 달력의 끝과 겹친다. 1월 1일 00:00~03:00(그날 갱신 전)에는 달력이 아직 작년·올해이고 상한은 다음 해 1월 1일(올해가 윤년이면 12월 31일)이라, 그 하루가 달력 밖이다. 갱신이 꺼져 있으면 2027-01-01부터 상한이 2028년으로 넘어가 달력 밖 날짜가 생긴다.
+  - **달력 밖 날짜의 판정 (바꾸지 않음)**: 공휴일 목록이 없는 연도는 토요일·일요일만 반영하고 공휴일은 평일로 본다. 예: 기본 목록만 있을 때 2028-03-01(수, 삼일절) → `WEEKDAY`, 2027-03-01(월) → `SUNDAY`. 그래서 평일 시각표로 계산된다.
+- **먼 날짜의 정확도**: 열차 시각표는 2026-09-01 기준 한 벌이라 그 뒤 개편(시각 변경, 증편·감편, 신규 역·노선)은 반영되지 않는다. 임시공휴일·대체공휴일은 지정된 뒤에 KASI 갱신으로만 들어오므로, 먼 날짜일수록 평일로 잘못 계산될 수 있다. 365일까지 받지만 날짜가 멀수록 출발·도착 시각의 정확도가 떨어진다.
 - **한계**
   - 같은 시각표(2026-09-01 기준)·역 접근 시간 설정을 쓰므로 혼자 모드·약속방 모드와 같은 한계(지도 선은 역 좌표 직선, 요금 `ESTIMATED`, 카카오맵 앱과 미대조)를 가진다.
   - `slackSeconds`는 도착역 도착 시각 기준이다. 역에서 약속 장소까지 걷는 시간은 들어가지 않는다.
@@ -349,7 +354,8 @@ KAKAO 경로의 `totalTimeSec`을 카카오 `routes[].properties.totalTime` 대�
 - `RouteSearchArrivalTimetableTest`(#130 `arriveAt`, 같은 시각표)
   - `latestDepartures`와 같은 출발·도착, `slackSeconds` 180, 대기 3필드 `null`, 카카오 0회. 정각 도착 → `slackSeconds` 0
   - 약속 14:07인 방에서 `arriveAt` 05:45 → W1(05:36 → 05:40), `arriveAt` 없으면 약속방 모드 그대로
-  - `departAt` + `arriveAt` → 400(두 필드), 지금 1초 전·30일 1초 뒤·형식 오류 → 400, 지금·정확히 30일 뒤는 통과
+  - `departAt` + `arriveAt` → 400(두 필드), 지금 1초 전·형식 오류 → 400, 지금(같은 초)은 통과
+  - 상한(고정 시계, 오늘 2026-11-12 + 365일): 2027-11-12 23:59:59 → 경로(W3, `slackSeconds` 1379), 2027-11-13 00:00 → 400. 상한 날짜는 서울 날짜 기준(UTC 11-11 23:30 = 서울 11-12), 설정 일수 30이면 2026-12-12까지
   - 04:00 → `NO_SERVICE_TIME`, 05:39 → `ARRIVAL_UNREACHABLE`
   - 라우터 없음 → `arriveAt` 무시, `arriveAt` 없는 응답과 같음, WARN(좌표 없음). 같은 역 → 이전과 같음
 - `RouteSearchSoloTimetableTest`(#130, 같은 시각표)
@@ -381,6 +387,6 @@ KAKAO 경로의 `totalTimeSec`을 카카오 `routes[].properties.totalTime` 대�
   - 역 검증(404, 422)이 카카오보다 먼저
   - 인증 없음 401, OpenAPI
   - #120 실제 시각표: 화요일 05:40 약속(약속방 모드 경로 없음 → KAKAO fixture + `FirstTrainTimer`) → 첫차 05:36:00 출발, 05:46 도착, `arrivesAfterAppointment: true`
-  - #130 `arriveAt`(카카오 호출 0회): 강남·노원 → 종로3가, 다음 화요일·토요일 19:00에 추천(약속 있음) trip과 출발·도착(초)·역 순서·환승·요금·`travelMinutes`가 같고 `slackSeconds`가 맞음. 약속이 있는 방에서 다른 `arriveAt`이 이김. 400(함께 보냄·과거·31일 뒤), 04:00 → `NO_SERVICE_TIME`, 05:40 강남→사당 → `ARRIVAL_UNREACHABLE`
+  - #130 `arriveAt`(카카오 호출 0회): 강남·노원 → 종로3가, 다음 화요일·토요일 19:00에 추천(약속 있음) trip과 출발·도착(초)·역 순서·환승·요금·`travelMinutes`가 같고 `slackSeconds`가 맞음. 약속이 있는 방에서 다른 `arriveAt`이 이김. 400(함께 보냄·과거·2099-01-01), 04:00 → `NO_SERVICE_TIME`, 05:40 강남→사당 → `ARRIVAL_UNREACHABLE`
   - #130 약속 없는 방 → 혼자 모드(카카오 0회)
   - #130 혼자 모드(카카오 호출 0회): 강남·노원 → 종로3가 평일·토요일 13:00에 추천(약속 없음) trip과 출발·도착(초)·역 순서·환승·요금·`travelMinutes`가 같고 `waitSec`·`totalWithWaitSec`이 맞음, 로그 한 줄. 강남→사당 평일 03:00·05:00 → 05:36:00, 토요일 01:30 → 05:35:30(`noService`). 토요일 23:50 → 재탐색, 일요일 05:35:30. 토요일 00:50 수유→사당 → 재탐색, 토요일 첫 열차. 14:00·23:30 → 다음 열차, `noService: false`. 지난 약속 → `appointmentPassed`·`notice` 유지

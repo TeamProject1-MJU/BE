@@ -51,7 +51,7 @@ public class RouteController {
                                     @ExampleObject(name = "방 화면", value = "{\"originStationId\":31,\"destinationStationId\":35,\"roomId\":\"0192f3a4-8c2d-7d4f-8b21-6e3f9a7c2b02\"}") })))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "경로 목록. INTERNAL이면 경로 1개",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.RouteSearch.class)))
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR: 역 ID 없음·1 미만, departAt·arriveAt 형식 오류, departAt과 arriveAt을 함께 보냄, arriveAt이 지금 이전이거나 설정 일수(기본 30일)보다 먼 미래, roomId가 UUID가 아님, 본문 형식 오류",
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR: 역 ID 없음·1 미만, departAt·arriveAt 형식 오류, departAt과 arriveAt을 함께 보냄, arriveAt이 지금 이전이거나 날짜가 오늘 + 설정 일수(기본 365일)보다 뒤, roomId가 UUID가 아님, 본문 형식 오류",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "NOT_ROOM_MEMBER: roomId를 보냈는데 그 방 멤버가 아님",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))

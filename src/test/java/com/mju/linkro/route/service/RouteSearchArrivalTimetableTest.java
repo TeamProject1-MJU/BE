@@ -112,16 +112,37 @@ class RouteSearchArrivalTimetableTest {
     }
 
     @Test
-    void arriveAtMustBeFromNowToTheConfiguredDays() {
+    void arriveAtMustNotBeBeforeNow() {
         var f = fixture(NOW, null, ROUTER);
         assertThat(validationErrors(f, null, "2026-11-12T01:59:59+09:00")).containsEntry("arriveAt", "arriveAt은 지금 이후여야 합니다.");
-        assertThat(validationErrors(f, null, "2026-12-12T02:00:01+09:00")).containsEntry("arriveAt", "arriveAt은 지금부터 30일 이내여야 합니다.");
         assertThat(validationErrors(f, null, "not-a-time")).containsKey("arriveAt");
-        // Now itself (whole seconds) and exactly 30 days ahead are allowed: they reach the timetable checks instead.
+        // Now itself (whole seconds) is allowed: it reaches the timetable checks instead.
         assertThat(catchThrowableOfType(BusinessException.class, () -> search(f, null, false, "2026-11-12T02:00:00+09:00")).getErrorCode())
                 .isEqualTo(ErrorCode.NO_SERVICE_TIME);
-        assertThat(catchThrowableOfType(BusinessException.class, () -> search(f, null, false, "2026-12-12T02:00:00+09:00")).getErrorCode())
-                .isEqualTo(ErrorCode.NO_SERVICE_TIME);
+    }
+
+    @Test
+    void anyTimeOnTheLastDayPassesAndTheNextDayIsAValidationError() {
+        // Default 365 days: today (Seoul) 2026-11-12 + 365 = 2027-11-12, a Friday. Its last second still answers.
+        var f = fixture(NOW, null, ROUTER);
+        var summary = search(f, null, false, "2027-11-12T23:59:59+09:00").routes().get(0).summary();
+        // W3 leaves 강남 at 23:33 and reaches 서초 at 23:37.
+        assertThat(summary.arrivalAt()).isEqualTo("2027-11-12T23:37:00+09:00");
+        assertThat(summary.slackSeconds()).isEqualTo(22 * 60 + 59);
+        assertThat(validationErrors(f, null, "2027-11-13T00:00:00+09:00"))
+                .containsEntry("arriveAt", "arriveAt은 오늘부터 365일 뒤(2027-11-12)까지여야 합니다.");
+        verifyNoInteractions(f.kakao());
+    }
+
+    @Test
+    void theLastDayFollowsTheSeoulDateOfNowAndTheConfiguredDays() {
+        // 23:30 UTC on 11-11 is already 11-12 in Seoul: the last day counts from 11-12. With 30 days: 2026-12-12.
+        Instant now = Instant.parse("2026-11-11T23:30:00Z");
+        RouteSearchRequest ok = new RouteSearchRequest(31L, 33L, null, null, "2026-12-12T23:59:59+09:00");
+        assertThat(ok.validate(now, 30).arriveAt()).isEqualTo(Instant.parse("2026-12-12T14:59:59Z"));
+        BusinessException error = catchThrowableOfType(BusinessException.class,
+                () -> new RouteSearchRequest(31L, 33L, null, null, "2026-12-13T00:00:00+09:00").validate(now, 30));
+        assertThat(error.getDetails().get("arriveAt")).isEqualTo("arriveAt은 오늘부터 30일 뒤(2026-12-12)까지여야 합니다.");
     }
 
     @Test

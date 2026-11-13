@@ -3,9 +3,10 @@ package com.mju.linkro.route.dto;
 import com.mju.linkro.common.exception.BusinessException;
 import com.mju.linkro.common.exception.ErrorCode;
 import io.swagger.v3.oas.annotations.media.Schema;
-import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
@@ -22,7 +23,7 @@ public record RouteSearchRequest(
         @Schema(description = "선택. 방 화면에서 호출할 때 방 ID. 방 멤버를 확인하고 약속 시각 기준으로 출발 예정 시각을 계산. arriveAt을 보내면 멤버 확인만 하고 약속 시각은 쓰지 않는다",
                 example = "0192f3a4-8c2d-7d4f-8b21-6e3f9a7c2b02") String roomId,
         @Schema(description = "선택. 도착 시각(ISO-8601, 오프셋 포함). 이 시각까지 도착하는 가장 늦은 출발 경로를 열차 시각표로 찾는다(약속방 모드와 같은 계산). "
-                + "departAt과 함께 보낼 수 없고, 지금 이후 설정값(기본 30일) 이내여야 한다. 열차 시각표가 없으면 무시된다",
+                + "departAt과 함께 보낼 수 없고, 지금 이후이면서 날짜(Asia/Seoul)가 오늘 + 설정 일수(기본 365일) 이하여야 한다. 먼 날짜일수록 시각표·공휴일 정확도가 떨어진다. 열차 시각표가 없으면 무시된다",
                 example = "2026-11-06T19:00:00+09:00") String arriveAt) {
 
     /** Without arriveAt, as before #130's arrival mode. */
@@ -32,11 +33,13 @@ public record RouteSearchRequest(
 
     public record Valid(long originStationId, long destinationStationId, Instant departAt, UUID roomId, Instant arriveAt) {}
 
+    private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
+
     /**
-     * @param now            the request time: arriveAt before it (whole seconds, so this second is allowed) is invalid
-     * @param arriveAtMaxAhead how far after {@code now} arriveAt may be
+     * @param now             the request time: arriveAt before it (whole seconds, so this second is allowed) is invalid
+     * @param arriveAtMaxDays arriveAt's Seoul date may be at most this many days after today's (any time that last day)
      */
-    public Valid validate(Instant now, Duration arriveAtMaxAhead) {
+    public Valid validate(Instant now, int arriveAtMaxDays) {
         Map<String, String> errors = new LinkedHashMap<>();
         if (originStationId == null || originStationId <= 0) errors.put("originStationId", "originStationId는 1 이상의 정수여야 합니다.");
         if (destinationStationId == null || destinationStationId <= 0) errors.put("destinationStationId", "destinationStationId는 1 이상의 정수여야 합니다.");
@@ -71,8 +74,11 @@ public record RouteSearchRequest(
         if (arrive != null && !errors.containsKey("arriveAt")) {
             if (arrive.truncatedTo(ChronoUnit.SECONDS).isBefore(now.truncatedTo(ChronoUnit.SECONDS))) {
                 errors.put("arriveAt", "arriveAt은 지금 이후여야 합니다.");
-            } else if (arrive.isAfter(now.plus(arriveAtMaxAhead))) {
-                errors.put("arriveAt", "arriveAt은 지금부터 " + arriveAtMaxAhead.toDays() + "일 이내여야 합니다.");
+            } else {
+                LocalDate last = LocalDate.ofInstant(now, SEOUL).plusDays(arriveAtMaxDays);
+                if (LocalDate.ofInstant(arrive, SEOUL).isAfter(last)) {
+                    errors.put("arriveAt", "arriveAt은 오늘부터 " + arriveAtMaxDays + "일 뒤(" + last + ")까지여야 합니다.");
+                }
             }
         }
         if (!errors.isEmpty()) throw new BusinessException(ErrorCode.VALIDATION_ERROR, errors);
