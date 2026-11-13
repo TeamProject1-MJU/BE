@@ -33,22 +33,31 @@ public class RouteController {
             + "routeSource=INTERNAL로 돌려주고 카카오를 호출하지 않습니다(출발 = 늦어도 이때 나서면 약속에 도착, 도착 = 마지막 열차 도착). "
             + "시각표에 약속까지 도착하는 경로가 없거나 시각표가 없으면 약속 시각 − 소요시간을 혼잡도 기준 출발 시각으로 씁니다. "
             + "약속 시각 자체가 지났으면 요청 시각 기준이고 appointmentPassed=true와 notice로 알립니다. "
+            + "혼자 모드: 방이 없거나 약속 시각이 없거나 약속이 지났고 열차 시각표가 있으면, 요청 시각(departAt, 없으면 지금. 약속이 지난 방은 지금)에 출발하는 "
+            + "추천(약속 없음)과 같은 시각표 경로 1개를 routeSource=INTERNAL, fareSource=ESTIMATED로 돌려주고 카카오를 호출하지 않습니다. "
+            + "departureAt은 첫 열차에 맞춰 나서는 시각이라 요청 시각보다 늦을 수 있고, 그 차이를 waitSec(waitKind=TIMETABLE), 요청 시각부터 도착까지를 totalWithWaitSec로 줍니다. "
+            + "첫 열차가 그 운행일 첫차이고 요청보다 늦게 떠나거나, 경로 막차가 끝나 다음 운행일 첫 열차로 찾았으면 noService=true와 serviceNotice로 알립니다. "
+            + "시각표 경로가 없으면(다음 운행일에도 없음) 아래 카카오·내부 경로 흐름을 그대로 씁니다. 경로 좌표(path)는 역 좌표를 잇는 선입니다. "
             + "열차 시각표가 있으면 경로마다 출발 시각에 그 경로를 운행하는 열차가 있는지 시각표로 대조하고, 첫차 전·막차 후라 없으면 "
             + "출발(departureAt)과 도착(arrivalAt = departureAt + totalTimeSec)을 첫차 기준으로 바꾸고 noService=true와 serviceNotice로 알립니다. "
-            + "경로·요금·소요시간은 바꾸지 않습니다.",
+            + "경로·요금·소요시간은 바꾸지 않습니다. "
+            + "도착 시각 지정: arriveAt을 보내면(열차 시각표가 있을 때) 방의 약속 시각보다 우선해, 그 시각까지 도착하는 가장 늦은 출발 경로 1개를 "
+            + "약속방 모드와 같은 계산·모양(routeSource=INTERNAL, fareSource=ESTIMATED, noService=false)으로 돌려주고 카카오를 호출하지 않습니다. "
+            + "summary.slackSeconds = arriveAt − arrivalAt. arriveAt 직전 60분(설정값) 안에 도착하는 열차가 전 노선에 없으면 NO_SERVICE_TIME, "
+            + "열차는 있지만 그 시각까지 도착할 수 없으면 ARRIVAL_UNREACHABLE입니다. 열차 시각표가 없으면 arriveAt은 무시됩니다.",
             requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true,
                     content = @Content(mediaType = "application/json", schema = @Schema(implementation = RouteSearchRequest.class),
                             examples = { @ExampleObject(name = "혼자 이동", value = "{\"originStationId\":31,\"destinationStationId\":35}"),
                                     @ExampleObject(name = "방 화면", value = "{\"originStationId\":31,\"destinationStationId\":35,\"roomId\":\"0192f3a4-8c2d-7d4f-8b21-6e3f9a7c2b02\"}") })))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "경로 목록. INTERNAL이면 경로 1개",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.RouteSearch.class)))
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR: 역 ID 없음·1 미만, departAt 형식 오류, roomId가 UUID가 아님, 본문 형식 오류",
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR: 역 ID 없음·1 미만, departAt·arriveAt 형식 오류, departAt과 arriveAt을 함께 보냄, arriveAt이 지금 이전이거나 날짜가 오늘 + 설정 일수(기본 365일)보다 뒤, roomId가 UUID가 아님, 본문 형식 오류",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "NOT_ROOM_MEMBER: roomId를 보냈는데 그 방 멤버가 아님",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "ROOM_NOT_FOUND(roomId의 방 없음) / STATION_NOT_FOUND / ROUTE_NOT_FOUND(내부 그래프로도 경로 없음)",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "STATION_UNSUPPORTED: 출발·도착역이 isSupported=false",
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "STATION_UNSUPPORTED: 출발·도착역이 isSupported=false / NO_SERVICE_TIME: arriveAt 직전 60분(설정값) 안에 도착하는 열차가 전 노선에 없음 / ARRIVAL_UNREACHABLE: 열차는 있지만 arriveAt까지 도착할 수 있는 열차가 없음",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
     public ApiResponse<RouteSearchResponse> search(@CurrentUser UUID userId, @RequestBody RouteSearchRequest request) {
         return ApiResponse.success(routes.search(userId, request));

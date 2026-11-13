@@ -68,6 +68,38 @@ final class FirstTrainTimer {
         return tomorrow == null ? Optional.empty() : Optional.of(moved(next, tomorrow.boardSec(), toFirstStop));
     }
 
+    /**
+     * The no-service judgement of {@link #time} for a route already ridden on the timetable (#130), without moving
+     * anything: its times are timetable times already. True when the first train belongs to a later service day than
+     * {@code requested}, or is the first train of the route's first edge on its service day and the route leaves after
+     * {@code requested}. False when the first edge is not in the timetable.
+     *
+     * @param boardAt departure of the first train
+     * @param leaveAt when the route leaves (boarding minus the station access time)
+     */
+    boolean boardsFirstTrainAfter(RouteDraft draft, Instant boardAt, Instant leaveAt, Instant requested) {
+        Optional<StepDraft> ride = draft.steps().stream()
+                .filter(step -> RouteDraft.SUBWAY.equals(step.type()) && step.stops().size() >= 2).findFirst();
+        if (ride.isEmpty()) return false;
+        ServiceTime board = clock.serviceTimeOf(LocalDateTime.ofInstant(boardAt, ZONE));
+        ServiceTime request = clock.serviceTimeOf(LocalDateTime.ofInstant(requested, ZONE));
+        if (board.serviceDate().isAfter(request.serviceDate())) return true;
+        if (!leaveAt.isAfter(requested)) return false;
+        PathStop from = ride.get().stops().get(0);
+        PathStop to = ride.get().stops().get(1);
+        OptionalLong edge = timetable.rideEdgeId(from.lineId(), from.stationId(), to.stationId());
+        if (edge.isEmpty()) return false;
+        TrainTimetable.Rides rides = timetable.rides(edge.getAsLong(), board.dayType());
+        // The train boarded leaves at boardAt: it is the day's first one when no train of the edge leaves before it.
+        return rides != null && rides.next(board.secondOfServiceDay()) == 0;
+    }
+
+    /** Start (03:00) of the service day after the one {@code at} belongs to. */
+    Instant nextServiceDayStart(Instant at) {
+        LocalDate next = clock.serviceTimeOf(LocalDateTime.ofInstant(at, ZONE)).serviceDate().plusDays(1);
+        return clock.startOf(next).atZone(ZONE).toInstant();
+    }
+
     private static Timing moved(LocalDate serviceDate, int boardSec, int toFirstStop) {
         Instant board = serviceDate.atStartOfDay(ZONE).toInstant().plusSeconds(boardSec);
         return new Timing(board.minusSeconds(toFirstStop), true, board);
