@@ -71,7 +71,8 @@ logging:
 # Route search (POST /routes/search): the Kakao REST API key comes only from the environment variable
 # KAKAO_REST_API_KEY (production: ~/BE/.env, passed by docker-compose). Empty means INTERNAL routes only.
 # Optional overrides (defaults shown): linkro.route.kakao.base-url=https://dapi.kakao.com,
-#   call-timeout=3s, total-timeout=5s, retry-delay=200ms. See docs/route-search-81.md.
+#   call-timeout=3s, total-timeout=5s, retry-delay=200ms; linkro.route.arrive-at-max-days=30 (how far ahead arriveAt
+#   may be; the holiday calendar covers this year and next). See docs/route-search-81.md.
 # - timetable.enabled (default true, module=graph only): recommendations use real trains of train-timetable.csv.gz
 #   (#96). false loads no timetable and goes back to the fixed costs below (emergency switch).
 #   timetable.station-access-seconds (default 0): time from leaving to the first platform. See docs/recommendation-74.md.

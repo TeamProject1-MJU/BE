@@ -61,6 +61,21 @@ class RouteSearchKakaoPostgresTest extends RouteSearchPostgresSupport {
         registry.add("spring.datasource.password", POSTGRES::getPassword);
     }
 
+    /** Without the timetable router arriveAt is ignored with a WARN: the Kakao flow from the request time. */
+    @Test void arriveAtIsIgnoredWithoutTheTimetable(CapturedOutput output) throws Exception {
+        server.expect(ExpectedCount.once(), requestTo(startsWith(URL))).andRespond(withSuccess(KAKAO_OK, MediaType.APPLICATION_JSON));
+        String arriveAt = java.time.OffsetDateTime.now(java.time.ZoneOffset.ofHours(9)).plusDays(1).withNano(0).toString();
+        String body = "{\"originStationId\":" + gangnam + ",\"destinationStationId\":" + sadang + ",\"arriveAt\":\"" + arriveAt + "\"}";
+
+        JsonNode data = ok(post("/api/v1/routes/search").contentType(MediaType.APPLICATION_JSON).content(body), member);
+
+        server.verify();
+        assertThat(data.get("routeSource").asString()).isEqualTo("KAKAO");
+        assertThat(data.get("routes").get(0).get("summary").get("slackSeconds").isNull()).isTrue();
+        assertThat(output.getAll().lines().filter(line -> line.contains(" WARN ") && line.contains("ignores arriveAt: no timetable router")))
+                .hasSize(1).allSatisfy(line -> assertThat(line).doesNotContain(KEY).doesNotContain("127.0"));
+    }
+
     @Test void theTimetableRouterIsOff() {
         assertThat(timetableRoutes).isNull();
         assertThat(context.getBeanProvider(com.mju.linkro.subway.api.TimetableRouteFinder.class).getIfAvailable()).isNull();

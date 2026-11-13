@@ -142,7 +142,10 @@ class RouteSearchPostgresTest extends RouteSearchPostgresSupport {
         assertThat(root.get("components").get("schemas").get("RouteSearchData").toString()).contains("KAKAO", "INTERNAL");
         assertThat(root.get("components").get("schemas").get("RouteSearchData").toString()).contains("appointmentPassed", "notice");
         assertThat(root.get("components").get("schemas").get("RouteSummaryData").toString())
-                .contains("departureAt", "noService", "serviceNotice", "arrivesAfterAppointment", "waitSec", "waitKind", "totalWithWaitSec");
+                .contains("departureAt", "noService", "serviceNotice", "arrivesAfterAppointment", "waitSec", "waitKind", "totalWithWaitSec",
+                        "slackSeconds");
+        assertThat(root.get("components").get("schemas").get("RouteSearchRequest").toString()).contains("arriveAt");
+        assertThat(operation.get("responses").get("422").get("description").asString()).contains("NO_SERVICE_TIME", "ARRIVAL_UNREACHABLE");
     }
 
 
@@ -348,5 +351,144 @@ class RouteSearchPostgresTest extends RouteSearchPostgresSupport {
         assertThat(summary.get("departureAt").asString()).isNotEqualTo("2026-11-12T14:00:00+09:00");
         assertThat(summary.get("waitKind").asString()).isEqualTo("TIMETABLE");
         assertThat(summary.get("arrivesAfterAppointment").asBoolean()).isFalse();
+    }
+
+    /** A room without an appointment is solo mode (#130): the timetable route from departAt, Kakao not called. */
+    @Test void aRoomWithoutAnAppointmentIsSoloMode() throws Exception {
+        String body = mvc.perform(auth(post("/api/v1/rooms").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"약속 없음\"}"), member))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        String room = mapper.readTree(body).get("data").get("id").asString();
+        java.time.Instant requested = OffsetDateTime.parse("2026-11-12T14:00:00+09:00").toInstant();
+        var expected = timetableRoutes.departingAt(gangnam, requested).routeTo(sadang).orElseThrow();
+
+        JsonNode data = ok(search(gangnam, sadang, "2026-11-12T14:00:00+09:00", room), member);
+
+        server.verify(); // no expectations: a Kakao request would have failed
+        assertThat(data.get("routeSource").asString()).isEqualTo("INTERNAL");
+        assertThat(data.get("appointmentPassed").asBoolean()).isFalse();
+        JsonNode summary = data.get("routes").get(0).get("summary");
+        assertThat(instant(summary.get("departureAt"))).isEqualTo(expected.leaveAt());
+        assertThat(instant(summary.get("arrivalAt"))).isEqualTo(expected.arriveAt());
+        assertThat(summary.get("waitKind").asString()).isEqualTo("TIMETABLE");
+        assertThat(summary.get("slackSeconds").isNull()).isTrue();
+    }
+
+    // ---- #130 arrival mode (arriveAt): the latest departure arriving by the requested time ----
+
+    /** The next {@code day} after today in Seoul (1~7 days ahead), at {@code time}: inside the 30-day arriveAt limit. */
+    private static String next(java.time.DayOfWeek day, String time) {
+        java.time.LocalDate date = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul")).plusDays(1)
+                .with(java.time.temporal.TemporalAdjusters.nextOrSame(day));
+        return date + "T" + time + "+09:00";
+    }
+
+    private MockHttpServletRequestBuilder arrive(long origin, long destination, String arriveAt, String departAt, String roomId) {
+        StringBuilder body = new StringBuilder("{\"originStationId\":" + origin + ",\"destinationStationId\":" + destination
+                + ",\"arriveAt\":\"" + arriveAt + '"');
+        if (departAt != null) body.append(",\"departAt\":\"").append(departAt).append('"');
+        if (roomId != null) body.append(",\"roomId\":\"").append(roomId).append('"');
+        return post("/api/v1/routes/search").contentType(MediaType.APPLICATION_JSON).content(body.append('}').toString());
+    }
+
+    private JsonNode error(MockHttpServletRequestBuilder request, int status) throws Exception {
+        String body = mvc.perform(auth(request, member)).andExpect(status().is(status)).andReturn().getResponse()
+                .getContentAsString(StandardCharsets.UTF_8);
+        return mapper.readTree(body).get("error");
+    }
+
+    /**
+     * arriveAt gives the trip recommendations compute for an appointment at that time (one latestDepartures search): the
+     * same leaving and arrival seconds, stations, transfers, fare and minutes, on a weekday and a Saturday, without Kakao.
+     */
+    @Test void arrivalModeIsTheRecommendationTripForThatAppointment(CapturedOutput output) throws Exception {
+        long jongno = id("종로3가");
+        long nowon = id("노원");
+        for (String arriveAt : List.of(next(java.time.DayOfWeek.TUESDAY, "19:00:00"), next(java.time.DayOfWeek.SATURDAY, "19:00:00"))) {
+            java.time.Instant target = OffsetDateTime.parse(arriveAt).toInstant();
+            var members = List.of(new com.mju.linkro.recommendation.service.Candidate.Member(member, "a", gangnam),
+                    new com.mju.linkro.recommendation.service.Candidate.Member(UUID.randomUUID(), "b", nowon));
+            var evaluation = engine.evaluate(members, com.mju.linkro.recommendation.dto.RecommendationResponse.AppliedConstraints.none(),
+                    target, java.time.Instant.now());
+            assertThat(evaluation.candidates().get(jongno).trips()).hasSize(2);
+            for (var trip : evaluation.candidates().get(jongno).trips()) {
+                long origin = trip.member().departureStationId();
+                JsonNode data = ok(arrive(origin, jongno, arriveAt, null, null), member);
+                String as = arriveAt + " from " + origin;
+                assertThat(data.get("routeSource").asString()).isEqualTo("INTERNAL");
+                assertThat(data.get("routes").size()).isEqualTo(1);
+                JsonNode route = data.get("routes").get(0);
+                assertThat(route.get("routeType").asString()).isEqualTo("FASTEST");
+                JsonNode summary = route.get("summary");
+                assertThat(instant(summary.get("departureAt"))).as(as).isEqualTo(trip.timed().leaveAt());
+                assertThat(instant(summary.get("arrivalAt"))).as(as).isEqualTo(trip.timed().arriveAt()).isBeforeOrEqualTo(target);
+                int total = summary.get("totalTimeSec").asInt();
+                assertThat(total).isEqualTo(Duration.between(trip.timed().leaveAt(), trip.timed().arriveAt()).toSeconds());
+                assertThat((total + 59) / 60).isEqualTo(trip.minutes());
+                assertThat(summary.get("transferCount").asInt()).isEqualTo(trip.path().transferCount());
+                assertThat(summary.get("fare").asInt()).isEqualTo(trip.fareWon());
+                assertThat(summary.get("fareSource").asString()).isEqualTo("ESTIMATED");
+                assertThat(responseStations(route)).isEqualTo(pathStations(trip.path()));
+                assertThat(summary.get("slackSeconds").asInt()).isEqualTo(Duration.between(trip.timed().arriveAt(), target).toSeconds());
+                assertThat(summary.get("noService").asBoolean()).isFalse();
+                assertThat(summary.get("waitSec").isNull()).isTrue();
+                assertThat(summary.get("waitKind").isNull()).isTrue();
+                assertThat(summary.get("totalWithWaitSec").isNull()).isTrue();
+            }
+        }
+        server.verify(); // no expectations: a Kakao request would have failed
+        assertThat(output.getAll()).contains("uses INTERNAL: timetable route arriving by the requested time").doesNotContain(" attempt 1: ");
+    }
+
+    /** In a room with an appointment, a different arriveAt wins; without arriveAt the room appointment mode answers as before. */
+    @Test void arriveAtWinsOverTheRoomAppointment() throws Exception {
+        String appointment = next(java.time.DayOfWeek.TUESDAY, "19:00:00");
+        String arriveAt = next(java.time.DayOfWeek.TUESDAY, "08:30:00");
+        String room = createRoom(member, OffsetDateTime.parse(appointment).toInstant().toString());
+        var expected = timetableRoutes.latestDepartures(sadang, OffsetDateTime.parse(arriveAt).toInstant(), Set.of(gangnam), 0).get(gangnam);
+        var roomRoute = timetableRoutes.latestDepartures(sadang, OffsetDateTime.parse(appointment).toInstant(), Set.of(gangnam), 0).get(gangnam);
+
+        JsonNode withArrival = ok(arrive(gangnam, sadang, arriveAt, null, room), member).get("routes").get(0).get("summary");
+        JsonNode withoutArrival = ok(search(gangnam, sadang, null, room), member).get("routes").get(0).get("summary");
+
+        assertThat(instant(withArrival.get("arrivalAt"))).isEqualTo(expected.arriveAt());
+        assertThat(instant(withArrival.get("departureAt"))).isEqualTo(expected.leaveAt());
+        assertThat(withArrival.get("slackSeconds").isIntegralNumber()).isTrue();
+        assertThat(instant(withoutArrival.get("arrivalAt"))).isEqualTo(roomRoute.arriveAt());
+        assertThat(withoutArrival.get("slackSeconds").isNull()).isTrue();
+        server.verify();
+    }
+
+    @Test void arriveAtValidationErrors() throws Exception {
+        String arriveAt = next(java.time.DayOfWeek.TUESDAY, "19:00:00");
+        JsonNode both = error(arrive(gangnam, sadang, arriveAt, "2026-11-12T14:00:00+09:00", null), 400);
+        assertThat(both.get("code").asString()).isEqualTo("VALIDATION_ERROR");
+        assertThat(both.get("details").has("departAt")).isTrue();
+        assertThat(both.get("details").has("arriveAt")).isTrue();
+
+        JsonNode past = error(arrive(gangnam, sadang, "2020-01-01T09:00:00+09:00", null, null), 400);
+        assertThat(past.get("details").get("arriveAt").asString()).isEqualTo("arriveAt은 지금 이후여야 합니다.");
+
+        String far = java.time.OffsetDateTime.now(java.time.ZoneOffset.ofHours(9)).plusDays(31).withNano(0).toString();
+        JsonNode tooFar = error(arrive(gangnam, sadang, far, null, null), 400);
+        assertThat(tooFar.get("details").get("arriveAt").asString()).isEqualTo("arriveAt은 지금부터 30일 이내여야 합니다.");
+        server.verify();
+    }
+
+    /** 04:00: no train of any line arrives in the 60 minutes before (the recommendation's NO_SERVICE_TIME check and text). */
+    @Test void arriveAtWithoutAnyTrainBeforeItIsNoServiceTime() throws Exception {
+        JsonNode error = error(arrive(gangnam, sadang, next(java.time.DayOfWeek.WEDNESDAY, "04:00:00"), null, null), 422);
+        assertThat(error.get("code").asString()).isEqualTo("NO_SERVICE_TIME");
+        assertThat(error.get("message").asString()).isEqualTo("해당 시간대에는 지하철이 운행하지 않습니다. 약속 시간을 바꿔 주세요.");
+        server.verify();
+    }
+
+    /** 05:40: trains run, but the first 강남 -> 사당 train (05:36:00) reaches 사당 after it. */
+    @Test void arriveAtJustAfterTheFirstTrainsIsArrivalUnreachable() throws Exception {
+        String arriveAt = next(java.time.DayOfWeek.WEDNESDAY, "05:40:00");
+        assertThat(timetableRoutes.noTrainArrivesBefore(OffsetDateTime.parse(arriveAt).toInstant())).isFalse();
+        JsonNode error = error(arrive(gangnam, sadang, arriveAt, null, null), 422);
+        assertThat(error.get("code").asString()).isEqualTo("ARRIVAL_UNREACHABLE");
+        assertThat(error.get("message").asString()).isEqualTo("그 시각까지 도착할 수 있는 열차가 없습니다. 도착 시각을 늦춰 주세요.");
+        server.verify();
     }
 }

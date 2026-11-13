@@ -10,7 +10,7 @@ import java.util.List;
 @JsonInclude(JsonInclude.Include.ALWAYS)
 @Schema(name = "RouteSearchData", requiredProperties = {"routeSource", "routes", "appointmentPassed", "notice"})
 public record RouteSearchResponse(
-        @Schema(description = "KAKAO: 카카오 대중교통 길찾기(지하철만). INTERNAL: 카카오 키 없음·실패·지하철 경로 없음·역 매칭 실패로 내부 다익스트라 경로, 또는 열차 시각표 경로(카카오 호출 없음, 추천과 같은 계산). 시각표 경로는 약속방 모드(약속이 남은 방)와 혼자 모드(방 없음·약속 없는 방·약속이 지난 방, 요청 시각 출발)") RouteSource routeSource,
+        @Schema(description = "KAKAO: 카카오 대중교통 길찾기(지하철만). INTERNAL: 카카오 키 없음·실패·지하철 경로 없음·역 매칭 실패로 내부 다익스트라 경로, 또는 열차 시각표 경로(카카오 호출 없음, 추천과 같은 계산). 시각표 경로는 도착 시각 지정(arriveAt), 약속방 모드(약속이 남은 방), 혼자 모드(방 없음·약속 없는 방·약속이 지난 방, 요청 시각 출발)") RouteSource routeSource,
         List<Route> routes,
         @Schema(description = "roomId의 약속 시각 자체가 이미 지났으면 true(추천의 APPOINTMENT_PASSED와 같은 초 단위 기준). 이때 출발은 요청 시각이고 departAt은 무시된다", example = "false") boolean appointmentPassed,
         @Schema(description = "appointmentPassed일 때 안내 문구. 아니면 null", example = "약속 시각이 이미 지나 지금 출발 기준으로 안내합니다.", types = {"string", "null"}) String notice) {
@@ -47,7 +47,9 @@ public record RouteSearchResponse(
                     example = "180", types = {"integer", "null"}) Integer waitSec,
             @Schema(description = "waitSec의 출처. TIMETABLE: 열차 시각표로 계산. waitSec이 null이면 null", example = "TIMETABLE", types = {"string", "null"}) String waitKind,
             @Schema(description = "요청 시각부터 도착까지(초) = arrivalAt − 요청 시각 = waitSec + totalTimeSec. waitSec이 null이면 null",
-                    example = "2640", types = {"integer", "null"}) Integer totalWithWaitSec) {}
+                    example = "2640", types = {"integer", "null"}) Integer totalWithWaitSec,
+            @Schema(description = "arriveAt(도착 시각 지정)으로 찾은 경로에서 요청 도착 시각 − arrivalAt(초, 0 이상). 그 시각보다 이만큼 일찍 도착한다. 그 밖의 경로(약속방 모드 포함)는 null",
+                    example = "240", types = {"integer", "null"}) Integer slackSeconds) {}
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
     @Schema(name = "RouteCongestionData", requiredProperties = {"supported", "kind", "pct", "level", "levelLabel"})
