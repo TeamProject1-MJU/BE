@@ -40,9 +40,11 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+
 /**
- * POST /routes/search on PostgreSQL (V1~V13 seed, graph module) with Kakao stubbed by MockRestServiceServer.
- * The stub bodies are hand-written in the shape of docs/kakao-route-analysis.md; no real Kakao response is used.
+ * POST /routes/search with the train timetable (graph module): room appointment mode (#122), solo mode (#130) and the
+ * Kakao flow when the timetable has no route. Kakao is stubbed; Kakao-first searches without the timetable are in
+ * {@link RouteSearchKakaoPostgresTest}.
  */
 @Testcontainers
 @ExtendWith(OutputCaptureExtension.class)
@@ -50,210 +52,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.config.import=", "spring.jpa.hibernate.ddl-auto=validate", "spring.jpa.open-in-view=false",
         "spring.jpa.show-sql=false", "auth.kakao.app-id=1234", "auth.jwt.access-token-ttl=15m",
         "auth.jwt.secret=dGVzdC1vbmx5LXNlY3JldC0wMTIzNDU2Nzg5YWJjZGVmZ2hpams=", "linkro.subway.module=graph"})
+@org.springframework.context.annotation.Import(RouteSearchPostgresSupport.StubKakao.class)
 @Timeout(90)
-class RouteSearchPostgresTest {
-    static final String KEY = "test-route-key-0123456789";
-    static final String URL = "https://dapi.kakao.com/v2/routing/publictraffic";
-
+class RouteSearchPostgresTest extends RouteSearchPostgresSupport {
     @Container static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16");
     @DynamicPropertySource static void database(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
-    }
-
-    /** Lets each test pick the Kakao client (stubbed key, no key, short timeouts). */
-    static class SwitchableKakaoRouteClient extends KakaoRouteClient {
-        KakaoRouteClient target;
-
-        SwitchableKakaoRouteClient() {
-            super(RestClient.create(), "", Duration.ofSeconds(3), Duration.ofSeconds(5), Duration.ZERO, Duration.ofMinutes(5), Duration.ofSeconds(30), System::nanoTime, java.time.Clock.systemUTC());
-        }
-
-        @Override public boolean enabled() { return target.enabled(); }
-
-        @Override public Result search(double startX, double startY, double endX, double endY) {
-            return target.search(startX, startY, endX, endY);
-        }
-    }
-
-    @TestConfiguration
-    static class StubKakao {
-        @Bean @Primary SwitchableKakaoRouteClient stubKakaoRouteClient() { return new SwitchableKakaoRouteClient(); }
-    }
-
-    @Autowired WebApplicationContext context;
-    @Autowired JwtProvider jwt;
-    @Autowired UserRepository users;
-    @Autowired JdbcTemplate jdbc;
-    @Autowired SwitchableKakaoRouteClient kakao;
-    @Autowired com.mju.linkro.recommendation.service.RecommendationEngine engine;
-    @Autowired com.mju.linkro.subway.api.StationFareLookup fareTable;
-    @Autowired com.mju.linkro.subway.api.TimetableRouteFinder timetableRoutes;
-    private final JsonMapper mapper = JsonMapper.builder().build();
-    MockMvc mvc;
-    MockRestServiceServer server;
-    UUID member;
-    UUID stranger;
-    long gangnam;
-    long sadang;
-    long line2;
-
-    @BeforeEach void setup() {
-        jdbc.update("delete from meeting_members");
-        jdbc.update("delete from meeting_rooms");
-        jdbc.update("delete from users");
-        jdbc.update("delete from congestion_stats");
-        member = users.saveAndFlush(new User("route-member", "경로")).getId();
-        stranger = users.saveAndFlush(new User("route-stranger", "외부")).getId();
-        mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
-        gangnam = jdbc.queryForObject("select id from stations where name = '강남'", Long.class);
-        sadang = jdbc.queryForObject("select id from stations where name = '사당'", Long.class);
-        line2 = jdbc.queryForObject("select id from subway_lines where line_code = '2'", Long.class);
-        stat("강남", "2", "INNER", "08:00", "92.5", "NORMAL", "보통");
-        stat("교대", "2", "INNER", "08:00", "34.95326485813263", "COMFORTABLE", "쾌적");
-        useKakao(KEY, Duration.ofSeconds(3), Duration.ofSeconds(5));
-    }
-
-    private void useKakao(String key, Duration call, Duration total) {
-        RestClient.Builder builder = RestClient.builder().baseUrl("https://dapi.kakao.com");
-        server = MockRestServiceServer.bindTo(builder).build();
-        kakao.target = new KakaoRouteClient(builder.build(), key, call, total, Duration.ofMillis(10), Duration.ofMinutes(5), Duration.ofSeconds(30), System::nanoTime, java.time.Clock.systemUTC());
-    }
-
-    /** One BUS route, one 9호선 route and the 2호선 강남 -> 사당 route; only the last one can be used. */
-    static final String KAKAO_OK = """
-            {"status":"OK","properties":{"total":3,"bus":1,"subway":2,"busAndSubway":0},"routes":[
-              {"properties":{"type":"BUS","totalDistance":7000,"totalTime":500,"transfers":0,"fare":{"min":1500,"max":1500}},
-               "steps":[{"properties":{"type":"BUS","guidance":"bus","distance":7000,"time":500,"stops":[],"vehicles":[]}}]},
-              {"properties":{"type":"SUBWAY","totalDistance":9000,"totalTime":550,"transfers":0,"fare":{"value":1650}},
-               "steps":[{"properties":{"type":"SUBWAY","guidance":"BODY-MARKER","distance":9000,"time":550,
-                 "stops":[{"name":"신논현"},{"name":"사평"}],"vehicles":[{"name":"9호선","type":"일반"}]}}]},
-              {"properties":{"type":"SUBWAY","totalDistance":7300,"totalTime":600,"transfers":0,"fare":{"value":1550}},
-               "steps":[{"properties":{"type":"SUBWAY","guidance":"2호선 (강남 > 사당)","distance":7300,"time":600,
-                 "stops":[{"name":"강남"},{"name":"교대(법원.검찰청)"},{"name":"서초"},{"name":"방배"},{"name":"사당"}],
-                 "vehicles":[{"name":"2호선","type":"일반"}]},
-                 "path":{"points":[[127.0275,37.4979],[127.0137,37.4934],[126.9816,37.4765]]}}]}]}
-            """;
-
-    @Test void kakaoSubwayRouteWithOurCongestion(CapturedOutput output) throws Exception {
-        server.expect(ExpectedCount.once(), requestTo(startsWith(URL))).andRespond(withSuccess(KAKAO_OK, MediaType.APPLICATION_JSON));
-
-        JsonNode data = ok(search(gangnam, sadang, "2026-11-06T08:00:00+09:00", null), member);
-
-        server.verify();
-        assertThat(data.get("routeSource").asString()).isEqualTo("KAKAO");
-        JsonNode route = data.get("routes").get(0);
-        assertThat(data.get("routes").size()).isEqualTo(1);
-        assertThat(route.get("routeId").asString()).isEqualTo("r1");
-        assertThat(route.get("routeType").asString()).isEqualTo("FASTEST");
-        JsonNode summary = route.get("summary");
-        assertThat(summary.get("totalTimeSec").asInt()).isEqualTo(600);
-        assertThat(summary.get("arrivalAt").asString()).isEqualTo("2026-11-06T08:10:00+09:00");
-        assertThat(summary.get("fare").asInt()).isEqualTo(1550);
-        assertThat(summary.get("fareSource").asString()).isEqualTo("KAKAO");
-        assertThat(summary.get("transferCount").asInt()).isZero();
-        assertThat(summary.get("walkingMinutes").asInt()).isZero();
-        // Summary: the stop with the highest raw value (강남 92.5 -> 93).
-        assertCongestion(summary.get("congestion"), 93, "NORMAL", "PREDICTED");
-
-        JsonNode step = route.get("steps").get(0);
-        assertThat(step.get("type").asString()).isEqualTo("SUBWAY");
-        assertThat(step.get("guidance").asString()).isEqualTo("2호선 탑승, 4개 역 이동 후 사당 하차");
-        assertThat(step.get("line").get("id").asLong()).isEqualTo(line2);
-        assertThat(step.get("line").get("color").asString()).isEqualTo("#00A84D");
-        assertThat(step.get("direction").isNull()).isTrue();
-        assertThat(step.get("directionCode").asString()).isEqualTo("INNER");
-        assertThat(names(step.get("stops"))).containsExactly("강남", "교대", "서초", "방배", "사당");
-        assertThat(step.get("stops").get(4).get("order").asInt()).isEqualTo(5);
-        assertThat(step.get("path").size()).isEqualTo(3);
-        JsonNode stations = step.get("stations");
-        assertThat(stations.size()).isEqualTo(5);
-        assertThat(stations.get(0).get("slotStart").asString()).isEqualTo("08:00");
-        assertThat(stations.get(0).get("slotDate").asString()).isEqualTo("2026-11-06");
-        assertCongestion(stations.get(0).get("congestion"), 93, "NORMAL", "PREDICTED");
-        // 34.95326485813263 COMFORTABLE is shown as 34 by CongestionResolver.display.
-        assertCongestion(stations.get(1).get("congestion"), 34, "COMFORTABLE", "PREDICTED");
-        assertThat(stations.get(2).get("congestion").get("supported").asBoolean()).isFalse();
-        assertThat(stations.get(2).get("congestion").get("pct").isNull()).isTrue();
-
-        assertThat(output.getAll()).contains("attempt 1: 200").doesNotContain(KEY).doesNotContain("BODY-MARKER");
-    }
-
-    /** 1호선 since V14 (#89): 청량리 방면 is UP (Seoul 상행) and 서울역 방면 DOWN, with the matching congestion. */
-    @Test void line1DirectionCodeFollowsSeoul() throws Exception {
-        stat("종각", "1", "UP", "08:00", "38.412", "RELAXED", "여유");    // 상선 = 청량리 방면
-        stat("종각", "1", "DOWN", "08:00", "48.448", "RELAXED", "여유");  // 하선 = 서울역 방면
-        long jonggak = jdbc.queryForObject("select id from stations where name = '종각'", Long.class);
-        long cityHall = jdbc.queryForObject("select id from stations where name = '시청'", Long.class);
-        long jongno3 = jdbc.queryForObject("select id from stations where name = '종로3가'", Long.class);
-        useKakao("", Duration.ofSeconds(3), Duration.ofSeconds(5));
-
-        JsonNode toSeoul = ok(search(jonggak, cityHall, "2026-11-06T08:00:00+09:00", null), member).get("routes").get(0).get("steps").get(0);
-        assertThat(toSeoul.get("directionCode").asString()).isEqualTo("DOWN");
-        assertCongestion(toSeoul.get("stations").get(0).get("congestion"), 48, "RELAXED", "PREDICTED");
-
-        JsonNode toCheongnyangni = ok(search(jonggak, jongno3, "2026-11-06T08:00:00+09:00", null), member).get("routes").get(0).get("steps").get(0);
-        assertThat(toCheongnyangni.get("directionCode").asString()).isEqualTo("UP");
-        assertCongestion(toCheongnyangni.get("stations").get(0).get("congestion"), 38, "RELAXED", "PREDICTED");
-
-        // Kakao routes take the direction from the same edges.
-        useKakao(KEY, Duration.ofSeconds(3), Duration.ofSeconds(5));
-        server.expect(ExpectedCount.once(), requestTo(startsWith(URL))).andRespond(withSuccess("""
-                {"status":"OK","routes":[{"properties":{"type":"SUBWAY","totalDistance":1000,"totalTime":120,"transfers":0,"fare":{"value":1550}},
-                 "steps":[{"properties":{"type":"SUBWAY","distance":1000,"time":120,"stops":[{"name":"종각"},{"name":"시청"}],
-                 "vehicles":[{"name":"1호선","type":"일반"}]}}]}]}
-                """, MediaType.APPLICATION_JSON));
-        JsonNode kakao = ok(search(jonggak, cityHall, "2026-11-06T08:00:00+09:00", null), member);
-        assertThat(kakao.get("routeSource").asString()).isEqualTo("KAKAO");
-        assertThat(kakao.get("routes").get(0).get("steps").get(0).get("directionCode").asString()).isEqualTo("DOWN");
-        server.verify();
-    }
-
-    @Test void timeoutFallsBackToInternal() throws Exception {
-        useKakao(KEY, Duration.ofMillis(200), Duration.ofMillis(450));
-        server.expect(ExpectedCount.twice(), requestTo(startsWith(URL))).andRespond(request -> {
-            try {
-                Thread.sleep(1_000);
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-            }
-            return withSuccess(KAKAO_OK, MediaType.APPLICATION_JSON).createResponse(request);
-        });
-
-        assertInternal(ok(search(gangnam, sadang, "2026-11-06T08:00:00+09:00", null), member));
-    }
-
-    @Test void clientErrorFallsBackWithoutRetry() throws Exception {
-        server.expect(ExpectedCount.once(), requestTo(startsWith(URL))).andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS));
-        assertInternal(ok(search(gangnam, sadang, "2026-11-06T08:00:00+09:00", null), member));
-        server.verify();
-    }
-
-    @Test void keyErrorStartsACooldownWithoutFurtherCalls(CapturedOutput output) throws Exception {
-        server.expect(ExpectedCount.once(), requestTo(startsWith(URL))).andRespond(withStatus(HttpStatus.UNAUTHORIZED));
-        assertInternal(ok(search(gangnam, sadang, "2026-11-06T08:00:00+09:00", null), member));
-        // The next requests fall back at once: the stub has no further expectation, so any call would fail.
-        assertInternal(ok(search(gangnam, sadang, "2026-11-06T08:00:00+09:00", null), member));
-        assertInternal(ok(search(gangnam, sadang, "2026-11-06T08:00:00+09:00", null), member));
-        server.verify();
-        assertThat(output.getAll().lines().filter(line -> line.contains(" ERROR ") && line.contains("Kakao rejected the key"))).hasSize(1);
-        assertThat(output.getAll().lines().filter(line -> line.contains("uses INTERNAL: COOLDOWN"))).hasSize(2)
-                .allSatisfy(line -> assertThat(line).contains(" INFO "));
-        assertThat(output.getAll()).doesNotContain(KEY);
-    }
-
-    @Test void emptyResultFallsBack() throws Exception {
-        server.expect(ExpectedCount.once(), requestTo(startsWith(URL)))
-                .andRespond(withSuccess("{\"status\":\"OK\",\"routes\":[]}", MediaType.APPLICATION_JSON));
-        assertInternal(ok(search(gangnam, sadang, "2026-11-06T08:00:00+09:00", null), member));
-        server.verify();
-    }
-
-    @Test void withoutKeyKakaoIsNeverCalled() throws Exception {
-        useKakao("", Duration.ofSeconds(3), Duration.ofSeconds(5));
-        assertInternal(ok(search(gangnam, sadang, "2026-11-06T08:00:00+09:00", null), member));
-        server.verify(); // no expectations: any request would have failed
     }
 
     @Test void internalFaresAreTheFareTableFaresRecommendationsUse() throws Exception {
@@ -279,9 +85,6 @@ class RouteSearchPostgresTest {
         server.verify();
     }
 
-    private long id(String name) {
-        return jdbc.queryForObject("select id from stations where name = ?", Long.class, name);
-    }
 
     @Test void roomMembersUseTheAppointmentAndOthersAreRejected() throws Exception {
         // 2027-01-05 (Tuesday) 08:30 in Seoul. #122: an active appointment uses the timetable route (no Kakao call), so the
@@ -327,6 +130,7 @@ class RouteSearchPostgresTest {
         assertThat(mapper.readTree(body).get("error").get("code").asString()).isEqualTo("AUTH_REQUIRED");
     }
 
+
     @Test void openApiDocumentsTheEndpoint() throws Exception {
         JsonNode root = mapper.readTree(mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/v3/api-docs"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8));
@@ -338,78 +142,9 @@ class RouteSearchPostgresTest {
         assertThat(root.get("components").get("schemas").get("RouteSearchData").toString()).contains("KAKAO", "INTERNAL");
         assertThat(root.get("components").get("schemas").get("RouteSearchData").toString()).contains("appointmentPassed", "notice");
         assertThat(root.get("components").get("schemas").get("RouteSummaryData").toString())
-                .contains("departureAt", "noService", "serviceNotice", "arrivesAfterAppointment");
+                .contains("departureAt", "noService", "serviceNotice", "arrivesAfterAppointment", "waitSec", "waitKind", "totalWithWaitSec");
     }
 
-    // ---- #120: no service on the real timetable (2026-11-12 Thursday, 2026-11-14 Saturday) ----
-
-    /** 강남 -> 사당 on 2호선 (Kakao fixture and INTERNAL): first trains from 강남 are 05:36:00 weekdays, 05:35:30 Saturdays. */
-    @Test void noServiceTimesMoveToTheFirstTrainOnBothRouteSources() throws Exception {
-        server.expect(ExpectedCount.manyTimes(), requestTo(startsWith(URL))).andRespond(withSuccess(KAKAO_OK, MediaType.APPLICATION_JSON));
-        String[][] cases = {
-                {"2026-11-12T03:00:00+09:00", "2026-11-12T05:36:00+09:00", "11월 12일 05:36"},
-                {"2026-11-12T05:00:00+09:00", "2026-11-12T05:36:00+09:00", "11월 12일 05:36"},
-                // Saturday 01:30 is after Friday's last train: Saturday's first train.
-                {"2026-11-14T01:30:00+09:00", "2026-11-14T05:35:30+09:00", "11월 14일 05:35"}};
-        for (String[] c : cases) {
-            JsonNode data = ok(search(gangnam, sadang, c[0], null), member);
-            assertThat(data.get("routeSource").asString()).isEqualTo("KAKAO");
-            assertNoService(data, c[1], c[2]);
-        }
-        useKakao("", Duration.ofSeconds(3), Duration.ofSeconds(5));
-        for (String[] c : cases) {
-            JsonNode data = ok(search(gangnam, sadang, c[0], null), member);
-            assertThat(data.get("routeSource").asString()).isEqualTo("INTERNAL");
-            assertNoService(data, c[1], c[2]);
-        }
-    }
-
-    /**
-     * Saturday 23:50 is still Saturday's service day, but the last 강남 -> 교대 train left at 23:45: on both route sources
-     * the route moves to the next service day, Sunday (SUNDAY day type), whose first train leaves 강남 at 05:35:30.
-     */
-    @Test void saturdayNightAfterTheRoutesLastTrainTakesSundaysFirstTrain() throws Exception {
-        server.expect(ExpectedCount.once(), requestTo(startsWith(URL))).andRespond(withSuccess(KAKAO_OK, MediaType.APPLICATION_JSON));
-        JsonNode kakaoRoute = ok(search(gangnam, sadang, "2026-11-14T23:50:00+09:00", null), member);
-        assertThat(kakaoRoute.get("routeSource").asString()).isEqualTo("KAKAO");
-        assertNoService(kakaoRoute, "2026-11-15T05:35:30+09:00", "11월 15일 05:35");
-
-        useKakao("", Duration.ofSeconds(3), Duration.ofSeconds(5));
-        JsonNode internal = ok(search(gangnam, sadang, "2026-11-14T23:50:00+09:00", null), member);
-        assertThat(internal.get("routeSource").asString()).isEqualTo("INTERNAL");
-        assertNoService(internal, "2026-11-15T05:35:30+09:00", "11월 15일 05:35");
-    }
-
-    private static void assertNoService(JsonNode data, String departureAt, String firstTrain) {
-        JsonNode summary = data.get("routes").get(0).get("summary");
-        assertThat(summary.get("noService").asBoolean()).as(departureAt).isTrue();
-        // No room: never after an appointment.
-        assertThat(summary.get("arrivesAfterAppointment").asBoolean()).isFalse();
-        assertThat(summary.get("departureAt").asString()).isEqualTo(departureAt);
-        assertThat(OffsetDateTime.parse(summary.get("arrivalAt").asString()))
-                .isEqualTo(OffsetDateTime.parse(departureAt).plusSeconds(summary.get("totalTimeSec").asInt()));
-        assertThat(summary.get("serviceNotice").asString()).contains("첫차(" + firstTrain + " 출발)");
-        assertThat(data.get("appointmentPassed").asBoolean()).isFalse();
-        assertThat(data.get("notice").isNull()).isTrue();
-    }
-
-    @Test void runningHoursKeepTheRequestedDeparture() throws Exception {
-        server.expect(ExpectedCount.manyTimes(), requestTo(startsWith(URL))).andRespond(withSuccess(KAKAO_OK, MediaType.APPLICATION_JSON));
-        for (boolean internal : new boolean[] {false, true}) {
-            if (internal) useKakao("", Duration.ofSeconds(3), Duration.ofSeconds(5));
-            for (String departAt : List.of("2026-11-12T14:00:00+09:00", "2026-11-12T23:30:00+09:00")) {
-                JsonNode data = ok(search(gangnam, sadang, departAt, null), member);
-                JsonNode summary = data.get("routes").get(0).get("summary");
-                assertThat(summary.get("noService").asBoolean()).as(departAt).isFalse();
-                assertThat(summary.get("serviceNotice").isNull()).isTrue();
-                assertThat(summary.get("departureAt").asString()).isEqualTo(departAt);
-                assertThat(OffsetDateTime.parse(summary.get("arrivalAt").asString()))
-                        .isEqualTo(OffsetDateTime.parse(departAt).plusSeconds(summary.get("totalTimeSec").asInt()));
-                assertThat(data.get("appointmentPassed").asBoolean()).isFalse();
-                assertThat(data.get("notice").isNull()).isTrue();
-            }
-        }
-    }
 
     /** Appointment Tuesday 05:40, 600 s route: leave 05:30, before the 05:36:00 first train -> arrive 05:46. */
     @Test void aDawnAppointmentPushedToTheFirstTrainArrivesAfterIt() throws Exception {
@@ -426,17 +161,6 @@ class RouteSearchPostgresTest {
         assertThat(summary.get("arrivesAfterAppointment").asBoolean()).isTrue();
     }
 
-    @Test void aPassedAppointmentIsReportedAndDepartAtIgnored() throws Exception {
-        String room = createRoom(member, "2020-01-01T00:00:00Z");
-        server.expect(ExpectedCount.once(), requestTo(startsWith(URL))).andRespond(withSuccess(KAKAO_OK, MediaType.APPLICATION_JSON));
-
-        JsonNode data = ok(search(gangnam, sadang, "2026-11-12T14:00:00+09:00", room), member);
-
-        assertThat(data.get("appointmentPassed").asBoolean()).isTrue();
-        assertThat(data.get("notice").asString()).isEqualTo("약속 시각이 이미 지나 지금 출발 기준으로 안내합니다.");
-        assertThat(data.get("routes").get(0).get("summary").get("departureAt").asString()).isNotEqualTo("2026-11-12T14:00:00+09:00");
-        assertThat(data.get("routes").get(0).get("summary").get("arrivesAfterAppointment").asBoolean()).isFalse();
-    }
 
     /**
      * #122: in a room with an active appointment the route of each member is the recommendation's trip to the same station
@@ -476,93 +200,153 @@ class RouteSearchPostgresTest {
         server.verify(); // no expectations: a Kakao request would have failed
     }
 
-    private static java.time.Instant instant(JsonNode offsetTime) {
-        return OffsetDateTime.parse(offsetTime.asString()).toInstant();
+
+    // ---- #130 solo mode: no room, or a room without an active appointment ----
+
+    /**
+     * The same member, station and time give the recommendation's trip without an appointment (departingAt from the
+     * request time, #107 included): the same leaving and arrival seconds, stations, transfers, fare and minutes, on a
+     * weekday and a Saturday, without calling Kakao.
+     */
+    @Test void soloRouteIsTheRecommendationTrip(CapturedOutput output) throws Exception {
+        long jongno = id("종로3가");
+        long nowon = id("노원");
+        for (String requested : List.of("2026-11-12T13:00:00+09:00", "2026-11-14T13:00:00+09:00")) {
+            java.time.Instant at = OffsetDateTime.parse(requested).toInstant();
+            var members = List.of(new com.mju.linkro.recommendation.service.Candidate.Member(member, "a", gangnam),
+                    new com.mju.linkro.recommendation.service.Candidate.Member(UUID.randomUUID(), "b", nowon));
+            var evaluation = engine.evaluate(members, com.mju.linkro.recommendation.dto.RecommendationResponse.AppliedConstraints.none(),
+                    null, at);
+            assertThat(evaluation.source()).isEqualTo("TIMETABLE");
+            assertThat(evaluation.candidates().get(jongno).trips()).hasSize(2);
+            for (var trip : evaluation.candidates().get(jongno).trips()) {
+                long origin = trip.member().departureStationId();
+                JsonNode data = ok(search(origin, jongno, requested, null), member);
+                assertThat(data.get("routeSource").asString()).isEqualTo("INTERNAL");
+                assertThat(data.get("routes").size()).isEqualTo(1);
+                assertThat(data.get("appointmentPassed").asBoolean()).isFalse();
+                JsonNode route = data.get("routes").get(0);
+                assertThat(route.get("routeType").asString()).isEqualTo("FASTEST");
+                JsonNode summary = route.get("summary");
+                String as = requested + " from " + origin;
+                assertThat(summary.get("fareSource").asString()).isEqualTo("ESTIMATED");
+                assertThat(instant(summary.get("departureAt"))).as(as).isEqualTo(trip.timed().leaveAt());
+                assertThat(instant(summary.get("arrivalAt"))).as(as).isEqualTo(trip.timed().arriveAt());
+                int total = summary.get("totalTimeSec").asInt();
+                assertThat(total).isEqualTo(Duration.between(trip.timed().leaveAt(), trip.timed().arriveAt()).toSeconds());
+                assertThat((total + 59) / 60).isEqualTo(trip.minutes());
+                assertThat(summary.get("transferCount").asInt()).isEqualTo(trip.path().transferCount());
+                assertThat(summary.get("fare").asInt()).isEqualTo(trip.fareWon());
+                assertThat(responseStations(route)).isEqualTo(pathStations(trip.path()));
+                // The wait before leaving is separate from totalTimeSec.
+                assertThat(summary.get("waitKind").asString()).isEqualTo("TIMETABLE");
+                assertThat(summary.get("waitSec").asInt()).isEqualTo(Duration.between(at, trip.timed().leaveAt()).toSeconds()).isNotNegative();
+                assertThat(summary.get("totalWithWaitSec").asInt()).isEqualTo(Duration.between(at, trip.timed().arriveAt()).toSeconds())
+                        .isEqualTo(summary.get("waitSec").asInt() + total);
+                assertThat(summary.get("noService").asBoolean()).isFalse();
+                assertThat(summary.get("arrivesAfterAppointment").asBoolean()).isFalse();
+            }
+        }
+        server.verify(); // no expectations: a Kakao request would have failed
+        assertThat(output.getAll()).contains("uses INTERNAL: timetable route from the request time")
+                .doesNotContain(" attempt 1: ").doesNotContain(KEY);
     }
 
-    private static List<Long> responseStations(JsonNode route) {
-        List<Long> ids = new ArrayList<>();
-        route.get("steps").forEach(step -> step.get("stops").forEach(stop -> {
-            long id = stop.get("id").asLong();
-            if (ids.isEmpty() || ids.get(ids.size() - 1) != id) ids.add(id);
-        }));
-        return ids;
+    /** 강남 -> 사당 on 2호선: first trains from 강남 are 05:36:00 weekdays, 05:35:30 Saturdays (as #120). */
+    @Test void soloBeforeTheFirstTrainIsNoService() throws Exception {
+        String[][] cases = {
+                {"2026-11-12T03:00:00+09:00", "2026-11-12T05:36:00+09:00", "11월 12일 05:36"},
+                {"2026-11-12T05:00:00+09:00", "2026-11-12T05:36:00+09:00", "11월 12일 05:36"},
+                // Saturday 01:30 is after Friday's last train: Saturday's first train.
+                {"2026-11-14T01:30:00+09:00", "2026-11-14T05:35:30+09:00", "11월 14일 05:35"}};
+        for (String[] c : cases) {
+            JsonNode data = ok(search(gangnam, sadang, c[0], null), member);
+            assertThat(data.get("routeSource").asString()).isEqualTo("INTERNAL");
+            assertSoloNoService(data, c[0], c[1], c[2]);
+        }
+        server.verify();
     }
 
-    private static List<Long> pathStations(com.mju.linkro.subway.api.RoutePath path) {
-        List<Long> ids = new ArrayList<>();
-        path.stops().forEach(stop -> { if (ids.isEmpty() || ids.get(ids.size() - 1) != stop.stationId()) ids.add(stop.stationId()); });
-        return ids;
-    }
-
-    // ---- helpers ----
-
-    private void assertInternal(JsonNode data) {
+    /**
+     * Saturday 23:50 is still Saturday's service day and other trains still run, but the last 강남 -> 교대 train left at
+     * 23:45: the route is searched again from Sunday 03:00 and takes Sunday's first train 05:35:30.
+     */
+    @Test void soloAfterTheRoutesLastTrainTakesTheNextServiceDay(CapturedOutput output) throws Exception {
+        java.time.Instant saturdayNight = OffsetDateTime.parse("2026-11-14T23:50:00+09:00").toInstant();
+        assertThat(timetableRoutes.departingAt(gangnam, saturdayNight).routeTo(sadang)).isEmpty();
+        JsonNode data = ok(search(gangnam, sadang, "2026-11-14T23:50:00+09:00", null), member);
         assertThat(data.get("routeSource").asString()).isEqualTo("INTERNAL");
-        assertThat(data.get("routes").size()).isEqualTo(1);
-        JsonNode route = data.get("routes").get(0);
-        assertThat(route.get("summary").get("fareSource").asString()).isEqualTo("ESTIMATED");
-        assertThat(route.get("summary").get("fare").asInt()).isPositive();
-        JsonNode step = route.get("steps").get(0);
-        assertThat(step.get("type").asString()).isEqualTo("SUBWAY");
-        assertThat(step.get("directionCode").asString()).isEqualTo("INNER");
-        assertThat(names(step.get("stops"))).startsWith("강남").endsWith("사당");
-        assertCongestion(step.get("stations").get(0).get("congestion"), 93, "NORMAL", "PREDICTED");
+        assertSoloNoService(data, "2026-11-14T23:50:00+09:00", "2026-11-15T05:35:30+09:00", "11월 15일 05:35");
+        server.verify();
+        assertThat(output.getAll()).contains("timetable route from the request time (next service day)");
     }
 
-    private static void assertCongestion(JsonNode congestion, int pct, String level, String kind) {
-        assertThat(congestion.get("supported").asBoolean()).isTrue();
-        assertThat(congestion.get("pct").isIntegralNumber()).isTrue();
-        assertThat(congestion.get("pct").asInt()).isEqualTo(pct);
-        assertThat(congestion.get("level").asString()).isEqualTo(level);
-        assertThat(congestion.get("kind").asString()).isEqualTo(kind);
+    /** The case measured for #130: Saturday 00:50 (Friday's service day) 수유 -> 사당 has no route until Saturday. */
+    @Test void soloSuyuToSadangAfterMidnightTakesSaturdaysFirstTrain() throws Exception {
+        long suyu = id("수유");
+        java.time.Instant requested = OffsetDateTime.parse("2026-11-14T00:50:00+09:00").toInstant();
+        assertThat(timetableRoutes.departingAt(suyu, requested).routeTo(sadang)).isEmpty();
+        var saturday = timetableRoutes.departingAt(suyu, OffsetDateTime.parse("2026-11-14T03:00:00+09:00").toInstant())
+                .routeTo(sadang).orElseThrow();
+
+        JsonNode summary = ok(search(suyu, sadang, "2026-11-14T00:50:00+09:00", null), member).get("routes").get(0).get("summary");
+
+        assertThat(instant(summary.get("departureAt"))).isEqualTo(saturday.leaveAt());
+        assertThat(instant(summary.get("arrivalAt"))).isEqualTo(saturday.arriveAt());
+        assertThat(summary.get("noService").asBoolean()).isTrue();
+        assertThat(summary.get("serviceNotice").asString()).startsWith("요청한 시각에는 이 경로를 운행하는 열차가 없어 첫차(11월 14일 ");
+        assertThat(summary.get("waitSec").asInt()).isEqualTo(Duration.between(requested, saturday.leaveAt()).toSeconds());
+        server.verify();
     }
 
-    private static List<String> names(JsonNode stops) {
-        List<String> names = new ArrayList<>();
-        stops.forEach(stop -> names.add(stop.get("name").asString()));
-        return names;
+    private static void assertSoloNoService(JsonNode data, String requested, String departureAt, String firstTrain) {
+        JsonNode summary = data.get("routes").get(0).get("summary");
+        assertThat(summary.get("noService").asBoolean()).as(requested).isTrue();
+        assertThat(summary.get("arrivesAfterAppointment").asBoolean()).isFalse();
+        assertThat(summary.get("departureAt").asString()).as(requested).isEqualTo(departureAt);
+        assertThat(OffsetDateTime.parse(summary.get("arrivalAt").asString()))
+                .isEqualTo(OffsetDateTime.parse(departureAt).plusSeconds(summary.get("totalTimeSec").asInt()));
+        assertThat(summary.get("serviceNotice").asString()).contains("첫차(" + firstTrain + " 출발)");
+        assertThat(summary.get("waitSec").asInt())
+                .isEqualTo(Duration.between(OffsetDateTime.parse(requested), OffsetDateTime.parse(departureAt)).toSeconds());
+        assertThat(data.get("appointmentPassed").asBoolean()).isFalse();
+        assertThat(data.get("notice").isNull()).isTrue();
     }
 
-    private MockHttpServletRequestBuilder search(long origin, long destination, String departAt, String roomId) {
-        StringBuilder body = new StringBuilder("{\"originStationId\":" + origin + ",\"destinationStationId\":" + destination);
-        if (departAt != null) body.append(",\"departAt\":\"").append(departAt).append('"');
-        if (roomId != null) body.append(",\"roomId\":\"").append(roomId).append('"');
-        return post("/api/v1/routes/search").contentType(MediaType.APPLICATION_JSON).content(body.append('}').toString());
+    /** Running hours: leaving is the next train, waitSec after the request, and nothing is no-service. */
+    @Test void soloRunningHoursLeaveWithTheNextTrain() throws Exception {
+        for (String departAt : List.of("2026-11-12T14:00:00+09:00", "2026-11-12T23:30:00+09:00")) {
+            JsonNode data = ok(search(gangnam, sadang, departAt, null), member);
+            JsonNode summary = data.get("routes").get(0).get("summary");
+            assertThat(data.get("routeSource").asString()).isEqualTo("INTERNAL");
+            assertThat(summary.get("noService").asBoolean()).as(departAt).isFalse();
+            assertThat(summary.get("serviceNotice").isNull()).isTrue();
+            OffsetDateTime requested = OffsetDateTime.parse(departAt);
+            OffsetDateTime departure = OffsetDateTime.parse(summary.get("departureAt").asString());
+            assertThat(departure).isAfterOrEqualTo(requested).isBefore(requested.plusMinutes(15));
+            assertThat(summary.get("waitSec").asInt()).isEqualTo(Duration.between(requested, departure).toSeconds());
+            assertThat(OffsetDateTime.parse(summary.get("arrivalAt").asString()))
+                    .isEqualTo(departure.plusSeconds(summary.get("totalTimeSec").asInt()))
+                    .isEqualTo(requested.plusSeconds(summary.get("totalWithWaitSec").asInt()));
+            assertThat(data.get("appointmentPassed").asBoolean()).isFalse();
+            assertThat(data.get("notice").isNull()).isTrue();
+        }
+        server.verify();
     }
 
-    private JsonNode ok(MockHttpServletRequestBuilder request, UUID user) throws Exception {
-        String body = mvc.perform(auth(request, user)).andExpect(status().isOk()).andReturn().getResponse()
-                .getContentAsString(StandardCharsets.UTF_8);
-        JsonNode root = mapper.readTree(body);
-        assertThat(root.get("success").asBoolean()).isTrue();
-        return root.get("data");
-    }
+    /** A room whose appointment has passed is solo mode from now; appointmentPassed and its notice stay (#120). */
+    @Test void aPassedAppointmentIsReportedAndDepartAtIgnored() throws Exception {
+        String room = createRoom(member, "2020-01-01T00:00:00Z");
 
-    private void failure(MockHttpServletRequestBuilder request, UUID user, int status, String code) throws Exception {
-        String body = mvc.perform(auth(request, user)).andExpect(status().is(status)).andReturn().getResponse()
-                .getContentAsString(StandardCharsets.UTF_8);
-        assertThat(mapper.readTree(body).get("error").get("code").asString()).as(body).isEqualTo(code);
-    }
+        JsonNode data = ok(search(gangnam, sadang, "2026-11-12T14:00:00+09:00", room), member);
 
-    private MockHttpServletRequestBuilder auth(MockHttpServletRequestBuilder request, UUID user) {
-        return request.header("Authorization", "Bearer " + jwt.createAccessToken(user));
-    }
-
-    private String createRoom(UUID owner, String appointmentAt) throws Exception {
-        String body = mvc.perform(auth(post("/api/v1/rooms").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"경로 테스트\",\"appointmentAt\":\"" + appointmentAt + "\"}"), owner))
-                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
-        return mapper.readTree(body).get("data").get("id").asString();
-    }
-
-    private void stat(String station, String line, String direction, String slot, String pct, String level, String label) {
-        jdbc.update("""
-                insert into congestion_stats(station_line_id, direction, day_type, slot_start, congestion_pct, congestion_level,
-                                             congestion_level_label, source, model_version)
-                select sl.id, ?, 'WEEKDAY', ?::time, ?::numeric, ?, ?, 'PREDICTED', 'HGB_TEST'
-                from station_lines sl join stations s on s.id = sl.station_id join subway_lines l on l.id = sl.line_id
-                where s.name = ? and l.line_code = ?
-                """, direction, slot, pct, level, label, station, line);
+        server.verify(); // no expectations: solo mode does not call Kakao
+        assertThat(data.get("routeSource").asString()).isEqualTo("INTERNAL");
+        assertThat(data.get("appointmentPassed").asBoolean()).isTrue();
+        assertThat(data.get("notice").asString()).isEqualTo("약속 시각이 이미 지나 지금 출발 기준으로 안내합니다.");
+        JsonNode summary = data.get("routes").get(0).get("summary");
+        assertThat(summary.get("departureAt").asString()).isNotEqualTo("2026-11-12T14:00:00+09:00");
+        assertThat(summary.get("waitKind").asString()).isEqualTo("TIMETABLE");
+        assertThat(summary.get("arrivesAfterAppointment").asBoolean()).isFalse();
     }
 }

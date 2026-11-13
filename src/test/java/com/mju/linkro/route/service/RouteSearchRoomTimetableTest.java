@@ -148,20 +148,8 @@ class RouteSearchRoomTimetableTest {
     }
 
     @Test
-    void aPassedAppointmentNoRoomAndNoRouterAnswerAsBefore() {
-        Instant afternoon = seoul("2026-11-12T14:00:00");
-        // Appointment passed: the request time, as before (#120).
-        Instant passed = seoul("2026-11-12T13:00:00");
-        RouteSearchResponse passedResponse = fixture(afternoon, passed, ROUTER).search(null, true);
-        assertThat(passedResponse).isEqualTo(fixture(afternoon, passed, null).search(null, true));
-        assertThat(passedResponse.appointmentPassed()).isTrue();
-        // No room: departAt, as before.
-        Fixture alone = fixture(afternoon, seoul("2026-11-12T14:07:00"), ROUTER);
-        assertThat(alone.search("2026-11-12T14:00:00+09:00", false))
-                .isEqualTo(fixture(afternoon, seoul("2026-11-12T14:07:00"), null).search("2026-11-12T14:00:00+09:00", false));
-        verify(alone.kakao(), times(1)).search(anyDouble(), anyDouble(), anyDouble(), anyDouble());
-        // A room without an appointment: as before.
-        assertThat(fixture(afternoon, null, ROUTER).search(null, true)).isEqualTo(fixture(afternoon, null, null).search(null, true));
+    void withoutTheRouterAnActiveAppointmentAnswersAsBefore() {
+        // A passed appointment, no room and a room without an appointment are solo mode (#130, RouteSearchSoloTimetableTest).
         // No router (timetable disabled): an active appointment still uses Kakao/INTERNAL with appointment − totalTimeSec.
         Fixture noRouter = fixture(NOW, seoul("2026-11-12T14:07:00"), null);
         RouteSearchResponse fixed = noRouter.search(null, true);

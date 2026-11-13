@@ -38,6 +38,11 @@ public class TimetableClock {
         return new ServiceTime(date, calendar.dayTypeOf(date), second);
     }
 
+    /** When a service date starts: 03:00 of that date. */
+    public LocalDateTime startOf(LocalDate serviceDate) {
+        return serviceDate.atTime(SERVICE_DAY_START);
+    }
+
     /** Day type of a service date. */
     public DayType dayTypeOf(LocalDate serviceDate) {
         return calendar.dayTypeOf(serviceDate);
