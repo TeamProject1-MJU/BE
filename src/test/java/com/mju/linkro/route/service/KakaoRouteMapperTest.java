@@ -115,6 +115,49 @@ class KakaoRouteMapperTest {
         assertThat(mapper.map(new KakaoRouteResponse("OK", mixed), 31, 33)).hasSize(1);
     }
 
+    /** The same route with a Kakao totalTime of its own, e.g. larger than the sum of the steps. */
+    static Route withTotalTime(Route route, Integer totalTime) {
+        RouteProperties p = route.properties();
+        return new Route(new RouteProperties(p.type(), p.totalDistance(), totalTime, p.transfers(), p.fare()), route.steps());
+    }
+
+    @Test
+    void totalTimeIsTheSumOfTheStepsNotKakaoTotalTime() {
+        // #127: steps 120 + 90 + 100 = 310; Kakao's totalTime 400 also counts a coordinate correction outside the steps.
+        Route route = withTotalTime(route("SUBWAY", 1550, subway("2호선", 120, "강남", "교대"), step("WALKING", 90),
+                subway("3호선", 100, "교대", "고속터미널")), 400);
+
+        assertThat(mapper.map(ok(route), 31, 40)).singleElement().satisfies(draft -> {
+            assertThat(draft.totalTimeSec()).isEqualTo(310);
+            // Steps are unchanged, and the total is the last stop's offset.
+            assertThat(draft.steps()).extracting(RouteDraft.StepDraft::durationSec).containsExactly(120, 90, 100);
+            assertThat(draft.subwayStops()).extracting(PathStop::offsetSec).containsExactly(0, 120, 210, 310);
+            assertThat(draft.steps().get(0).path()).hasSize(2);
+        });
+        // A missing or smaller totalTime gives the same sum.
+        assertThat(mapper.map(ok(withTotalTime(route, null)), 31, 40)).singleElement().extracting(RouteDraft::totalTimeSec).isEqualTo(310);
+        assertThat(mapper.map(ok(withTotalTime(route, 200)), 31, 40)).singleElement().extracting(RouteDraft::totalTimeSec).isEqualTo(310);
+    }
+
+    @Test
+    void stepWithoutTimeCountsAsZero() {
+        // A step without time adds nothing: the total is the sum of the times that are there.
+        Step noTime = new Step(new StepProperties("WALKING", "walk", 80, null, List.of(), List.of()), null);
+        Route route = withTotalTime(route("SUBWAY", 1450, subway("2호선", 300, "강남", "교대", "서초")), 500);
+        route = new Route(route.properties(), List.of(noTime, route.steps().get(0)));
+
+        assertThat(mapper.map(ok(route), 31, 33)).singleElement().extracting(RouteDraft::totalTimeSec).isEqualTo(300);
+    }
+
+    @Test
+    void routeWithoutStepsIsDroppedWhateverItsTotalTime() {
+        // No steps (empty, null) or only walks: no stops to map, so no route and no totalTimeSec of 0.
+        RouteProperties properties = new RouteProperties("SUBWAY", 3000, 600, 0, new Fare(1450));
+        assertThat(mapper.map(ok(new Route(properties, List.of())), 31, 33)).isEmpty();
+        assertThat(mapper.map(ok(new Route(properties, null)), 31, 33)).isEmpty();
+        assertThat(mapper.map(ok(new Route(properties, List.of(step("WALKING", 600)))), 31, 33)).isEmpty();
+    }
+
     @Test
     void emptyOrFailedResponsesGiveNoRoute() {
         assertThat(mapper.map(new KakaoRouteResponse("OK", List.of()), 31, 33)).isEmpty();

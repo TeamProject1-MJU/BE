@@ -90,7 +90,10 @@ public class KakaoRouteMapper {
         if (stops.isEmpty() || stops.get(0).stationId() != origin || stops.get(stops.size() - 1).stationId() != destination) {
             return Optional.empty();
         }
-        int total = properties.totalTime() != null ? properties.totalTime() : offset;
+        // Sum of the step times, not Kakao's totalTime (#127): totalTime also counts a correction for the distance between
+        // the request coordinates and the stations, which is not a step of the route. The stop offsets come from the same
+        // step times, so arrivalAt = departureAt + totalTimeSec matches them.
+        int total = offset;
         int transfers = properties.transfers() != null ? properties.transfers()
                 : (int) steps.stream().filter(step -> RouteDraft.SUBWAY.equals(step.type())).count() - 1;
         Integer kakaoFare = properties.fare() == null ? null : properties.fare().value();

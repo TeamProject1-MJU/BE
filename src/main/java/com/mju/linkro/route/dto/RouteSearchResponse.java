@@ -31,7 +31,7 @@ public record RouteSearchResponse(
     @JsonInclude(JsonInclude.Include.ALWAYS)
     @Schema(name = "RouteSummaryData", requiredProperties = {"totalTimeSec", "arrivalAt", "fare", "fareSource", "transferCount", "walkingMinutes", "congestion", "departureAt", "noService", "serviceNotice", "arrivesAfterAppointment"})
     public record Summary(
-            @Schema(description = "소요시간(초). 약속방 모드는 arrivalAt − departureAt(열차 대기 포함). 그 밖에는 카카오 totalTime 또는 고정 비용(열차 대기 미포함 예상 값)", example = "1680") int totalTimeSec,
+            @Schema(description = "소요시간(초). 약속방 모드는 arrivalAt − departureAt(열차 대기 포함). 그 밖에는 카카오 단계 시간 합 또는 고정 비용(열차 대기 미포함 예상 값)", example = "1680") int totalTimeSec,
             @Schema(description = "departureAt + totalTimeSec (Asia/Seoul 오프셋)", example = "2026-11-06T08:28:00+09:00") String arrivalAt,
             @Schema(description = "원", example = "1550") int fare,
             @Schema(example = "KAKAO") FareSource fareSource,
