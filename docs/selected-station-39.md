@@ -16,4 +16,4 @@ READ_COMMITTED 쓰기 트랜잭션에서 RoomAccess.lockOwner로 방을 잠그�
 
 RoomAccess의 실제 PostgreSQL 3초 lock_timeout과 설정 복원 정책을 재사용한다. 시간 초과나 다른 실패는 전체 쓰기 트랜잭션을 롤백한다. 후보·투표·추천 실행과 결과·채팅·멤버 출발역·약속 시각은 수정하거나 초기화하지 않는다.
 
-#43은 SELECTED_STATION_CHANGED와 SYSTEM 메시지를 연결한다. 지정·해제 직후 같은 트랜잭션에서 불변 station·confirmedAt payload를 만들고, SYSTEM 저장은 변경과 함께 커밋 또는 롤백한다. WS는 최외곽 트랜잭션이 성공적으로 커밋된 뒤에만 발행한다. 해제 payload의 station·confirmedAt은 모두 null이다. 서비스 메서드 반환은 커밋 완료를 뜻하지 않으며 실패한 작업은 이벤트를 발행하지 않는다.
+#43이 SELECTED_STATION_CHANGED와 SYSTEM 메시지를 연결했다(지정·변경은 같은 역 재지정에도 이벤트를 보내고 SYSTEM 메시지는 역이 바뀔 때만 저장, 규칙은 `docs/stomp-42-43.md`). 지정·해제 직후 같은 트랜잭션에서 불변 station·confirmedAt payload를 만들고, SYSTEM 저장은 변경과 함께 커밋 또는 롤백한다. WS는 최외곽 트랜잭션이 성공적으로 커밋된 뒤에만 발행한다. 해제 payload의 station·confirmedAt은 모두 null이다. 서비스 메서드 반환은 커밋 완료를 뜻하지 않으며 실패한 작업은 이벤트를 발행하지 않는다.
