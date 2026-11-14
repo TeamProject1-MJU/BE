@@ -27,15 +27,17 @@ public class RealtimeConfig implements WebSocketMessageBrokerConfigurer {
     private final StompAuthInterceptor auth;
     private final StompDeliveryFilter delivery;
     private final StompSessions sessions;
+    private final StompReceiptInterceptor receipts;
     private final TaskScheduler heartbeatScheduler;
 
     RealtimeConfig(@Value("${websocket.allowed-origins}") String allowedOrigins, StompAuthInterceptor auth,
-                   StompDeliveryFilter delivery, StompSessions sessions,
+                   StompDeliveryFilter delivery, StompSessions sessions, StompReceiptInterceptor receipts,
                    @Lazy @Qualifier("messageBrokerTaskScheduler") TaskScheduler heartbeatScheduler) {
         this.allowedOrigins = CorsConfig.parseAllowedOrigins(allowedOrigins, "WS_ALLOWED_ORIGINS (websocket.allowed-origins)");
         this.auth = auth;
         this.delivery = delivery;
         this.sessions = sessions;
+        this.receipts = receipts;
         this.heartbeatScheduler = heartbeatScheduler;
     }
 
@@ -56,7 +58,7 @@ public class RealtimeConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void configureClientInboundChannel(ChannelRegistration registration) {
-        registration.interceptors(auth);
+        registration.interceptors(auth, receipts);
     }
 
     @Override
