@@ -81,7 +81,7 @@ public class UserService {
 		String stripped = nickname == null ? "" : nickname.strip();
 		if (stripped.indexOf(0) >= 0) {
 			throw new BusinessException(ErrorCode.VALIDATION_ERROR,
-				Map.of("nickname", NICKNAME_MESSAGE + " NUL 문자는 사용할 수 없습니다."));
+				Map.of("nickname", "닉네임에 사용할 수 없는 문자가 있습니다."));
 		}
 		int length = stripped.codePointCount(0, stripped.length());
 		if (length < NICKNAME_MIN_LENGTH || length > NICKNAME_MAX_LENGTH) {

@@ -115,7 +115,7 @@ class UserControllerTest {
 			.andExpect(status().isBadRequest())
 			.andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
 			.andExpect(jsonPath("$.error.details.nickname")
-				.value("닉네임은 앞뒤 공백을 제외하고 2~20자여야 합니다. NUL 문자는 사용할 수 없습니다."));
+				.value("닉네임에 사용할 수 없는 문자가 있습니다."));
 		assertThat(users.findById(user.getId()).orElseThrow().getNickname()).isEqualTo(user.getNickname());
 	}
 

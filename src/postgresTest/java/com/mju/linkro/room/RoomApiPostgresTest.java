@@ -251,6 +251,20 @@ class RoomApiPostgresTest {
         assertThat(rooms.findById(room).orElseThrow().getName()).isEqualTo("original");
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"\0room", "ro\0om", "room\0", "\0", " \0 "})
+    void nulNameReturnsBadRequestOnCreateAndUpdate(String name) throws Exception {
+        String body = mapper.writeValueAsString(Map.of("name", name));
+        json(post("/api/v1/rooms"), owner, body)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
+        UUID room = room();
+        json(patch("/api/v1/rooms/" + room), owner, body)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
+        assertThat(rooms.findById(room).orElseThrow().getName()).isEqualTo("original");
+    }
+
     @Test void unicodeBoundariesAndMalformedRequests() throws Exception {
         for (String name : List.of("a", "😀".repeat(30), "\t", "\u2003")) {
             json(post("/api/v1/rooms"), owner, mapper.writeValueAsString(Map.of("name", name))).andExpect(status().isCreated());
