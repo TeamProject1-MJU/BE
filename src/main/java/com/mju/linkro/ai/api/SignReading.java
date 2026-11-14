@@ -3,8 +3,9 @@ package com.mju.linkro.ai.api;
 import java.util.Objects;
 
 /**
- * The AI result, used as-is (spec 9.1; not re-checked against our DB), plus what it read from the sign
- * ({@code recognized}). Read fields are null when unreadable; reason is null only for CORRECT. Field names follow spec 9.1.
+ * The AI result (spec 9.1), plus what it read from the sign. Direction-only requests apply an additional
+ * explicit-evidence check in SignCheckService before returning the verdict.
+ * Read fields ({@code recognized}) are null when unreadable; reason is null only for CORRECT.
  */
 public record SignReading(SignResult result, SignReason reason, String stationName, String lineName, String headsign) {
     public SignReading {

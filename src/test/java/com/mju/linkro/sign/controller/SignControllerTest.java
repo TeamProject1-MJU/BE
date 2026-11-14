@@ -60,6 +60,7 @@ class SignControllerTest {
     @MockitoBean AiClient ai;
     @MockitoBean StationLookup stations;
     @MockitoBean LineLookup lines;
+    @MockitoBean com.mju.linkro.sign.service.SignRouteLookup routes;
     MockMvc mvc;
     User user;
 
@@ -161,5 +162,57 @@ class SignControllerTest {
         post(image("image/jpeg", JPEG), "{\"stationId\":999,\"lineId\":2,\"headsign\":\"사당 방면\"}", true)
                 .andExpect(status().isNotFound())
                 .andExpect(content().json("{\"success\":false,\"error\":{\"code\":\"STATION_NOT_FOUND\"}}", JsonCompareMode.LENIENT));
+    }
+
+    @Test
+    void directionOnlyHasExplicitNullHeadsignAndPhotoRetakeIs200() throws Exception {
+        String route = "{\"stationId\":105,\"lineId\":2,\"direction\":\"INNER\"}";
+        when(ai.readSign(any(), any())).thenReturn(new SignReading(SignResult.CORRECT, null, "강남", "2호선", "내선순환"));
+        post(image("image/jpeg", JPEG), route, true).andExpect(status().isOk()).andExpect(content().json("""
+                {"success":true,"data":{"result":"CORRECT","reason":null,
+                 "recognized":{"stationName":"강남","lineName":"2호선","headsign":"내선순환"},
+                 "expected":{"stationName":"강남","lineName":"2호선","headsign":null},
+                 "message":"올바른 방향입니다."}}""", JsonCompareMode.STRICT));
+        when(ai.readSign(any(), any())).thenReturn(new SignReading(SignResult.CORRECT, null, "강남", "2호선", "성수 방면"));
+        post(image("image/jpeg", JPEG), route, true).andExpect(status().isOk()).andExpect(content().json("""
+                {"success":true,"data":{"result":"RETAKE","reason":"MISSING_INFO",
+                 "expected":{"stationName":"강남","lineName":"2호선","headsign":null}}}""", JsonCompareMode.LENIENT));
+    }
+
+    @Test
+    void directionOnlyInvalidBoardingRouteIs400BeforeAi() throws Exception {
+        doThrow(new BusinessException(ErrorCode.VALIDATION_ERROR, java.util.Map.of("route", "해당 역·노선에서 이용할 수 없는 방향입니다.")))
+                .when(routes).requireDirection(105, 2, DirectionCode.UP);
+        for (String route : new String[]{"{\"stationId\":105,\"lineId\":2}",
+                "{\"stationId\":105,\"lineId\":2,\"direction\":\"UP\"}",
+                "{\"stationId\":105,\"lineId\":2,\"direction\":\"invalid\"}"}) {
+            post(image("image/jpeg", JPEG), route, true).andExpect(status().isBadRequest())
+                    .andExpect(content().json("{\"success\":false,\"error\":{\"code\":\"VALIDATION_ERROR\"}}", JsonCompareMode.LENIENT));
+        }
+        verifyNoInteractions(ai);
+    }
+
+    @Test
+    void missingBothDirectionAndHeadsignHasStableValidationEnvelope() throws Exception {
+        post(image("image/jpeg", JPEG), "{\"stationId\":105,\"lineId\":2}", true)
+                .andExpect(status().isBadRequest()).andExpect(content().json("""
+                {"success":false,"error":{"code":"VALIDATION_ERROR","message":"요청 값이 올바르지 않습니다.",
+                 "details":{"direction":"headsign이 없으면 direction은 필수입니다."}}}""", JsonCompareMode.STRICT));
+        verifyNoInteractions(ai, routes);
+    }
+
+    @Test
+    void swaggerPublishesDirectionOnlyResponseAndErrorExamples() throws Exception {
+        String body = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/v3/api-docs"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        var operation = tools.jackson.databind.json.JsonMapper.builder().build().readTree(body)
+                .path("paths").path(URL).path("post");
+        assertThat(operation.path("description").asString()).contains("headsign이 없으면 direction 필수");
+        var examples = operation.path("responses").path("200").path("content").path("application/json").path("examples");
+        assertThat(examples.path("headsign 없는 정상 판정").path("value").path("data").path("result").asString()).isEqualTo("CORRECT");
+        assertThat(examples.path("headsign 없는 정상 판정").path("value").path("data").path("expected").path("headsign").isNull()).isTrue();
+        assertThat(examples.path("방향 정보 부족").path("value").path("data").path("reason").asString()).isEqualTo("MISSING_INFO");
+        assertThat(operation.path("responses").path("400").path("content").path("application/json").path("examples")
+                .path("headsign과 direction 모두 누락").path("value").path("error").path("code").asString()).isEqualTo("VALIDATION_ERROR");
     }
 }

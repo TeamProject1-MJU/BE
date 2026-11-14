@@ -105,7 +105,8 @@ public class OpenAiClient implements AiClient {
         String dataUrl = "data:" + image.contentType() + ";base64," + Base64.getEncoder().encodeToString(image.bytes());
         String expected = "기대 경로: 역=" + ctx.stationName() + ", 노선=" + ctx.lineName()
                 + ", 방향=" + (ctx.direction() == null ? "알 수 없음(행선지로 비교)" : ctx.direction().name())
-                + ", 행선지=" + ctx.headsign();
+                + ", 행선지=" + (ctx.headsign() == null ? "미상(종착역 추정 금지)" : ctx.headsign())
+                + ", 비교방식=" + (ctx.directionOnly() ? "DIRECTION_ONLY" : "HEADSIGN");
         var content = List.of(
                 Map.of("type", "input_text", "text", expected),
                 Map.of("type", "input_image", "image_url", dataUrl, "detail", "low"));

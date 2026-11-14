@@ -4,6 +4,9 @@ import com.mju.linkro.ai.api.AiClient;
 import com.mju.linkro.ai.api.SignContext;
 import com.mju.linkro.ai.api.SignImage;
 import com.mju.linkro.ai.api.SignReading;
+import com.mju.linkro.ai.api.SignReason;
+import com.mju.linkro.ai.api.SignResult;
+import com.mju.linkro.subway.api.DirectionCode;
 import com.mju.linkro.common.exception.BusinessException;
 import com.mju.linkro.common.exception.ErrorCode;
 import com.mju.linkro.sign.dto.SignCheckResponse;
@@ -26,8 +29,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 /**
- * POST /ai/direction-check (9.1). The image is only held in memory. The AI's verdict is returned as-is; our DB is
- * used only to turn stationId/lineId into names for the AI and for {@code expected}.
+ * POST /ai/direction-check (9.1). Images stay in memory. Direction-only requests require a real boarding edge
+ * and explicit direction evidence; terminal names alone cannot prove a direction.
  */
 @Slf4j
 @Service
@@ -40,11 +43,13 @@ public class SignCheckService {
     private final AiClient ai;
     private final StationLookup stations;
     private final LineLookup lines;
+    private final SignRouteLookup routes;
 
     public SignCheckResponse check(byte[] image, SignRouteRequest route) {
         SignImage signImage = new SignImage(image, contentType(image));
         requireDecodable(image);
         SignRouteRequest.Valid request = route.validate();
+        if (request.headsign() == null) routes.requireDirection(request.stationId(), request.lineId(), request.direction());
         String stationName = stations.require(request.stationId()).name();
         String lineName = lines.name(request.lineId()).orElseThrow(() -> new BusinessException(ErrorCode.VALIDATION_ERROR,
                 Map.of("lineId", "존재하지 않는 노선입니다.")));
@@ -52,11 +57,43 @@ public class SignCheckService {
 
         long started = System.nanoTime();
         SignReading reading = ai.readSign(signImage, context);
+        if (context.directionOnly()) reading = checkDirectionEvidence(reading, request.direction());
         log.info("Sign check: result={} reason={} ai={}ms", reading.result(), reading.reason(), (System.nanoTime() - started) / 1_000_000);
 
         return new SignCheckResponse(reading.result(), reading.reason(),
                 new Place(reading.stationName(), reading.lineName(), reading.headsign()),
                 new Place(stationName, lineName, request.headsign()), message(reading));
+    }
+
+    /** Never accept the model's geographic inference from a terminal name as direction evidence. */
+    private static SignReading checkDirectionEvidence(SignReading reading, DirectionCode expected) {
+        if (reading.result() == SignResult.RETAKE || reading.reason() == SignReason.LINE_NOT_ON_ROUTE) return reading;
+        String text = reading.headsign() == null ? "" : reading.headsign().replaceAll("\\s+", "");
+        DirectionCode observed = switch (text) {
+            case "UP", "상행" -> DirectionCode.UP;
+            case "DOWN", "하행" -> DirectionCode.DOWN;
+            case "INNER", "내선", "내선순환" -> DirectionCode.INNER;
+            case "OUTER", "외선", "외선순환" -> DirectionCode.OUTER;
+            case "LOOP", "응암순환" -> DirectionCode.LOOP;
+            default -> null;
+        };
+        if (observed == null || reading.stationName() == null || reading.stationName().isBlank()
+                || reading.lineName() == null || reading.lineName().isBlank()
+                || (observed == expected && reading.result() != SignResult.CORRECT)) {
+            return new SignReading(SignResult.RETAKE, SignReason.MISSING_INFO,
+                    reading.stationName(), reading.lineName(), reading.headsign());
+        }
+        // Codes from another family (e.g. UP vs INNER) do not establish an opposite direction.
+        boolean comparable = observed == expected
+                || (observed == DirectionCode.UP && expected == DirectionCode.DOWN)
+                || (observed == DirectionCode.DOWN && expected == DirectionCode.UP)
+                || (observed == DirectionCode.INNER && expected == DirectionCode.OUTER)
+                || (observed == DirectionCode.OUTER && expected == DirectionCode.INNER);
+        if (!comparable) return new SignReading(SignResult.RETAKE, SignReason.MISSING_INFO,
+                reading.stationName(), reading.lineName(), reading.headsign());
+        return new SignReading(observed == expected ? SignResult.CORRECT : SignResult.WRONG,
+                observed == expected ? null : SignReason.DIRECTION_MISMATCH,
+                reading.stationName(), reading.lineName(), reading.headsign());
     }
 
     /** JPG/PNG up to 5MB, decided by the file's first bytes (the client's Content-Type is not trusted). */
@@ -113,7 +150,7 @@ public class SignCheckService {
             case LINE_NOT_ON_ROUTE -> "이동 경로에 없는 노선입니다. 이용할 노선의 승강장으로 이동하세요.";
             case NOT_A_SIGN -> "표지판이 아닌 것 같습니다. 승강장 방면 표지판이 보이게 다시 촬영해 주세요.";
             case UNREADABLE -> "표지판을 읽을 수 없습니다. 가까이에서 선명하게 다시 촬영해 주세요.";
-            case MISSING_INFO -> "역명·노선·방면이 모두 보이지 않습니다. 표지판 전체가 나오게 다시 촬영해 주세요.";
+            case MISSING_INFO -> "경로와 표지판의 방향을 비교할 정보가 부족합니다. 방향 표시가 보이게 다시 촬영해 주세요.";
         };
     }
 }
