@@ -87,6 +87,7 @@ class StompPostgresTest {
     @Autowired RoomCreationAttempt creation;
     @Autowired JdbcTemplate jdbc;
     @Autowired RoomEvents roomEvents;
+    @Autowired com.mju.linkro.room.service.ProposalVoteService voteService;
     @Autowired ApplicationEventPublisher publisher;
     @Autowired PlatformTransactionManager transactions;
     @Autowired SimpleBrokerMessageHandler brokerHandler;
@@ -500,61 +501,6 @@ class StompPostgresTest {
         assertThat(deleted.get(1).get("payload").get("proposalId").asString()).isEqualTo(proposalId);
     }
 
-
-    @Test void selectedStationChangesReachBothSubscribersAfterSystemMessage() throws Exception {
-        Client first = connectAs(owner), second = connectAs(member);
-        first.subscribe(room);
-        second.subscribe(room);
-        List<Long> stations = jdbc.queryForList("select id from stations where is_supported order by id limit 2",Long.class);
-        String path = "/rooms/" + room + "/selected-station";
-        for (long station : List.of(stations.get(0),stations.get(0),stations.get(1))) {
-            boolean repeated = station == stations.get(0) && jdbc.queryForObject(
-                "select selected_station_id from meeting_rooms where id = ?",Long.class,room) != null;
-            assertThat(rest(owner,"PUT",path,"{\"stationId\":"+station+"}").statusCode()).isEqualTo(200);
-            for (Client client : List.of(first,second)) {
-                List<JsonNode> got = client.received(repeated ? 1 : 2);
-                assertThat(labels(got)).containsExactlyElementsOf(repeated ? List.of("SELECTED_STATION_CHANGED")
-                    : List.of("MESSAGE_CREATED:SYSTEM","SELECTED_STATION_CHANGED"));
-                JsonNode payload = got.get(got.size()-1).get("payload");
-                assertThat(payload.get("station").get("id").asLong()).isEqualTo(station);
-                assertThat(payload.get("station").get("lines").isArray()).isTrue();
-                assertThat(payload.get("confirmedAt").asString()).isNotBlank();
-            }
-        }
-        assertThat(rest(owner,"DELETE",path,null).statusCode()).isEqualTo(200);
-        for (Client client : List.of(first,second)) {
-            List<JsonNode> got = client.received(2);
-            assertThat(labels(got)).containsExactly("MESSAGE_CREATED:SYSTEM","SELECTED_STATION_CHANGED");
-            assertThat(got.get(1).get("payload").get("station").isNull()).isTrue();
-            assertThat(got.get(1).get("payload").get("confirmedAt").isNull()).isTrue();
-        }
-        assertThat(rest(owner,"DELETE",path,null).statusCode()).isEqualTo(200);
-        for (Client client : List.of(first,second)) assertThat(client.events.poll(300,TimeUnit.MILLISECONDS)).isNull();
-    }
-
-    @Test void newVoteReachesBothSubscribersButRepeatedVoteIsSilent() throws Exception {
-        long station = jdbc.queryForObject("select id from stations where is_supported order by id limit 1",Long.class);
-        var created = rest(member,"POST","/rooms/"+room+"/station-proposals","{\"stationId\":"+station+"}");
-        assertThat(created.statusCode()).isEqualTo(201);
-        String proposal = mapper.readTree(created.body()).get("data").get("id").asString();
-        Client first = connectAs(owner), second = connectAs(member);
-        first.subscribe(room);
-        second.subscribe(room);
-        String path = "/rooms/"+room+"/station-proposals/"+proposal+"/vote";
-        var response = rest(member,"PUT",path,null);
-        assertThat(response.statusCode()).isEqualTo(200);
-        long count = mapper.readTree(response.body()).get("data").get("voteCount").asLong();
-        for (Client client : List.of(first,second)) {
-            JsonNode event = client.received(1).get(0);
-            assertThat(event.get("type").asString()).isEqualTo("STATION_PROPOSAL_VOTE_CHANGED");
-            assertThat(event.get("payload").get("proposalId").asString()).isEqualTo(proposal);
-            assertThat(event.get("payload").get("voteCount").asLong()).isEqualTo(count);
-            assertThat(event.get("payload").get("userId").asString()).isEqualTo(member.toString());
-        }
-        assertThat(rest(member,"PUT",path,null).statusCode()).isEqualTo(200);
-        for (Client client : List.of(first,second)) assertThat(client.events.poll(300,TimeUnit.MILLISECONDS)).isNull();
-    }
-
     @Test void recommendationCreatedEventIsForwardedWithItsRunId() throws Exception {
         Client client = connectAs(member);
         client.subscribe(room);
@@ -730,5 +676,257 @@ class StompPostgresTest {
         });
         List<JsonNode> got = client.received(count);
         for (int i = 0; i < count; i++) assertThat(got.get(i).get("payload").get("seq").asInt()).as("position %d", i).isEqualTo(i);
+    }
+
+    // --- STATION_PROPOSAL_VOTE_CHANGED (#43, vote API #41) --------------------------------------------------------
+
+    String proposeStation() throws Exception {
+        long station = jdbc.queryForObject("select id from stations where is_supported order by id limit 1", Long.class);
+        var created = rest(member, "POST", "/rooms/" + room + "/station-proposals", "{\"stationId\":" + station + "}");
+        assertThat(created.statusCode()).isEqualTo(201);
+        return mapper.readTree(created.body()).get("data").get("id").asString();
+    }
+
+    @Test void aNewVoteSendsTheProposalIdTheVoteCountAndTheVoterToTheRoom() throws Exception {
+        String proposal = proposeStation();
+        Client watcher = connectAs(member);
+        Client voter = connectAs(owner);
+        watcher.subscribe(room);
+        voter.subscribe(room);
+
+        assertThat(rest(owner, "PUT", "/rooms/" + room + "/station-proposals/" + proposal + "/vote", null).statusCode()).isEqualTo(200);
+        for (Client client : List.of(watcher, voter)) {
+            JsonNode event = client.received(1).get(0);
+            assertThat(event.get("type").asString()).isEqualTo("STATION_PROPOSAL_VOTE_CHANGED");
+            assertThat(event.get("roomId").asString()).isEqualTo(room.toString());
+            JsonNode payload = event.get("payload");
+            assertThat(payload.propertyNames()).containsExactlyInAnyOrder("proposalId", "voteCount", "userId");
+            assertThat(payload.get("proposalId").asString()).isEqualTo(proposal);
+            assertThat(payload.get("voteCount").asLong()).isEqualTo(1);
+            assertThat(payload.get("userId").asString()).isEqualTo(owner.toString());
+            client.assertNoEvent();
+        }
+
+        assertThat(rest(member, "PUT", "/rooms/" + room + "/station-proposals/" + proposal + "/vote", null).statusCode()).isEqualTo(200);
+        JsonNode second = watcher.received(1).get(0).get("payload");
+        assertThat(second.get("voteCount").asLong()).isEqualTo(2);
+        assertThat(second.get("userId").asString()).isEqualTo(member.toString());
+    }
+
+    @Test void aRepeatedOrRefusedVoteSendsNothing() throws Exception {
+        String proposal = proposeStation();
+        long station = jdbc.queryForObject("select id from stations where is_supported order by id offset 1 limit 1", Long.class);
+        var second = rest(member, "POST", "/rooms/" + room + "/station-proposals", "{\"stationId\":" + station + "}");
+        String otherProposal = mapper.readTree(second.body()).get("data").get("id").asString();
+        Client watcher = connectAs(member);
+        watcher.subscribe(room);
+        String path = "/rooms/" + room + "/station-proposals/";
+
+        assertThat(rest(owner, "PUT", path + proposal + "/vote", null).statusCode()).isEqualTo(200);
+        assertThat(watcher.received(1).get(0).get("type").asString()).isEqualTo("STATION_PROPOSAL_VOTE_CHANGED");
+        assertThat(rest(owner, "PUT", path + proposal + "/vote", null).statusCode()).as("same candidate again").isEqualTo(200);
+        assertThat(rest(owner, "PUT", path + otherProposal + "/vote", null).statusCode()).as("another candidate").isEqualTo(409);
+        assertThat(rest(owner, "PUT", path + UUID.randomUUID() + "/vote", null).statusCode()).as("unknown candidate").isEqualTo(404);
+        assertThat(rest(outsider, "PUT", path + proposal + "/vote", null).statusCode()).as("not a member").isEqualTo(403);
+        watcher.assertNoEvent();
+    }
+
+    @Test void aNonMemberNeverReceivesVoteEventsAndALeftMemberStopsReceivingThem() throws Exception {
+        String proposal = proposeStation();
+        Client stranger = connectAs(outsider);
+        stranger.subscribe(room);
+        assertThat(stranger.error()).isEqualTo("NOT_ROOM_MEMBER");
+        Client leaver = connectAs(member);
+        Client stayer = connectAs(owner);
+        leaver.subscribe(room);
+        stayer.subscribe(room);
+        assertThat(rest(member, "DELETE", "/rooms/" + room + "/members/me", null).statusCode()).isEqualTo(200);
+        assertThat(labels(stayer.received(2))).containsExactly("MESSAGE_CREATED:SYSTEM", "MEMBER_LEFT");
+
+        assertThat(rest(owner, "PUT", "/rooms/" + room + "/station-proposals/" + proposal + "/vote", null).statusCode()).isEqualTo(200);
+
+        assertThat(stayer.received(1).get(0).get("type").asString()).isEqualTo("STATION_PROPOSAL_VOTE_CHANGED");
+        stranger.assertNoEvent();
+        leaver.assertNoEvent();
+    }
+
+    /**
+     * The real vote service runs in its own REQUIRES_NEW transaction, so an enclosing transaction that rolls back later
+     * cannot undo it: the vote row stays and its event goes out exactly once, at the vote's own commit.
+     * The outer transaction takes no room lock (it only reads), so it cannot block the vote's member lock.
+     */
+    @Test void aVoteCalledInsideAnOuterTransactionThatRollsBackIsStillCommittedAndAnnouncedOnce() throws Exception {
+        String proposal = proposeStation();
+        UUID proposalId = UUID.fromString(proposal);
+        Client watcher = connectAs(member);
+        watcher.subscribe(room);
+        var tx = new TransactionTemplate(transactions);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx.executeWithoutResult(status -> {
+            // a real outer transaction on the same pool: a plain read, no lock
+            assertThat(jdbc.queryForObject("select count(*) from station_proposal_votes where proposal_id = ?::uuid", Integer.class, proposal)).isZero();
+            var vote = voteService.vote(room, owner, proposalId);
+            assertThat(vote.voteCount()).isEqualTo(1);
+            assertThat(vote.votedByMe()).isTrue();
+            throw new IllegalStateException("outer boom");
+        })).hasMessage("outer boom");
+
+        // the vote survived the outer rollback
+        assertThat(jdbc.queryForObject("select count(*) from station_proposal_votes where proposal_id = ?::uuid and user_id = ?::uuid and room_id = ?::uuid",
+                Integer.class, proposal, owner.toString(), room.toString())).isEqualTo(1);
+        // exactly one event, with the correct count and voter
+        JsonNode event = watcher.received(1).get(0);
+        assertThat(event.get("type").asString()).isEqualTo("STATION_PROPOSAL_VOTE_CHANGED");
+        assertThat(event.get("payload").get("proposalId").asString()).isEqualTo(proposal);
+        assertThat(event.get("payload").get("voteCount").asLong()).isEqualTo(1);
+        assertThat(event.get("payload").get("userId").asString()).isEqualTo(owner.toString());
+        watcher.assertNoEvent();
+
+        // the REST view agrees: count 1, voted by me; repeating the vote is idempotent and sends nothing
+        var again = rest(owner, "PUT", "/rooms/" + room + "/station-proposals/" + proposal + "/vote", null);
+        assertThat(again.statusCode()).isEqualTo(200);
+        JsonNode data = mapper.readTree(again.body()).get("data");
+        assertThat(data.get("voteCount").asLong()).isEqualTo(1);
+        assertThat(data.get("votedByMe").asBoolean()).isTrue();
+        watcher.assertNoEvent();
+    }
+
+    /** A vote that fails inside its own transaction (unknown candidate) rolls back and sends nothing, even in an outer transaction. */
+    @Test void aFailedVoteInsideAnOuterTransactionLeavesNoRowAndSendsNothing() throws Exception {
+        proposeStation();
+        Client watcher = connectAs(member);
+        watcher.subscribe(room);
+        var tx = new TransactionTemplate(transactions);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx.executeWithoutResult(status ->
+                voteService.vote(room, owner, UUID.randomUUID()))).isInstanceOf(com.mju.linkro.common.exception.BusinessException.class);
+        assertThat(jdbc.queryForObject("select count(*) from station_proposal_votes where room_id = ?::uuid", Integer.class, room.toString())).isZero();
+        watcher.assertNoEvent();
+    }
+
+    // --- SELECTED_STATION_CHANGED (#43, selected station API #39) ----------------------------------------------------
+
+    List<Long> twoStations() {
+        return jdbc.queryForList("select id from stations where is_supported order by id limit 2", Long.class);
+    }
+
+    String selectedPath() { return "/rooms/" + room + "/selected-station"; }
+
+    /** Set, same station again, change, clear, clear again: what is sent each time and in which order. */
+    @Test void selectingChangingReselectingAndClearingTheStationAreAnnouncedInOrder() throws Exception {
+        List<Long> stations = twoStations();
+        Client watcher = connectAs(member);
+        Client ownerClient = connectAs(owner);
+        watcher.subscribe(room);
+        ownerClient.subscribe(room);
+
+        // 1. first designation: SYSTEM message, then the event
+        assertThat(rest(owner, "PUT", selectedPath(), "{\"stationId\":" + stations.get(0) + "}").statusCode()).isEqualTo(200);
+        List<JsonNode> first = watcher.received(2);
+        assertThat(labels(first)).containsExactly("MESSAGE_CREATED:SYSTEM", "SELECTED_STATION_CHANGED");
+        assertThat(first.get(0).get("payload").get("content").asString()).contains("방장님이 약속역을").contains("지정했어요");
+        JsonNode payload = first.get(1).get("payload");
+        assertThat(payload.propertyNames()).containsExactlyInAnyOrder("station", "confirmedAt");
+        assertThat(payload.get("station").get("id").asLong()).isEqualTo(stations.get(0));
+        assertThat(payload.get("station").get("name").asString()).isNotBlank();
+        assertThat(payload.get("station").get("isSupported").asBoolean()).isTrue();
+        assertThat(payload.get("station").get("lines").isArray()).isTrue();
+        Instant confirmed = Instant.parse(payload.get("confirmedAt").asString());
+        // the same value the room detail shows
+        var detail = mapper.readTree(rest(owner, "GET", "/rooms/" + room, null).body()).get("data");
+        assertThat(Instant.parse(detail.get("confirmedAt").asString())).isEqualTo(confirmed);
+        assertThat(detail.get("selectedStation").get("id").asLong()).isEqualTo(stations.get(0));
+        assertThat(labels(ownerClient.received(2))).containsExactly("MESSAGE_CREATED:SYSTEM", "SELECTED_STATION_CHANGED");
+
+        // 2. the same station again: event with a new confirmedAt, no SYSTEM message
+        Thread.sleep(20);
+        assertThat(rest(owner, "PUT", selectedPath(), "{\"stationId\":" + stations.get(0) + "}").statusCode()).isEqualTo(200);
+        JsonNode again = watcher.received(1).get(0);
+        assertThat(again.get("type").asString()).isEqualTo("SELECTED_STATION_CHANGED");
+        assertThat(again.get("payload").get("station").get("id").asLong()).isEqualTo(stations.get(0));
+        assertThat(Instant.parse(again.get("payload").get("confirmedAt").asString())).isAfter(confirmed);
+        watcher.assertNoEvent();
+        assertThat(jdbc.queryForObject("select count(*) from room_messages where room_id = ? and sender_type = 'SYSTEM' and content like '%약속역을%'",
+                Integer.class, room)).as("no second SYSTEM message").isEqualTo(1);
+
+        // 3. a different station: SYSTEM message ("변경"), then the event
+        assertThat(rest(owner, "PUT", selectedPath(), "{\"stationId\":" + stations.get(1) + "}").statusCode()).isEqualTo(200);
+        List<JsonNode> changed = watcher.received(2);
+        assertThat(labels(changed)).containsExactly("MESSAGE_CREATED:SYSTEM", "SELECTED_STATION_CHANGED");
+        assertThat(changed.get(0).get("payload").get("content").asString()).contains("변경했어요");
+        assertThat(changed.get(1).get("payload").get("station").get("id").asLong()).isEqualTo(stations.get(1));
+
+        // 4. clear: SYSTEM message, then the event with both fields null (present, not missing)
+        assertThat(rest(owner, "DELETE", selectedPath(), null).statusCode()).isEqualTo(200);
+        List<JsonNode> cleared = watcher.received(2);
+        assertThat(labels(cleared)).containsExactly("MESSAGE_CREATED:SYSTEM", "SELECTED_STATION_CHANGED");
+        assertThat(cleared.get(0).get("payload").get("content").asString()).contains("해제했어요");
+        JsonNode nothing = cleared.get(1).get("payload");
+        assertThat(nothing.propertyNames()).containsExactlyInAnyOrder("station", "confirmedAt");
+        assertThat(nothing.get("station").isNull()).isTrue();
+        assertThat(nothing.get("confirmedAt").isNull()).isTrue();
+
+        // 5. clearing again changes nothing: nothing is sent
+        assertThat(rest(owner, "DELETE", selectedPath(), null).statusCode()).isEqualTo(200);
+        watcher.assertNoEvent();
+    }
+
+    int systemMessageCount() {
+        return jdbc.queryForObject("select count(*) from room_messages where room_id = ?::uuid and sender_type = 'SYSTEM'", Integer.class, room.toString());
+    }
+
+    /** Sends a PUT that must fail with the exact status and error.code, then proves nothing was announced, stored or changed. */
+    void assertRefusedWithoutAnyTrace(String body, int status, String code) throws Exception {
+        Client watcher = connectAs(owner);
+        watcher.subscribe(room);
+        int before = systemMessageCount();
+        var response = rest(owner, "PUT", selectedPath(), body);
+        assertThat(response.statusCode()).as(body).isEqualTo(status);
+        assertThat(mapper.readTree(response.body()).get("success").asBoolean()).isFalse();
+        assertThat(mapper.readTree(response.body()).get("error").get("code").asString()).as(body).isEqualTo(code);
+        watcher.assertNoEvent();                                   // no SELECTED_STATION_CHANGED, no MESSAGE_CREATED
+        assertThat(systemMessageCount()).as("no SYSTEM chat message").isEqualTo(before);
+        assertThat(jdbc.queryForObject("select selected_station_id is null and confirmed_at is null from meeting_rooms where id = ?::uuid", Boolean.class, room.toString()))
+                .as("the room is still unconfirmed").isTrue();
+    }
+
+    /** A value that is not a JSON integer is an input error: 400 VALIDATION_ERROR. */
+    @Test void aStationIdThatIsNotAnIntegerIsAValidationErrorWithoutAnyEventOrMessage() throws Exception {
+        assertRefusedWithoutAnyTrace("{\"stationId\":\"112\"}", 400, "VALIDATION_ERROR");
+        assertRefusedWithoutAnyTrace("{\"stationId\":1.5}", 400, "VALIDATION_ERROR");
+        assertRefusedWithoutAnyTrace("{\"stationId\":null}", 400, "VALIDATION_ERROR");
+        assertRefusedWithoutAnyTrace("{}", 400, "VALIDATION_ERROR");
+    }
+
+    /**
+     * Per docs/selected-station-39.md any integer that is not a station ("정수로 표현 가능한 없는 ID") is STATION_NOT_FOUND (404),
+     * so a negative id is 404 too, not 400. Both cases are pinned here so a 500 can never pass.
+     */
+    @Test void aStationThatDoesNotExistIsStationNotFoundWithoutAnyEventOrMessage() throws Exception {
+        long missing = jdbc.queryForObject("select coalesce(max(id), 0) + 1000 from stations", Long.class);
+        assertRefusedWithoutAnyTrace("{\"stationId\":" + missing + "}", 404, "STATION_NOT_FOUND");
+        assertRefusedWithoutAnyTrace("{\"stationId\":-1}", 404, "STATION_NOT_FOUND");
+        assertRefusedWithoutAnyTrace("{\"stationId\":0}", 404, "STATION_NOT_FOUND");
+    }
+
+    @Test void aRefusedSelectionSendsNothingAndNonMembersAndLeftMembersGetNothing() throws Exception {
+        long station = twoStations().get(0);
+        Client stranger = connectAs(outsider);
+        stranger.subscribe(room);
+        assertThat(stranger.error()).isEqualTo("NOT_ROOM_MEMBER");
+        Client leaver = connectAs(member);
+        Client stayer = connectAs(owner);
+        leaver.subscribe(room);
+        stayer.subscribe(room);
+
+        assertThat(rest(member, "PUT", selectedPath(), "{\"stationId\":" + station + "}").statusCode()).as("not the owner").isEqualTo(403);
+        stayer.assertNoEvent();
+        leaver.assertNoEvent();
+
+        assertThat(rest(member, "DELETE", "/rooms/" + room + "/members/me", null).statusCode()).isEqualTo(200);
+        assertThat(labels(stayer.received(2))).containsExactly("MESSAGE_CREATED:SYSTEM", "MEMBER_LEFT");
+        assertThat(rest(owner, "PUT", selectedPath(), "{\"stationId\":" + station + "}").statusCode()).isEqualTo(200);
+        assertThat(labels(stayer.received(2))).containsExactly("MESSAGE_CREATED:SYSTEM", "SELECTED_STATION_CHANGED");
+        stranger.assertNoEvent();
+        leaver.assertNoEvent();
     }
 }
