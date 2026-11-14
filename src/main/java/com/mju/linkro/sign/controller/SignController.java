@@ -41,7 +41,7 @@ public class SignController {
     @Operation(summary = "표지판 방향 확인", description = "image(JPG/PNG, 5MB 이하)와 route(JSON 문자열)를 받아 AI가 표지판의 역명·노선·방면을 읽고 "
             + "기대 경로와 비교한 CORRECT / WRONG / RETAKE 판정을 돌려줍니다. 이미지는 저장하지 않습니다. "
             + "route: {\"stationId\":105,\"lineId\":2,\"direction\":\"INNER\"}. headsign이 없으면 direction 필수이며 경로의 directionCode를 그대로 전달합니다. "
-            + "headsign이 있으면 direction 생략 가능. 미상 expected.headsign은 null. 정보 부족은 RETAKE/MISSING_INFO(200), 잘못된 경로는 VALIDATION_ERROR(400). 응답 목표 5초 이내.")
+            + "headsign이 있으면 direction 생략 가능. 미상 expected.headsign은 null. 정보 부족은 RETAKE/MISSING_INFO(200), 잘못된 경로는 VALIDATION_ERROR(400). 응답 목표 10초 이내.")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "판정 결과",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.SignCheck.class), examples = {
                     @io.swagger.v3.oas.annotations.media.ExampleObject(name = "headsign 없는 정상 판정", value = """
@@ -63,7 +63,7 @@ public class SignController {
                             {"success":false,"error":{"code":"VALIDATION_ERROR","message":"요청 값이 올바르지 않습니다.",
                              "details":{"direction":"headsign이 없으면 direction은 필수입니다."}}}
                             """)))
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "STATION_NOT_FOUND",
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "STATION_NOT_FOUND: 형식 검증 후 존재하지 않는 stationId는 headsign·direction 유무와 관계없이 방향 근거 조건보다 먼저 404 반환",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "AI_QUOTA_EXCEEDED",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))

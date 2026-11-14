@@ -49,8 +49,14 @@ public class SignCheckService {
         SignImage signImage = new SignImage(image, contentType(image));
         requireDecodable(image);
         SignRouteRequest.Valid request = route.validate();
-        if (request.headsign() == null) routes.requireDirection(request.stationId(), request.lineId(), request.direction());
         String stationName = stations.require(request.stationId()).name();
+        if (request.headsign() == null) {
+            if (request.direction() == null) {
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR,
+                        Map.of("direction", "headsign이 없으면 direction은 필수입니다."));
+            }
+            routes.requireDirection(request.stationId(), request.lineId(), request.direction());
+        }
         String lineName = lines.name(request.lineId()).orElseThrow(() -> new BusinessException(ErrorCode.VALIDATION_ERROR,
                 Map.of("lineId", "존재하지 않는 노선입니다.")));
         SignContext context = new SignContext(stationName, lineName, request.direction(), request.headsign());

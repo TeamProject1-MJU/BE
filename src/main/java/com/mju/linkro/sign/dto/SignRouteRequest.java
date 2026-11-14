@@ -8,7 +8,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** The {@code route} part of POST /ai/direction-check (9.1). Invalid fields are reported at once as VALIDATION_ERROR (400). */
+/** The {@code route} part of POST /ai/direction-check (9.1). Field format errors are reported as VALIDATION_ERROR (400). */
 @Schema(name = "SignRouteRequest", requiredProperties = {"stationId", "lineId"},
         description = "stationId와 lineId 필수. headsign이 없거나 공백이면 direction 필수.")
 public record SignRouteRequest(
@@ -19,6 +19,7 @@ public record SignRouteRequest(
 
     public record Valid(long stationId, long lineId, DirectionCode direction, String headsign) {}
 
+    /** Validates field formats; direction evidence is required by the service after station lookup. */
     public Valid validate() {
         Map<String, String> errors = new LinkedHashMap<>();
         if (stationId == null || stationId <= 0) errors.put("stationId", "stationId는 1 이상의 정수여야 합니다.");
@@ -29,9 +30,6 @@ public record SignRouteRequest(
             if (code == null) errors.put("direction", "direction은 UP, DOWN, INNER, OUTER, LOOP 중 하나여야 합니다.");
         }
         String normalizedHeadsign = headsign == null || headsign.isBlank() ? null : headsign.strip();
-        if (normalizedHeadsign == null && (direction == null || direction.isBlank())) {
-            errors.put("direction", "headsign이 없으면 direction은 필수입니다.");
-        }
         if (!errors.isEmpty()) throw new BusinessException(ErrorCode.VALIDATION_ERROR, errors);
         return new Valid(stationId, lineId, code, normalizedHeadsign);
     }

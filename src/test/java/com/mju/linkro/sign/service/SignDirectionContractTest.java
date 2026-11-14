@@ -55,10 +55,24 @@ class SignDirectionContractTest {
 
     @Test
     void invalidRouteNeverReachesPhotoAnalysis() {
+        when(stations.require(105)).thenReturn(new StationInfo(105, "역", 0, 0, true));
         doThrow(new BusinessException(ErrorCode.VALIDATION_ERROR)).when(routes).requireDirection(105, 2, DirectionCode.UP);
         assertThatThrownBy(() -> service.check(SignTestImages.png(), new SignRouteRequest(105L, 2L, "UP", null)))
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
-        verifyNoInteractions(ai, stations, lines);
+        verify(stations).require(105);
+        verifyNoInteractions(ai, lines);
+    }
+
+    @Test
+    void missingDirectionEvidenceIsCheckedAfterStationLookup() {
+        when(stations.require(105)).thenReturn(new StationInfo(105, "역", 0, 0, true));
+        for (String headsign : new String[]{null, "", " "}) {
+            assertThatThrownBy(() -> service.check(SignTestImages.png(), new SignRouteRequest(105L, 2L, " ", headsign)))
+                    .isInstanceOfSatisfying(BusinessException.class,
+                            e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+        }
+        verify(stations, times(3)).require(105);
+        verifyNoInteractions(ai, routes, lines);
     }
 
     @Test
@@ -70,7 +84,6 @@ class SignDirectionContractTest {
         }
         assertThat(new SignRouteRequest(1L, 2L, null, " 방면 ").validate().headsign()).isEqualTo("방면");
         for (SignRouteRequest bad : new SignRouteRequest[]{
-                new SignRouteRequest(1L, 2L, null, null), new SignRouteRequest(1L, 2L, " ", " "),
                 new SignRouteRequest(1L, 2L, "up", null), new SignRouteRequest(1L, 2L, "SIDEWAYS", "방면"),
                 new SignRouteRequest(null, 2L, "UP", null), new SignRouteRequest(1L, null, "UP", null)}) {
             assertThatThrownBy(bad::validate).isInstanceOfSatisfying(BusinessException.class,

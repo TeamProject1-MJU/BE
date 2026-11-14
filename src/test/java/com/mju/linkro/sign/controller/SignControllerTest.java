@@ -159,9 +159,30 @@ class SignControllerTest {
     @Test
     void unknownStationIs404() throws Exception {
         when(stations.require(999)).thenThrow(new BusinessException(ErrorCode.STATION_NOT_FOUND));
-        post(image("image/jpeg", JPEG), "{\"stationId\":999,\"lineId\":2,\"headsign\":\"사당 방면\"}", true)
-                .andExpect(status().isNotFound())
-                .andExpect(content().json("{\"success\":false,\"error\":{\"code\":\"STATION_NOT_FOUND\"}}", JsonCompareMode.LENIENT));
+        for (String route : new String[]{
+                "{\"stationId\":999,\"lineId\":2,\"headsign\":\"사당 방면\"}",
+                "{\"stationId\":999,\"lineId\":2,\"direction\":\"UP\"}",
+                "{\"stationId\":999,\"lineId\":2}",
+                "{\"stationId\":999,\"lineId\":2,\"headsign\":\" \",\"direction\":\" \"}"}) {
+            post(image("image/jpeg", JPEG), route, true)
+                    .andExpect(status().isNotFound())
+                    .andExpect(content().json("{\"success\":false,\"error\":{\"code\":\"STATION_NOT_FOUND\"}}", JsonCompareMode.LENIENT));
+        }
+        verifyNoInteractions(ai, routes);
+    }
+
+    @Test
+    void malformedRoutePrecedesUnknownStation() throws Exception {
+        when(stations.require(999)).thenThrow(new BusinessException(ErrorCode.STATION_NOT_FOUND));
+        for (String route : new String[]{
+                "{\"stationId\":0,\"lineId\":2}",
+                "{\"stationId\":999,\"lineId\":0}",
+                "{\"stationId\":999,\"lineId\":2,\"direction\":\"SIDEWAYS\"}"}) {
+            post(image("image/jpeg", JPEG), route, true)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(content().json("{\"success\":false,\"error\":{\"code\":\"VALIDATION_ERROR\"}}", JsonCompareMode.LENIENT));
+        }
+        verifyNoInteractions(stations, ai, routes);
     }
 
     @Test
