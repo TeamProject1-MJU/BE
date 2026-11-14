@@ -39,6 +39,9 @@ public class UserLoginService {
 	}
 
 	private String initialNickname(String nickname) {
+		if (nickname != null) {
+			nickname = nickname.replace("\u0000", "");
+		}
 		if (nickname == null || nickname.isBlank()) {
 			return "사용자" + ThreadLocalRandom.current().nextInt(1000, 10000);
 		}

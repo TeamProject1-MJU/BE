@@ -98,6 +98,18 @@ class UserServiceTest {
 		assertThat(users.findById(user.getId()).orElseThrow().getNickname()).isEqualTo("인준");
 	}
 
+	@ParameterizedTest
+	@ValueSource(strings = {"\u0000닉네임", "닉\u0000네임", "닉네임\u0000", "\u0000", " \u0000 "})
+	void nulNicknameIsRejectedBeforePersistence(String nickname) {
+		assertThatThrownBy(() -> userService.updateNickname(user.getId(), nickname))
+			.isInstanceOfSatisfying(BusinessException.class, exception -> {
+				assertThat(exception.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR);
+				assertThat(exception.getDetails()).isEqualTo(Map.of("nickname",
+					"닉네임에 사용할 수 없는 문자가 있습니다."));
+			});
+		assertThat(users.findById(user.getId()).orElseThrow().getNickname()).isEqualTo(user.getNickname());
+	}
+
 	@Test
 	void nullNicknameIsValidationErrorWithNicknameDetail() {
 		assertThatThrownBy(() -> userService.updateNickname(user.getId(), null))

@@ -10,6 +10,9 @@ import com.mju.linkro.user.domain.User;
 import com.mju.linkro.user.repository.UserRepository;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -27,6 +30,35 @@ class UserLoginServiceTest {
         assertThat(result.user().getNickname().codePointCount(0, result.user().getNickname().length())).isEqualTo(20);
         assertThat(result.user().getId().version()).isEqualTo(7);
         assertThat(result.isNewUser()).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"\u0000닉네임", "닉\u0000네임", "닉네임\u0000", "닉네임"})
+    void initialNicknameRemovesNulBeforePersistence(String nickname) {
+        assertThat(loginNewUser(nickname).getNickname()).isEqualTo("닉네임");
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"\u0000", "\u0000 \t\u0000", "", "   "})
+    void blankNicknameAfterRemovingNulUsesDefault(String nickname) {
+        assertThat(loginNewUser(nickname).getNickname()).matches("사용자[1-9][0-9]{3}");
+    }
+
+    @Test
+    void nulIsRemovedBeforeCodePointTruncation() {
+        assertThat(loginNewUser("\u0000" + "😀".repeat(21)).getNickname()).isEqualTo("😀".repeat(20));
+        assertThat(loginNewUser("가".repeat(21)).getNickname()).isEqualTo("가".repeat(20));
+    }
+
+    private User loginNewUser(String nickname) {
+        var repository = mock(UserRepository.class);
+        when(repository.findByKakaoId("123")).thenReturn(Optional.empty());
+        when(repository.saveAndFlush(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        var result = new UserLoginService(repository, null).login(new KakaoUserInfo("123", nickname));
+        verify(repository).saveAndFlush(result.user());
+        assertThat(result.isNewUser()).isTrue();
+        return result.user();
     }
 
     @Test
