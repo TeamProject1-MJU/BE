@@ -34,7 +34,34 @@ CONNECT·SUBSCRIBE·SEND가 거절되면 서버가 ERROR 프레임을 보내고 
 | 클라이언트 SEND | `ACCESS_DENIED` |
 | 그 밖의 서버 오류 | `INTERNAL_ERROR` (자세한 내용은 로그에만) |
 
-### 세션·구독 관리
+### 구독 완료 확인 (receipt, #134)
+
+FE는 SUBSCRIBE에 `receipt` 헤더를 넣고 같은 값의 `receipt-id`를 가진 RECEIPT를 기다려요. FE 변경 없이 기존 요청으로 동작해요. 아래 프레임은 빈 줄 뒤 NULL 바이트(`\0`)로 끝나요.
+
+```text
+SUBSCRIBE
+id:room-sub-1
+destination:/topic/rooms/{roomId}
+receipt:room-ready-1
+
+\0
+```
+
+성공 응답:
+
+```text
+RECEIPT
+receipt-id:room-ready-1
+
+\0
+```
+
+- 인증·방 멤버 권한 검사를 통과하고 **simple broker의 실제 구독 등록이 완료된 뒤** 요청한 연결에 정확히 한 번 보내요. `receipt-id`는 요청의 `receipt` 값과 같아요. `receipt` 없는 구독에는 RECEIPT를 추가하지 않아요.
+- Spring simple broker는 기본적으로 receipt를 지원하지 않아요. `StompReceiptInterceptor`가 inbound의 `ExecutorChannelInterceptor.afterMessageHandled`에서 **SimpleBrokerMessageHandler의 SUBSCRIBE 성공 처리만** 확인해 보완해요. 다른 핸들러의 콜백과 예외가 있는 콜백에서는 보내지 않아요. DISCONNECT 등 다른 프레임의 receipt 처리는 바꾸지 않아요.
+- 비멤버 구독은 기존대로 `NOT_ROOM_MEMBER` ERROR 후 연결을 닫고 RECEIPT는 보내지 않아요. ERROR에 요청을 식별하는 `receipt-id`가 붙더라도 구독 성공을 뜻하지 않아요. 다른 인증·권한 실패도 기존 ERROR 정책을 따라요.
+- FE는 RECEIPT 수신으로 구독 준비를 확정한 뒤 REST 재조회를 진행해요. 고정 500ms 대기로 준비를 추정할 필요가 없어요. 연결과 권한이 유지되는 동안 RECEIPT 수신 이후 발행된 이벤트는 등록된 구독으로 전달돼요. 등록 직후 이벤트는 RECEIPT보다 먼저 도착할 수도 있으므로 이벤트 핸들러는 SUBSCRIBE 전에 준비해요. 연결 종료·방 나가기·탈퇴 뒤의 전달이나 과거 이벤트 재생을 보장하는 것은 아니에요.
+
+### 세션·구독 기록
 
 `StompSessions`가 STOMP 세션 id → 사용자, 구독 id → 방을 기억해요. 구독은 멤버십 검사 전에 기록하고 검사에 실패하면 지워요. 이벤트는 **세션·구독 id·방(destination)이 모두 기록과 같을 때만** 나가요(`StompDeliveryFilter`). 연결이 끊기면 그 세션 기록이 모두 지워져요.
 - **구독 id는 연결마다 하나씩만 써요.** 이미 쓰는 구독 id로 다시 SUBSCRIBE하면 `VALIDATION_ERROR` ERROR 프레임을 보내고 연결을 닫아요(STOMP는 id가 연결 안에서 유일해야 해요). UNSUBSCRIBE나 방 나가기 뒤에는 같은 id를 다시 써도 돼요.
@@ -103,6 +130,9 @@ events.disconnect(userId);                                     // 커밋 뒤, �
 heartbeat 10초와 메시지 크기 제한(16KB)은 코드 상수예요. heartbeat용 스케줄러는 Spring이 만드는 `messageBrokerTaskScheduler`예요.
 
 ## 테스트
+
+- `./gradlew test`의 `StompReceiptIntegrationTest`: 실제 내장 서버와 WebSocket/STOMP 연결로 receipt-id 일치·응답 1회, receipt 없는 구독의 이벤트 수신, 비멤버 ERROR·연결 종료·RECEIPT 없음, 브로커 등록을 650ms 이상 지연했을 때 조기 응답 없음, RECEIPT 수신 직후 발행한 이벤트의 누락 없는 수신을 확인해요. 권한 판단만 mock하고 실제 인증 인터셉터·구독 기록·브로커·전달 필터를 사용해요.
+- `StompReceiptInterceptorTest`: 여러 핸들러 중 simple broker만 응답, 예외 시 미응답, SUBSCRIBE 외 모든 명령의 receipt 처리 불변을 확인해요.
 
 - 단위(`StompSessionsTest`, `StompDeliveryFilterTest`): 구독 기록·해제, 같은 구독 id 중복 기록 거절, 방까지 같아야 구독으로 인정, 방 구독만 지우기, 연결 종료와 닫기 실패, 다른 방으로 재사용된 구독 id의 프레임 차단, payload JSON 모양. 기존 서비스 테스트는 `RoomEvents` mock을 받도록 고쳤고, `/ws`가 Security에서 열린 것에 맞춰 `JwtAuthenticationFilterTest`의 비공개 경로 목록에서 `/ws`만 뺐어요.
 - PostgreSQL(`StompPostgresTest`): 내장 서버와 Spring `WebSocketStompClient`로 실제 연결해요. 토큰 없음·형식 틀림·만료·위조·없는 사용자·탈퇴 사용자 CONNECT 거절, heartbeat, 허용·비허용 Origin, 멤버 구독과 채팅 POST 뒤 `MESSAGE_CREATED` 수신, 비멤버·없는 방·잘못된 목적지 거절, 신원 헤더 위조 무시, 클라이언트 SEND 차단, 나가기 뒤 기존 구독 수신 중단(연결은 유지), 방장 퇴장 시 `MEMBER_LEFT`+`OWNER_CHANGED`, 탈퇴 시 두 연결 모두 닫힘, 입장·출발역·방 수정(바뀐 때만)·후보 제안/삭제 이벤트, 추천 이벤트 전달, 다른 방 이벤트 차단, 롤백 시 이벤트 없음, 커밋 전에는 안 나감, 전송 실패해도 DB 변경 유지. 리뷰 반영 테스트: 구독 id 재사용(A `sub-0` 구독 → A 나가기 → B `sub-0` 구독 → A에 발행해도 안 옴, 브로커 목록에서도 빠짐), 브로커에 옛 구독이 남은 상태에서도 전달 차단, 구독 id 중복 거절, CONNECT 확인과 등록 사이·등록 직후 탈퇴 경합, 순서(입장·후보 제안·나가기·방장 위임을 도착한 순서 그대로 비교, 한 트랜잭션 300개 이벤트 순서).
