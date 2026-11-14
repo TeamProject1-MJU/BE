@@ -115,6 +115,20 @@ class OpenAiClientTest {
     }
 
     @Test
+    void directionOnlySendsUnknownHeadsignAndNoTerminalInferenceInstruction() {
+        server.expect(requestTo(URL))
+                .andExpect(jsonPath("$.input[0].content[0].text").value(containsString("DIRECTION_ONLY")))
+                .andExpect(jsonPath("$.input[0].content[0].text").value(containsString("행선지=미상")))
+                .andExpect(jsonPath("$.instructions").value(containsString("지리 지식으로 추정하지 않는다")))
+                .andRespond(withSuccess(response("{\\\"result\\\":\\\"RETAKE\\\",\\\"reason\\\":\\\"MISSING_INFO\\\","
+                        + "\\\"stationName\\\":null,\\\"lineName\\\":null,\\\"headsign\\\":null}"), MediaType.APPLICATION_JSON));
+        var result = client.readSign(new SignImage(new byte[]{1}, "image/png"),
+                new SignContext("강남", "2호선", DirectionCode.INNER, null));
+        assertThat(result.reason()).isEqualTo(SignReason.MISSING_INFO);
+        server.verify();
+    }
+
+    @Test
     void explainRecommendationSendsAllCriteriaInOneCallAndParsesPerCriterionTexts() {
         server.expect(requestTo(URL)).andExpect(method(HttpMethod.POST))
                 .andExpect(jsonPath("$.text.format.type").value("json_schema"))

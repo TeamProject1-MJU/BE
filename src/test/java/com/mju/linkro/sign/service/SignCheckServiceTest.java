@@ -36,7 +36,8 @@ class SignCheckServiceTest {
     StationLookup stations = mock(StationLookup.class);
     LineLookup lines = mock(LineLookup.class);
     AiClient ai = mock(AiClient.class);
-    SignCheckService service = new SignCheckService(ai, stations, lines);
+    SignRouteLookup routes = mock(SignRouteLookup.class);
+    SignCheckService service = new SignCheckService(ai, stations, lines, routes);
 
     @BeforeEach
     void setUp() {
