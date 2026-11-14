@@ -11,6 +11,7 @@ import com.mju.linkro.user.repository.UserRepository;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -38,6 +39,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /** Full context, so the real JWT filter and @CurrentUser resolver run in front of the controller. */
@@ -103,6 +105,26 @@ class UserControllerTest {
 			.andExpect(content().json("{\"success\":false,\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\""
 				+ ErrorCode.VALIDATION_ERROR.getMessage() + "\",\"details\":{\"nickname\":"
 				+ "\"닉네임은 앞뒤 공백을 제외하고 2~20자여야 합니다.\"}}}", JsonCompareMode.STRICT));
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = {"\u0000닉네임", "닉\u0000네임", "닉네임\u0000", "\u0000", " \u0000 "})
+	void nulNicknameReturnsBadRequestWithNicknameDetail(String nickname) throws Exception {
+		String body = JsonMapper.builder().build().writeValueAsString(Map.of("nickname", nickname));
+		mvc.perform(json(auth(patch(ME)), body))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
+			.andExpect(jsonPath("$.error.details.nickname")
+				.value("닉네임은 앞뒤 공백을 제외하고 2~20자여야 합니다. NUL 문자는 사용할 수 없습니다."));
+		assertThat(users.findById(user.getId()).orElseThrow().getNickname()).isEqualTo(user.getNickname());
+	}
+
+	@ParameterizedTest
+	@ValueSource(strings = {"가나", "가가가가가가가가가가가가가가가가가가가가", "가😀"})
+	void validNicknameBoundariesAndEmojiAreAccepted(String nickname) throws Exception {
+		String body = JsonMapper.builder().build().writeValueAsString(Map.of("nickname", " " + nickname + " "));
+		mvc.perform(json(auth(patch(ME)), body)).andExpect(status().isOk());
+		assertThat(users.findById(user.getId()).orElseThrow().getNickname()).isEqualTo(nickname);
 	}
 
 	@Test
