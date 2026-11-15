@@ -42,7 +42,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 
 /**
- * POST /routes/search with the train timetable (graph module): room appointment mode (#122), solo mode (#130) and the
+ * POST /routes/search with the train timetable (graph module): room appointment mode (#122), plain search (#130) and the
  * Kakao flow when the timetable has no route. Kakao is stubbed; Kakao-first searches without the timetable are in
  * {@link RouteSearchKakaoPostgresTest}.
  */
@@ -204,14 +204,14 @@ class RouteSearchPostgresTest extends RouteSearchPostgresSupport {
     }
 
 
-    // ---- #130 solo mode: no room, or a room without an active appointment ----
+    // ---- #130 plain search: no room, or a room without an active appointment ----
 
     /**
      * The same member, station and time give the recommendation's trip without an appointment (departingAt from the
      * request time, #107 included): the same leaving and arrival seconds, stations, transfers, fare and minutes, on a
      * weekday and a Saturday, without calling Kakao.
      */
-    @Test void soloRouteIsTheRecommendationTrip(CapturedOutput output) throws Exception {
+    @Test void plainSearchRouteIsTheRecommendationTrip(CapturedOutput output) throws Exception {
         long jongno = id("종로3가");
         long nowon = id("노원");
         for (String requested : List.of("2026-11-12T13:00:00+09:00", "2026-11-14T13:00:00+09:00")) {
@@ -256,7 +256,7 @@ class RouteSearchPostgresTest extends RouteSearchPostgresSupport {
     }
 
     /** 강남 -> 사당 on 2호선: first trains from 강남 are 05:36:00 weekdays, 05:35:30 Saturdays (as #120). */
-    @Test void soloBeforeTheFirstTrainIsNoService() throws Exception {
+    @Test void plainSearchBeforeTheFirstTrainIsNoService() throws Exception {
         String[][] cases = {
                 {"2026-11-12T03:00:00+09:00", "2026-11-12T05:36:00+09:00", "11월 12일 05:36"},
                 {"2026-11-12T05:00:00+09:00", "2026-11-12T05:36:00+09:00", "11월 12일 05:36"},
@@ -265,7 +265,7 @@ class RouteSearchPostgresTest extends RouteSearchPostgresSupport {
         for (String[] c : cases) {
             JsonNode data = ok(search(gangnam, sadang, c[0], null), member);
             assertThat(data.get("routeSource").asString()).isEqualTo("INTERNAL");
-            assertSoloNoService(data, c[0], c[1], c[2]);
+            assertPlainSearchNoService(data, c[0], c[1], c[2]);
         }
         server.verify();
     }
@@ -274,18 +274,18 @@ class RouteSearchPostgresTest extends RouteSearchPostgresSupport {
      * Saturday 23:50 is still Saturday's service day and other trains still run, but the last 강남 -> 교대 train left at
      * 23:45: the route is searched again from Sunday 03:00 and takes Sunday's first train 05:35:30.
      */
-    @Test void soloAfterTheRoutesLastTrainTakesTheNextServiceDay(CapturedOutput output) throws Exception {
+    @Test void plainSearchAfterTheRoutesLastTrainTakesTheNextServiceDay(CapturedOutput output) throws Exception {
         java.time.Instant saturdayNight = OffsetDateTime.parse("2026-11-14T23:50:00+09:00").toInstant();
         assertThat(timetableRoutes.departingAt(gangnam, saturdayNight).routeTo(sadang)).isEmpty();
         JsonNode data = ok(search(gangnam, sadang, "2026-11-14T23:50:00+09:00", null), member);
         assertThat(data.get("routeSource").asString()).isEqualTo("INTERNAL");
-        assertSoloNoService(data, "2026-11-14T23:50:00+09:00", "2026-11-15T05:35:30+09:00", "11월 15일 05:35");
+        assertPlainSearchNoService(data, "2026-11-14T23:50:00+09:00", "2026-11-15T05:35:30+09:00", "11월 15일 05:35");
         server.verify();
         assertThat(output.getAll()).contains("timetable route from the request time (next service day)");
     }
 
     /** The case measured for #130: Saturday 00:50 (Friday's service day) 수유 -> 사당 has no route until Saturday. */
-    @Test void soloSuyuToSadangAfterMidnightTakesSaturdaysFirstTrain() throws Exception {
+    @Test void plainSearchSuyuToSadangAfterMidnightTakesSaturdaysFirstTrain() throws Exception {
         long suyu = id("수유");
         java.time.Instant requested = OffsetDateTime.parse("2026-11-14T00:50:00+09:00").toInstant();
         assertThat(timetableRoutes.departingAt(suyu, requested).routeTo(sadang)).isEmpty();
@@ -302,7 +302,7 @@ class RouteSearchPostgresTest extends RouteSearchPostgresSupport {
         server.verify();
     }
 
-    private static void assertSoloNoService(JsonNode data, String requested, String departureAt, String firstTrain) {
+    private static void assertPlainSearchNoService(JsonNode data, String requested, String departureAt, String firstTrain) {
         JsonNode summary = data.get("routes").get(0).get("summary");
         assertThat(summary.get("noService").asBoolean()).as(requested).isTrue();
         assertThat(summary.get("arrivesAfterAppointment").asBoolean()).isFalse();
@@ -317,7 +317,7 @@ class RouteSearchPostgresTest extends RouteSearchPostgresSupport {
     }
 
     /** Running hours: leaving is the next train, waitSec after the request, and nothing is no-service. */
-    @Test void soloRunningHoursLeaveWithTheNextTrain() throws Exception {
+    @Test void plainSearchRunningHoursLeaveWithTheNextTrain() throws Exception {
         for (String departAt : List.of("2026-11-12T14:00:00+09:00", "2026-11-12T23:30:00+09:00")) {
             JsonNode data = ok(search(gangnam, sadang, departAt, null), member);
             JsonNode summary = data.get("routes").get(0).get("summary");
@@ -337,13 +337,13 @@ class RouteSearchPostgresTest extends RouteSearchPostgresSupport {
         server.verify();
     }
 
-    /** A room whose appointment has passed is solo mode from now; appointmentPassed and its notice stay (#120). */
+    /** A room whose appointment has passed is plain search from now; appointmentPassed and its notice stay (#120). */
     @Test void aPassedAppointmentIsReportedAndDepartAtIgnored() throws Exception {
         String room = createRoom(member, "2020-01-01T00:00:00Z");
 
         JsonNode data = ok(search(gangnam, sadang, "2026-11-12T14:00:00+09:00", room), member);
 
-        server.verify(); // no expectations: solo mode does not call Kakao
+        server.verify(); // no expectations: plain search does not call Kakao
         assertThat(data.get("routeSource").asString()).isEqualTo("INTERNAL");
         assertThat(data.get("appointmentPassed").asBoolean()).isTrue();
         assertThat(data.get("notice").asString()).isEqualTo("약속 시각이 이미 지나 지금 출발 기준으로 안내합니다.");
@@ -353,8 +353,8 @@ class RouteSearchPostgresTest extends RouteSearchPostgresSupport {
         assertThat(summary.get("arrivesAfterAppointment").asBoolean()).isFalse();
     }
 
-    /** A room without an appointment is solo mode (#130): the timetable route from departAt, Kakao not called. */
-    @Test void aRoomWithoutAnAppointmentIsSoloMode() throws Exception {
+    /** A room without an appointment is plain search (#130): the timetable route from departAt, Kakao not called. */
+    @Test void aRoomWithoutAnAppointmentIsPlainSearch() throws Exception {
         String body = mvc.perform(auth(post("/api/v1/rooms").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"약속 없음\"}"), member))
                 .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         String room = mapper.readTree(body).get("data").get("id").asString();

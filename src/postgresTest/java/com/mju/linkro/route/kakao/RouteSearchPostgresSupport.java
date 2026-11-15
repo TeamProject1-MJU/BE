@@ -42,7 +42,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * Shared set-up of the POST /routes/search PostgreSQL tests (V1~V13 seed, graph module) with Kakao stubbed by
- * MockRestServiceServer: {@link RouteSearchPostgresTest} with the train timetable (room appointment and solo modes) and
+ * MockRestServiceServer: {@link RouteSearchPostgresTest} with the train timetable (room appointment mode and plain search) and
  * {@link RouteSearchKakaoPostgresTest} without it (Kakao and fixed-cost routes). Each subclass declares its own
  * container and imports {@link StubKakao}. The stub bodies are hand-written in the shape of
  * docs/kakao-route-analysis.md; no real Kakao response is used.
