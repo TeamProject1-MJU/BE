@@ -156,4 +156,95 @@ class RouteSearchRoomTimetableTest {
         verify(noRouter.kakao(), times(1)).search(anyDouble(), anyDouble(), anyDouble(), anyDouble());
         assertThat(fixed.routes().get(0).summary().arrivalAt()).isEqualTo("2026-11-12T14:07:00+09:00");
     }
+
+    // ---- #140: the latest departure for the appointment has already left ----
+
+    static RouteSearchResponse roomSearch(RouteSearchSoloTimetableTest.Fixture f, long origin, long destination) {
+        return f.search(origin, destination, null, true);
+    }
+
+    @Test
+    void theLatestDepartureHasLeftSoTheRouteLeavesNowAndArrivesLate() {
+        // (b) 14:04, appointment 14:09: W2 (14:03 -> 14:07) has left; from now the next train is W3 (23:33 -> 23:37).
+        Instant now = seoul("2026-11-12T14:04:00");
+        var f = RouteSearchSoloTimetableTest.fixture(now, seoul("2026-11-12T14:09:00"), ROUTER);
+        RouteSearchResponse response = roomSearch(f, 31, 33);
+
+        verifyNoInteractions(f.kakao());
+        assertThat(response.routeSource()).isEqualTo(RouteSource.INTERNAL);
+        assertThat(response.appointmentPassed()).isFalse();
+        assertThat(response.notice()).isNull();
+        var summary = response.routes().get(0).summary();
+        TimedRoute fromNow = ROUTER.departingAt(31, now).routeTo(33).orElseThrow();
+        assertThat(summary.departureAt()).isEqualTo(seoulOffset(fromNow.leaveAt())).isEqualTo("2026-11-12T23:33:00+09:00");
+        assertThat(summary.arrivalAt()).isEqualTo(seoulOffset(fromNow.arriveAt())).isEqualTo("2026-11-12T23:37:00+09:00");
+        assertThat(summary.totalTimeSec()).isEqualTo(240);
+        assertThat(summary.arrivesAfterAppointment()).isTrue();
+        assertThat(summary.waitSec()).isEqualTo((int) Duration.between(now, fromNow.leaveAt()).toSeconds()).isEqualTo(34140);
+        assertThat(summary.waitKind()).isEqualTo("TIMETABLE");
+        assertThat(summary.totalWithWaitSec()).isEqualTo(34380);
+        assertThat(summary.slackSeconds()).isNull();
+        assertThat(summary.noService()).isFalse();
+    }
+
+    @Test
+    void aroundMidnightTheRouteFromNowTakesTheLastTrainAndArrivesLate() {
+        // (c-2) 23:50, appointment 00:10: W3 (23:33) has left; from now W4 (24:46 -> 24:50).
+        Instant now = seoul("2026-11-12T23:50:00");
+        var f = RouteSearchSoloTimetableTest.fixture(now, seoul("2026-11-13T00:10:00"), ROUTER);
+        var summary = roomSearch(f, 31, 33).routes().get(0).summary();
+
+        verifyNoInteractions(f.kakao());
+        assertThat(summary.departureAt()).isEqualTo("2026-11-13T00:46:00+09:00");
+        assertThat(summary.arrivalAt()).isEqualTo("2026-11-13T00:50:00+09:00");
+        assertThat(summary.arrivesAfterAppointment()).isTrue();
+        assertThat(summary.waitSec()).isEqualTo(56 * 60);
+        assertThat(summary.slackSeconds()).isNull();
+    }
+
+    @Test
+    void theRouteFromNowAlwaysArrivesAfterTheAppointment() {
+        // Whenever the latest departure has left, nothing leaving now arrives in time.
+        String[][] cases = {{"2026-11-12T14:04:00", "2026-11-12T14:09:00"}, {"2026-11-12T14:03:01", "2026-11-12T14:07:00"},
+                {"2026-11-12T23:34:00", "2026-11-12T23:40:00"}, {"2026-11-12T23:50:00", "2026-11-13T00:10:00"},
+                {"2026-11-12T05:37:00", "2026-11-12T05:41:00"}};
+        for (String[] c : cases) {
+            Instant now = seoul(c[0]);
+            assertThat(ROUTER.latestDepartures(33, seoul(c[1]), Set.of(31L), 0).get(31L).leaveAt()).as(c[0]).isBefore(now);
+            var summary = roomSearch(RouteSearchSoloTimetableTest.fixture(now, seoul(c[1]), ROUTER), 31, 33).routes().get(0).summary();
+            assertThat(summary.arrivesAfterAppointment()).as(c[0]).isTrue();
+            assertThat(summary.waitKind()).as(c[0]).isEqualTo("TIMETABLE");
+        }
+    }
+
+    @Test
+    void leavingInTheSameSecondIsStillTheRoomRoute() {
+        // W2 leaves at 14:03:00: now 14:03:00.9 keeps it (no wait, in time); one second later the route leaves from now.
+        Instant appointment = seoul("2026-11-12T14:09:00");
+        var same = roomSearch(RouteSearchSoloTimetableTest.fixture(seoul("2026-11-12T14:03:00").plusMillis(900), appointment, ROUTER), 31, 33)
+                .routes().get(0).summary();
+        assertThat(same.departureAt()).isEqualTo("2026-11-12T14:03:00+09:00");
+        assertThat(same.arrivesAfterAppointment()).isFalse();
+        assertThat(same.waitSec()).isNull();
+        var late = roomSearch(RouteSearchSoloTimetableTest.fixture(seoul("2026-11-12T14:03:01"), appointment, ROUTER), 31, 33)
+                .routes().get(0).summary();
+        assertThat(late.departureAt()).isEqualTo("2026-11-12T23:33:00+09:00");
+        assertThat(late.arrivesAfterAppointment()).isTrue();
+    }
+
+    @Test
+    void noRouteFromNowEitherFallsBackToTheFlowWithoutTheRouter() {
+        // Friday 2026-11-13, 강남 -> 고속터미널 for 23:59: the latest departure is W2 14:03 (T2 to 14:12), long gone at 23:40.
+        // From now no 3호선 train is left that day and Saturday has none: Kakao/INTERNAL as without the router.
+        Instant now = seoul("2026-11-13T23:40:00");
+        Instant appointment = seoul("2026-11-13T23:59:00");
+        assertThat(ROUTER.latestDepartures(40, appointment, Set.of(31L), 0).get(31L).leaveAt()).isEqualTo(seoul("2026-11-13T14:03:00"));
+        var withRouter = RouteSearchSoloTimetableTest.fixture(now, appointment, ROUTER);
+
+        RouteSearchResponse response = roomSearch(withRouter, 31, 40);
+
+        assertThat(response).isEqualTo(roomSearch(RouteSearchSoloTimetableTest.fixture(now, appointment, null), 31, 40));
+        verify(withRouter.kakao(), times(1)).search(anyDouble(), anyDouble(), anyDouble(), anyDouble());
+        assertThat(response.routes().get(0).summary().waitSec()).isNull();
+    }
 }

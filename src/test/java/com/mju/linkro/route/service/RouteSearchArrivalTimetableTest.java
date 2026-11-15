@@ -174,8 +174,11 @@ class RouteSearchArrivalTimetableTest {
         assertThat(ignored).isEqualTo(search(fixture(NOW, null, null), null, false, null));
         verify(withArrival.kakao(), times(1)).search(anyDouble(), anyDouble(), anyDouble(), anyDouble());
         assertThat(ignored.routes().get(0).summary().slackSeconds()).isNull();
-        assertThat(output.getAll()).contains(" WARN ").contains("Route search 31 -> 33 ignores arriveAt: no timetable router")
-                .doesNotContain("127.0").doesNotContain("37.49");
+        // Only the WARN message is checked for coordinates: the log timestamp itself can read like one (…:37.496).
+        assertThat(output.getAll().lines().filter(line -> line.contains(" WARN ")))
+                .singleElement().satisfies(line -> assertThat(line.substring(line.indexOf("Route search")))
+                        .startsWith("Route search 31 -> 33 ignores arriveAt: no timetable router")
+                        .doesNotContain("127.0").doesNotContain("37.49"));
     }
 
     @Test
@@ -184,5 +187,39 @@ class RouteSearchArrivalTimetableTest {
         RouteSearchResponse response = f.service().search(UUID.randomUUID(), new RouteSearchRequest(31L, 31L, null, null, "2026-11-12T14:10:00+09:00"));
         assertThat(response).isEqualTo(fixture(NOW, null, null).service().search(UUID.randomUUID(), new RouteSearchRequest(31L, 31L, null, null)));
         verifyNoInteractions(f.kakao());
+    }
+
+    // ---- #140: the latest departure arriving in time has already left ----
+
+    static ErrorCode errorAt(Instant now, String arriveAt) {
+        var f = fixture(now, null, ROUTER);
+        BusinessException error = catchThrowableOfType(BusinessException.class, () -> search(f, null, false, arriveAt));
+        verifyNoInteractions(f.kakao());
+        return error == null ? null : error.getErrorCode();
+    }
+
+    @Test
+    void theLatestDepartureHasLeftIsArrivalUnreachable() {
+        // (a) 14:05, arriveAt 14:10: W2 (14:03 -> 14:07) has left and the next train, W3, arrives at 23:37.
+        assertThat(ROUTER.latestDepartures(33, seoul("2026-11-12T14:10:00"), Set.of(31L), 0).get(31L).leaveAt())
+                .isBefore(seoul("2026-11-12T14:05:00"));
+        assertThat(errorAt(seoul("2026-11-12T14:05:00"), "2026-11-12T14:10:00+09:00")).isEqualTo(ErrorCode.ARRIVAL_UNREACHABLE);
+    }
+
+    @Test
+    void aroundMidnightTheLatestDepartureHasLeftIsArrivalUnreachable() {
+        // (c-1) 23:50, arriveAt 00:10 (the same service day, 24:10): W3 (23:33 -> 23:37) has left, W4 arrives at 00:50.
+        assertThat(errorAt(seoul("2026-11-12T23:50:00"), "2026-11-13T00:10:00+09:00")).isEqualTo(ErrorCode.ARRIVAL_UNREACHABLE);
+    }
+
+    @Test
+    void leavingInTheSameSecondIsInTimeAndOneSecondLateIsNot() {
+        // W2 leaves 강남 at 14:03:00. Now 14:03:00.9 is the same whole second: still the W2 route.
+        Instant sameSecond = seoul("2026-11-12T14:03:00").plusMillis(900);
+        var summary = search(fixture(sameSecond, null, ROUTER), null, false, "2026-11-12T14:10:00+09:00").routes().get(0).summary();
+        assertThat(summary.departureAt()).isEqualTo("2026-11-12T14:03:00+09:00");
+        assertThat(summary.slackSeconds()).isEqualTo(180);
+        // One second later W2 has left.
+        assertThat(errorAt(seoul("2026-11-12T14:03:01"), "2026-11-12T14:10:00+09:00")).isEqualTo(ErrorCode.ARRIVAL_UNREACHABLE);
     }
 }
