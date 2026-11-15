@@ -68,7 +68,7 @@
 | 404 | `ROOM_NOT_FOUND` / `STATION_NOT_FOUND` / `ROUTE_NOT_FOUND` | 방 없음 / 역 없음 / 내부 그래프로도 경로 없음 |
 | 422 | `STATION_UNSUPPORTED` | 출발·도착역이 `is_supported = false` |
 | 422 | `NO_SERVICE_TIME` | `arriveAt` 직전 60분(`linkro.subway.timetable.no-service-window-minutes`) 안에 도착하는 열차가 전 노선에 없음. 추천(8.1)과 같은 검사(`TimetableRouteFinder.noTrainArrivesBefore`)와 같은 문구("해당 시간대에는 지하철이 운행하지 않습니다. 약속 시간을 바꿔 주세요.") |
-| 422 | `ARRIVAL_UNREACHABLE` | #130. 열차는 있지만 그 출발역에서 `arriveAt`까지 도착하는 열차가 없음(예: 첫차 직후 도착 시각). "그 시각까지 도착할 수 있는 열차가 없습니다. 도착 시각을 늦춰 주세요." 명세 2장 에러 코드 표에는 아직 없다 |
+| 422 | `ARRIVAL_UNREACHABLE` | #130. 열차는 있지만 그 출발역에서 `arriveAt`까지 도착하는 열차가 없음(예: 첫차 직후 도착 시각). #140부터 `arriveAt`까지 도착하는 가장 늦은 출발이 이미 지난 경우(지금 출발해서는 제시간에 도착할 수 없음)도 포함. "그 시각까지 도착할 수 있는 열차가 없습니다. 도착 시각을 늦춰 주세요." 명세 2장 에러 코드 표에는 아직 없다 |
 
 ## 카카오 호출 규격
 
@@ -172,6 +172,12 @@ INTERNAL 경로는 다음과 같이 만든다.
   - 응답 변환은 `InternalRouteBuilder.toDraft(RoutePath, 출발, 도착)`를 고정 비용 경로와 같이 쓴다. RIDE는 SUBWAY 단계, TRANSFER는 WALKING 단계다.
   - 시각표 경로의 WALKING 단계 `durationSec`은 하차부터 다음 승차까지(도보 + 승강장 대기)다. SUBWAY 단계에는 같은 열차의 정차와 같은 노선 다른 열차 대기가 들어 있다. `walkingMinutes`는 대기를 빼고 열차별 환승 도보(`TimedLeg.walkSec`) 합으로 계산한다.
   - `routeSource`는 `INTERNAL`, 경로는 1개(`routeType: FASTEST`), `noService: false`, `serviceNotice: null`, `arrivesAfterAppointment: false`(약속까지 도착하는 경로만 고른다), `appointmentPassed: false`, `notice: null`.
+- **가장 늦은 출발이 이미 지났으면 (#140)**: 약속까지 도착하는 가장 늦은 출발(`leaveAt`)이 지금보다 이르면(둘 다 초 단위로 자름, 같은 초는 아직 제시간) 지금 나가서 제때 도착하는 경로는 없다. 이 경로를 버리고 혼자 모드처럼 지금 출발하는 시각표 경로(`departingAt(출발역, 지금)`, 다음 운행일 재탐색 포함)를 준다.
+  - `departureAt` = 다음 열차에 맞춰 나서는 시각, `arrivalAt` = 그 경로의 도착, `arrivesAfterAppointment` = 도착과 약속 비교(이 경우 항상 `true`).
+  - `waitSec`·`waitKind: TIMETABLE`·`totalWithWaitSec`은 지금 기준으로 채운다. `slackSeconds`는 `null`, `appointmentPassed: false`, `notice: null`(약속 자체가 지난 경우 전용)이다.
+  - 예: 손으로 만든 시각표에서 지금 14:04, 약속 14:09면 14:03 열차는 떠났으므로 23:33 출발 → 23:37 도착, `arrivesAfterAppointment: true`, `waitSec` 34140.
+  - 지금 출발 경로도 없으면(다음 운행일에도 없음) 아래 "넘어가는 경우"처럼 카카오/INTERNAL 흐름이다. 혼자 모드는 약속이 남은 방이라 타지 않고, 출발은 `약속 − totalTimeSec`이 지났으므로 지금, `arrivesAfterAppointment`는 그 도착으로 판정한다.
+  - 로그: `... uses INTERNAL: the latest departure for the room appointment has left, timetable route from now`, 지금 출발 경로도 없으면 `... has left and the timetable has no route from now`(INFO).
 - **카카오는 호출하지 않는다.** 이 모드의 경로 좌표(`path`)는 우리 역 좌표를 잇는 선이다.
 - **넘어가는 경우 (지금 흐름 그대로)**: 약속까지 도착하는 열차가 약속 시각의 운행일에 없으면(예: 새벽 05:40 약속, 첫차 도착 05:45) 카카오/INTERNAL + `FirstTrainTimer` + `arrivesAfterAppointment` 흐름이다. 약속이 지났거나, 방·약속이 없거나, 시각표 라우터가 없으면(mock 모드, 시각표 끔) 이전과 완전히 같다. 약속이 지났거나 방·약속이 없으면 #130부터 혼자 모드다.
 - **추천과 값이 같아지는 조건**: 출발역이 그 멤버의 출발역, 도착역이 추천역이고, 약속 시각·시각표·휴일 달력·역 접근 시간·코드가 추천 실행 때와 같을 때. 출발역 하나로 검색해도 멤버 전체로 검색한 추천과 같은 경로가 나온다(측정 96/96, `RouteSearchPostgresTest.roomRouteIsTheRecommendationTrip`).
@@ -230,6 +236,7 @@ INTERNAL 경로는 다음과 같이 만든다.
 - **거절 (422, 다른 흐름으로 가지 않음)**
   - `NO_SERVICE_TIME`: `arriveAt` 직전 60분 안에 도착하는 열차가 전 노선에 없다(예: 04:00). 추천과 같은 검사·문구다.
   - `ARRIVAL_UNREACHABLE`: 열차는 다니지만 그 시각까지 도착할 수 없다(예: 평일 05:40 강남→사당, 첫차 05:36:00 출발이 사당에 05:46 도착).
+  - `ARRIVAL_UNREACHABLE`(#140): 그 시각까지 도착하는 가장 늦은 출발이 이미 지났다(`leaveAt` < 지금, 초 단위, 같은 초는 허용). 예: 지금 14:05에 `arriveAt` 14:10을 보냈는데 제때 도착하는 마지막 열차가 14:03에 떠났다. 이전에는 지난 출발 시각을 200으로 돌려줬다. 로그는 INFO `... the latest departure arriving by the requested time has left`.
 - **카카오**: 호출하지 않는다. 쿨다운 상태도 바뀌지 않는다. 로그는 INFO 한 줄(`Route search {출발역 ID} -> {도착역 ID} uses INTERNAL: timetable route arriving by the requested time`)이다.
 - **시각표 라우터가 없으면**(mock 모드, 시각표 끔) `arriveAt`을 무시하고 WARN 한 줄(`Route search {출발역 ID} -> {도착역 ID} ignores arriveAt: no timetable router ...`)을 남긴 뒤 지금 흐름(약속방 모드·카카오·INTERNAL)으로 간다. 출발역과 도착역이 같으면 `arriveAt`과 관계없이 이전과 같은 응답(INTERNAL 빈 경로)이다.
 - **범위 (`linkro.route.arrive-at-max-days`, 기본 365일)**: `arriveAt`의 날짜(Asia/Seoul)가 오늘 + 365일 이하면 그날 어느 시각이든 통과하고, 그다음 날부터 400이다(예: 오늘 2026-11-12 → 2027-11-12 23:59:59 통과, 2027-11-13 00:00 거절, 문구 `arriveAt은 오늘부터 365일 뒤(2027-11-12)까지여야 합니다.`).
@@ -294,7 +301,7 @@ KAKAO 경로의 `totalTimeSec`을 카카오 `routes[].properties.totalTime` 대�
 
 - 방 약속 시각 자체가 요청 시각보다 앞서면(추천의 `APPOINTMENT_PASSED`와 같은 초 단위 비교, 같은 초는 지나지 않음) `appointmentPassed: true`, `notice: "약속 시각이 이미 지나 지금 출발 기준으로 안내합니다."`다. 출발은 요청 시각이고 `departAt`은 무시한다(전과 같은 동작).
 - 방에 약속 시각이 있으면 `departAt`은 약속이 지나지 않았어도 무시한다(기존 동작).
-- 약속방 모드(#122)로 시각표 경로를 쓴 응답은 약속까지 도착하는 경로라 아래 판정과 관계없이 `arrivesAfterAppointment: false`다. 아래는 그 모드가 아닐 때(시각표 경로 없음, 시각표 라우터 없음)의 규칙이다.
+- 약속방 모드(#122)로 시각표 경로를 쓴 응답은 약속까지 도착하는 경로라 아래 판정과 관계없이 `arrivesAfterAppointment: false`다. 가장 늦은 출발이 이미 지나 지금 출발 경로로 바꾼 응답(#140)은 `true`다. 아래는 그 모드가 아닐 때(시각표 경로 없음, 시각표 라우터 없음)의 규칙이다.
 - 약속이 지난 방은 시각표 라우터가 있으면 혼자 모드(#130)다. 지금 출발하는 시각표 경로이고 `appointmentPassed`·`notice`는 그대로다.
 - **약속보다 늦게 도착 (`summary.arrivesAfterAppointment`)**: 경로마다 최종 `arrivalAt`(비운행으로 첫차로 밀린 값 포함)과 방 약속 시각을 둘 다 초 단위로 자른 뒤 비교해, 도착이 늦으면 `true`다.
   - 정상 케이스(`약속 − totalTimeSec`에 출발해 약속 시각에 도착)는 같은 시각이라 `false`다.
@@ -351,12 +358,14 @@ KAKAO 경로의 `totalTimeSec`을 카카오 `routes[].properties.totalTime` 대�
   - 약속 정각 도착(14:07)은 그 열차, 1초 앞(14:06:59)은 앞 열차(05:36 → 05:40)
   - 새벽 약속(05:39:59, 첫차 도착 05:40)은 시각표 경로가 없어 시각표 라우터 없는 응답과 같음(`noService`, `arrivesAfterAppointment: true`)
   - 시각표 라우터 없음은 이전과 같은 응답(약속 지남·방 없음·약속 없는 방은 #130부터 혼자 모드, 아래)
+  - #140 가장 늦은 출발이 지남: 지금 14:04·약속 14:09 → 23:33 출발·23:37 도착, `arrivesAfterAppointment: true`, `waitSec` 34140. 지금 23:50·약속 00:10 → 00:46 출발. 지난 경우 5개 모두 `arrivesAfterAppointment: true`. 같은 초(14:03:00.9)는 기존 경로, 14:03:01은 지금 출발. 지금 출발 경로도 없음(금 23:40 강남→고속터미널, 토요일 3호선 없음) → 라우터 없는 응답과 같음, 카카오 1회
 - `RouteSearchArrivalTimetableTest`(#130 `arriveAt`, 같은 시각표)
   - `latestDepartures`와 같은 출발·도착, `slackSeconds` 180, 대기 3필드 `null`, 카카오 0회. 정각 도착 → `slackSeconds` 0
   - 약속 14:07인 방에서 `arriveAt` 05:45 → W1(05:36 → 05:40), `arriveAt` 없으면 약속방 모드 그대로
   - `departAt` + `arriveAt` → 400(두 필드), 지금 1초 전·형식 오류 → 400, 지금(같은 초)은 통과
   - 상한(고정 시계, 오늘 2026-11-12 + 365일): 2027-11-12 23:59:59 → 경로(W3, `slackSeconds` 1379), 2027-11-13 00:00 → 400. 상한 날짜는 서울 날짜 기준(UTC 11-11 23:30 = 서울 11-12), 설정 일수 30이면 2026-12-12까지
   - 04:00 → `NO_SERVICE_TIME`, 05:39 → `ARRIVAL_UNREACHABLE`
+  - #140 가장 늦은 출발이 지남: 지금 14:05 `arriveAt` 14:10, 지금 23:50 `arriveAt` 00:10 → `ARRIVAL_UNREACHABLE`. 지금 14:03:00.9(출발과 같은 초) → 14:03 경로, 14:03:01 → `ARRIVAL_UNREACHABLE`
   - 라우터 없음 → `arriveAt` 무시, `arriveAt` 없는 응답과 같음, WARN(좌표 없음). 같은 역 → 이전과 같음
 - `RouteSearchSoloTimetableTest`(#130, 같은 시각표)
   - 방 없음: `departingAt` 경로와 출발·도착·`totalTimeSec`·역 순서·환승이 같고 카카오 호출 0회, `waitSec`·`totalWithWaitSec`, 혼잡도 기준 = 첫 열차 출발, `departAt` 생략 = 지금

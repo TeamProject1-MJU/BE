@@ -36,6 +36,8 @@ import org.springframework.stereotype.Service;
  * <p>Room appointment mode (#122): with a room whose appointment has not passed and the timetable router, the route is
  * the one recommendations use ({@link TimetableRouteFinder#latestDepartures}, the same bean and so the same station
  * access setting) and Kakao is not called. When the timetable has no route arriving in time, the flow above is used.
+ * When even the latest departure has already left (#140), the route is the timetable route from now, marked
+ * arrivesAfterAppointment, and the flow above only when the timetable has no route from now either.
  *
  * <p>Solo mode (#130): with the timetable router and no room, a room without an appointment or one whose appointment has
  * passed, the route is the earliest-arrival route recommendations give without an appointment
@@ -122,17 +124,15 @@ public class RouteSearchService {
 
         // Arrival mode (#130): arriveAt wins over the room's appointment; the room is only checked for membership.
         if (query.arriveAt() != null && origin.id() != destination.id()) {
-            if (timetableRoutes != null) return arrivalRoute(origin.id(), destination.id(), query.arriveAt());
+            if (timetableRoutes != null) return arrivalRoute(origin.id(), destination.id(), query.arriveAt(), now);
             log.warn("Route search {} -> {} ignores arriveAt: no timetable router (linkro.subway.module=mock or "
                     + "linkro.subway.timetable.enabled=false)", origin.id(), destination.id());
         }
 
         boolean passed = appointmentPassed(room, now);
-        Optional<TimedRoute> timed = roomAppointmentRoute(room, passed, origin.id(), destination.id());
-        if (timed.isPresent()) {
-            log.info("Route search {} -> {} uses the timetable route for the room appointment", origin.id(), destination.id());
-            return new RouteSearchResponse(RouteSource.INTERNAL,
-                    List.of(timedRoute("r1", timed.get(), origin.id(), destination.id(), null, false, null)), false, null);
+        Optional<Route> roomRoute = roomAppointmentRoute(room, passed, origin.id(), destination.id(), now);
+        if (roomRoute.isPresent()) {
+            return new RouteSearchResponse(RouteSource.INTERNAL, List.of(roomRoute.get()), false, null);
         }
 
         // Solo mode (#130): no room, a room without an appointment, or one whose appointment has passed.
@@ -143,7 +143,7 @@ public class RouteSearchService {
                 log.info("Route search {} -> {} uses INTERNAL: timetable route from the request time{}", origin.id(), destination.id(),
                         solo.get().nextServiceDay() ? " (next service day)" : "");
                 return new RouteSearchResponse(RouteSource.INTERNAL,
-                        List.of(soloTimedRoute(solo.get(), origin.id(), destination.id(), requested)),
+                        List.of(soloTimedRoute(solo.get(), origin.id(), destination.id(), requested, null)),
                         passed, passed ? APPOINTMENT_PASSED_NOTICE : null);
             }
         }
@@ -189,15 +189,43 @@ public class RouteSearchService {
 
     /**
      * Room appointment mode (#122): the latest-departure route recommendations give the member from {@code originId} to
-     * {@code destinationId} for the room's appointment. Empty, so the flow without it is used, when there is no timetable
-     * router, no room or appointment, the appointment has passed, both stations are the same, or no train arrives in time
-     * on the appointment's service day.
+     * {@code destinationId} for the room's appointment. When even that one has already left (#140), no route leaving now
+     * arrives in time: the route is the solo one from now ({@link #soloRoute}, next service day included) with its wait
+     * and arrivesAfterAppointment against the appointment.
+     *
+     * <p>Empty, so the flow without the timetable router is used, when there is no timetable router, no room or
+     * appointment, the appointment has passed, both stations are the same, no train arrives in time on the appointment's
+     * service day, or the latest departure has left and the timetable has no route from now either.
      */
-    private Optional<TimedRoute> roomAppointmentRoute(MeetingRoom room, boolean appointmentPassed, long originId, long destinationId) {
+    private Optional<Route> roomAppointmentRoute(MeetingRoom room, boolean appointmentPassed, long originId, long destinationId,
+                                                 Instant now) {
         if (timetableRoutes == null || room == null || room.getAppointmentAt() == null || appointmentPassed || originId == destinationId) {
             return Optional.empty();
         }
-        return arriveByRoute(originId, destinationId, room.getAppointmentAt());
+        Instant appointment = room.getAppointmentAt();
+        Optional<TimedRoute> latest = arriveByRoute(originId, destinationId, appointment);
+        if (latest.isEmpty()) return Optional.empty();
+        if (!leftBefore(latest.get(), now)) {
+            log.info("Route search {} -> {} uses the timetable route for the room appointment", originId, destinationId);
+            return Optional.of(timedRoute("r1", latest.get(), originId, destinationId, null, false, null, false));
+        }
+        Optional<SoloRoute> fromNow = soloRoute(originId, destinationId, now);
+        if (fromNow.isEmpty()) {
+            log.info("Route search {} -> {}: the latest departure for the room appointment has left and the timetable has no "
+                    + "route from now", originId, destinationId);
+            return Optional.empty();
+        }
+        log.info("Route search {} -> {} uses INTERNAL: the latest departure for the room appointment has left, timetable route "
+                + "from now{}", originId, destinationId, fromNow.get().nextServiceDay() ? " (next service day)" : "");
+        return Optional.of(soloTimedRoute(fromNow.get(), originId, destinationId, now, appointment));
+    }
+
+    /**
+     * The route leaves before {@code now}, both in whole seconds like {@link #appointmentPassed}: leaving in the same
+     * second is still in time (#140).
+     */
+    static boolean leftBefore(TimedRoute route, Instant now) {
+        return route.leaveAt().truncatedTo(ChronoUnit.SECONDS).isBefore(now.truncatedTo(ChronoUnit.SECONDS));
     }
 
     /**
@@ -215,16 +243,21 @@ public class RouteSearchService {
      *
      * @throws BusinessException NO_SERVICE_TIME when no train of any line arrives in the window before {@code arriveAt}
      *         (the recommendation check, {@link TimetableRouteFinder#noTrainArrivesBefore}); ARRIVAL_UNREACHABLE when
-     *         trains run but none from this origin arrives in time
+     *         trains run but none from this origin arrives in time, or the latest departure arriving in time has already
+     *         left at {@code now} (#140): then no route leaving now arrives in time either
      */
-    private RouteSearchResponse arrivalRoute(long originId, long destinationId, Instant arriveAt) {
+    private RouteSearchResponse arrivalRoute(long originId, long destinationId, Instant arriveAt, Instant now) {
         if (timetableRoutes.noTrainArrivesBefore(arriveAt)) throw new BusinessException(ErrorCode.NO_SERVICE_TIME);
         TimedRoute timed = arriveByRoute(originId, destinationId, arriveAt)
                 .orElseThrow(() -> new BusinessException(ErrorCode.ARRIVAL_UNREACHABLE));
+        if (leftBefore(timed, now)) {
+            log.info("Route search {} -> {}: the latest departure arriving by the requested time has left", originId, destinationId);
+            throw new BusinessException(ErrorCode.ARRIVAL_UNREACHABLE);
+        }
         log.info("Route search {} -> {} uses INTERNAL: timetable route arriving by the requested time", originId, destinationId);
         int slack = (int) Duration.between(timed.arriveAt(), arriveAt).toSeconds();
         return new RouteSearchResponse(RouteSource.INTERNAL,
-                List.of(timedRoute("r1", timed, originId, destinationId, null, false, slack)), false, null);
+                List.of(timedRoute("r1", timed, originId, destinationId, null, false, slack, false)), false, null);
     }
 
     /**
@@ -268,40 +301,46 @@ public class RouteSearchService {
      * A solo timetable route: the timetable route of {@link #timedRoute} plus the wait from {@code requested} to leaving.
      * noService is the #120 judgement ({@link FirstTrainTimer#boardsFirstTrainAfter}) without moving any time; it is
      * always true for a route of the next service day.
+     *
+     * @param appointment the room's active appointment when the room appointment mode route had already left (#140):
+     *                    arrivesAfterAppointment compares the arrival with it. Null in solo mode (always false)
      */
-    private Route soloTimedRoute(SoloRoute solo, long originId, long destinationId, Instant requested) {
+    private Route soloTimedRoute(SoloRoute solo, long originId, long destinationId, Instant requested, Instant appointment) {
         TimedRoute timed = solo.route();
         Wait wait = new Wait((int) Duration.between(requested, timed.leaveAt()).toSeconds(), Wait.TIMETABLE,
                 (int) Duration.between(requested, timed.arriveAt()).toSeconds());
         RouteDraft path = internal.toDraft(timed.path(), originId, destinationId);
         boolean noService = solo.nextServiceDay() || (firstTrains != null
                 && firstTrains.boardsFirstTrainAfter(path, timed.boardAt(), timed.leaveAt(), requested));
-        return timedRoute("r1", timed, path, wait, noService, null);
+        return timedRoute("r1", timed, path, wait, noService, null, arrivesAfter(timed.arriveAt(), appointment));
     }
 
     private Route timedRoute(String routeId, TimedRoute timed, long originId, long destinationId, Wait wait, boolean noService,
-                             Integer slackSeconds) {
-        return timedRoute(routeId, timed, internal.toDraft(timed.path(), originId, destinationId), wait, noService, slackSeconds);
+                             Integer slackSeconds, boolean arrivesAfterAppointment) {
+        return timedRoute(routeId, timed, internal.toDraft(timed.path(), originId, destinationId), wait, noService, slackSeconds,
+                arrivesAfterAppointment);
     }
 
     /**
      * A timetable route as recommendations show it (RecommendationService#participantTimes): departure = leaveAt,
      * arrival = arriveAt, stop congestion from boardAt (stop offsets count from it), fare from {@link InternalRouteBuilder}'s
      * StationPairFare like the engine. totalTimeSec = arriveAt − leaveAt; walkingMinutes counts walks only, not the
-     * platform waits inside its transfer steps. Room appointment mode arrives by the appointment and solo mode has none,
-     * so arrivesAfterAppointment is false.
+     * platform waits inside its transfer steps.
      *
-     * @param path         the route as {@link InternalRouteBuilder#toDraft} gives it
-     * @param wait         the wait before leaving (solo mode), or null
-     * @param slackSeconds requested arrival − arrival (arrival mode), or null
+     * @param path                    the route as {@link InternalRouteBuilder#toDraft} gives it
+     * @param wait                    the wait before leaving (solo mode, or room mode from now), or null
+     * @param slackSeconds            requested arrival − arrival (arrival mode), or null
+     * @param arrivesAfterAppointment false for routes arriving by the appointment (room appointment mode, arrival mode) and
+     *                                for solo mode; the room appointment route from now (#140) compares with the appointment
      */
-    private Route timedRoute(String routeId, TimedRoute timed, RouteDraft path, Wait wait, boolean noService, Integer slackSeconds) {
+    private Route timedRoute(String routeId, TimedRoute timed, RouteDraft path, Wait wait, boolean noService, Integer slackSeconds,
+                             boolean arrivesAfterAppointment) {
         int total = (int) Duration.between(timed.leaveAt(), timed.arriveAt()).toSeconds();
         RouteDraft draft = new RouteDraft(path.steps(), total, path.fare(), path.fareSource(), path.transferCount(),
                 path.fromStationId(), path.toStationId());
         int walkSeconds = timed.legs().stream().mapToInt(TimedLeg::walkSec).sum();
         return route(routeId, routeTypes(List.of(draft)).get(0), draft, timed.leaveAt(), timed.boardAt(), timed.arriveAt(),
-                walkSeconds, noService, noService ? serviceNotice(timed.boardAt()) : null, false, wait, slackSeconds);
+                walkSeconds, noService, noService ? serviceNotice(timed.boardAt()) : null, arrivesAfterAppointment, wait, slackSeconds);
     }
 
     /**
