@@ -7,6 +7,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -31,6 +33,10 @@ public class OpenAiClient implements AiClient {
     static final String BASE_URL = "https://api.openai.com";
     static final int EXPLANATION_MAX_LENGTH = 300;
     static final int CHAT_MAX_LENGTH = 500;
+    /** Tool-calling rounds one @링크로 question may use (#129); a fourth request for tools fails the answer. */
+    static final int CHAT_MAX_TOOL_ROUNDS = 3;
+    /** All model calls and tool runs of one @링크로 question together (#129); past it no further model call is made. */
+    static final Duration CHAT_TOTAL_LIMIT = Duration.ofSeconds(25);
 
     private static final JsonMapper MAPPER = JsonMapper.builder().build();
     private static final Map<String, Object> CONDITION_SCHEMA = schema("condition");
@@ -123,7 +129,58 @@ public class OpenAiClient implements AiClient {
             input.append(turn.nickname()).append(": ").append(turn.content()).append('\n');
         }
         input.append("질문: ").append(req.question());
+        if (req.tools() != null) {
+            try {
+                return text(chatWithTools(input.toString(), req.tools()), CHAT_MAX_LENGTH);
+            } catch (IllegalArgumentException exception) {
+                throw unavailable(exception);
+            }
+        }
         return text(call(textClient, CHAT_PROMPT, textInput(input.toString()), null), CHAT_MAX_LENGTH);
+    }
+
+    /**
+     * Function calling (#129) over the Responses API: each round sends the tool results back with previous_response_id.
+     * Tool results go to the model as they are; nothing here logs them. Asking for tools after
+     * {@link #CHAT_MAX_TOOL_ROUNDS} rounds, or running past {@link #CHAT_TOTAL_LIMIT}, is AI_UNAVAILABLE.
+     */
+    private String chatWithTools(String question, ChatToolbox tools) {
+        long deadline = System.nanoTime() + CHAT_TOTAL_LIMIT.toNanos();
+        List<Map<String, Object>> specs = tools.specs().stream()
+                .map(spec -> Map.<String, Object>of("type", "function", "name", spec.name(),
+                        "description", spec.description(), "parameters", spec.parameters()))
+                .toList();
+        Object input = textInput(question);
+        String previous = null;
+        for (int round = 0; ; round++) {
+            if (System.nanoTime() - deadline > 0) throw limit("time");
+            var body = new LinkedHashMap<String, Object>();
+            body.put("model", model);
+            body.put("instructions", CHAT_PROMPT);
+            body.put("input", input);
+            body.put("tools", specs);
+            if (previous != null) body.put("previous_response_id", previous);
+            JsonNode root = parseResponse(send(textClient, body));
+            List<JsonNode> calls = new ArrayList<>();
+            for (JsonNode item : root.path("output")) {
+                if ("function_call".equals(item.path("type").asString(""))) calls.add(item);
+            }
+            if (calls.isEmpty()) return outputText(root);
+            if (round >= CHAT_MAX_TOOL_ROUNDS) throw limit("rounds");
+            var results = new ArrayList<Map<String, Object>>();
+            for (JsonNode call : calls) {
+                results.add(Map.of("type", "function_call_output", "call_id", call.path("call_id").asString(""),
+                        "output", tools.run(call.path("name").asString(""), call.path("arguments").asString("{}"))));
+            }
+            input = results;
+            previous = root.path("id").asString(null);
+            if (previous == null) throw unavailable(new IllegalArgumentException("no response id"));
+        }
+    }
+
+    private static BusinessException limit(String which) {
+        log.warn("Chat tool calling stopped: {} limit", which);
+        return new BusinessException(ErrorCode.AI_UNAVAILABLE);
     }
 
     private String call(RestClient client, String instructions, Object input, Map<String, Object> format) {
@@ -138,13 +195,32 @@ public class OpenAiClient implements AiClient {
         if (format != null) body.put("text", Map.of("format", format));
         if (reasoningEffort != null) body.put("reasoning", Map.of("effort", reasoningEffort));
         try {
-            String response = client.post().uri("/v1/responses")
+            return outputText(parseResponse(send(client, body)));
+        } catch (RestClientException | JacksonException | IllegalArgumentException exception) {
+            throw unavailable(exception);
+        }
+    }
+
+    private String send(RestClient client, Map<String, Object> body) {
+        try {
+            return client.post().uri("/v1/responses")
                     .headers(headers -> headers.setBearerAuth(apiKey))
                     .contentType(MediaType.APPLICATION_JSON).body(body).retrieve()
                     .onStatus(status -> !status.is2xxSuccessful(), (request, res) -> { throw mapStatus(res.getStatusCode()); })
                     .body(String.class);
-            return outputText(response);
-        } catch (RestClientException | JacksonException | IllegalArgumentException exception) {
+        } catch (RestClientException exception) {
+            throw unavailable(exception);
+        }
+    }
+
+    /** A completed response; empty, unparsable or not completed ones are failures. */
+    private static JsonNode parseResponse(String response) {
+        try {
+            if (response == null || response.isBlank()) throw new IllegalArgumentException("empty response");
+            JsonNode root = MAPPER.readTree(response);
+            if (!"completed".equals(root.path("status").asString(""))) throw new IllegalArgumentException("response not completed");
+            return root;
+        } catch (JacksonException | IllegalArgumentException exception) {
             throw unavailable(exception);
         }
     }
@@ -163,13 +239,8 @@ public class OpenAiClient implements AiClient {
         return new BusinessException(ErrorCode.AI_UNAVAILABLE);
     }
 
-    /** Joins output_text parts; refusal, incomplete or empty responses are failures. */
-    private static String outputText(String response) {
-        if (response == null || response.isBlank()) throw new IllegalArgumentException("empty response");
-        JsonNode root = MAPPER.readTree(response);
-        if (!"completed".equals(root.path("status").asString(""))) {
-            throw new IllegalArgumentException("response not completed");
-        }
+    /** Joins output_text parts; refusal or empty responses are failures. */
+    private static String outputText(JsonNode root) {
         var text = new StringBuilder();
         for (JsonNode item : root.path("output")) {
             for (JsonNode part : item.path("content")) {

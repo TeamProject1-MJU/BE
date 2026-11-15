@@ -1,6 +1,7 @@
 package com.mju.linkro.chat;
 
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -28,6 +29,18 @@ public class ChatConfig {
                 60, TimeUnit.SECONDS, new ArrayBlockingQueue<>(Math.max(1, properties.getAiQueueCapacity())), threads);
         executor.allowCoreThreadTimeOut(true);
         return executor;
+    }
+
+    /** Runs the read-only tools of @링크로 answers (#129) so each call can time out. No queue: a busy pool answers NO_DATA. */
+    @Bean(destroyMethod = "shutdownNow")
+    public ThreadPoolExecutor chatToolExecutor(ChatProperties properties) {
+        AtomicInteger counter = new AtomicInteger();
+        ThreadFactory threads = task -> {
+            Thread thread = new Thread(task, "chat-tool-" + counter.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        };
+        return new ThreadPoolExecutor(0, properties.getAiThreads() * 2, 60, TimeUnit.SECONDS, new SynchronousQueue<>(), threads);
     }
 
     /** Waits for running answers at shutdown (see {@link ChatAiShutdown}). */

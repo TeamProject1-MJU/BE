@@ -60,6 +60,7 @@ class ChatServiceTest {
     RoomReadRepository roomReads = mock(RoomReadRepository.class);
     RecommendationRepository recommendations = mock(RecommendationRepository.class);
     AiClient ai = mock(AiClient.class);
+    ChatTools tools = mock(ChatTools.class);
     ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     ChatProperties properties = new ChatProperties();
     long[] nanos = {0};
@@ -79,7 +80,7 @@ class ChatServiceTest {
     ChatService build(Executor aiExecutor) {
         var writer = new ChatMessageWriter(access, messages, events);
         var context = new ChatRoomContext(properties, messages, rooms, roomReads, recommendations);
-        return new ChatService(writer, access, messages, new ChatAiResponder(ai, context, writer),
+        return new ChatService(writer, access, messages, new ChatAiResponder(ai, context, writer, tools),
                 new ChatRateLimiter(properties, () -> nanos[0]), aiExecutor);
     }
 
