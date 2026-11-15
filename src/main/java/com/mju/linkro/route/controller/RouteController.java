@@ -33,7 +33,7 @@ public class RouteController {
             + "routeSource=INTERNAL로 돌려주고 카카오를 호출하지 않습니다(출발 = 늦어도 이때 나서면 약속에 도착, 도착 = 마지막 열차 도착). "
             + "시각표에 약속까지 도착하는 경로가 없거나 시각표가 없으면 약속 시각 − 소요시간을 혼잡도 기준 출발 시각으로 씁니다. "
             + "약속 시각 자체가 지났으면 요청 시각 기준이고 appointmentPassed=true와 notice로 알립니다. "
-            + "혼자 모드: 방이 없거나 약속 시각이 없거나 약속이 지났고 열차 시각표가 있으면, 요청 시각(departAt, 없으면 지금. 약속이 지난 방은 지금)에 출발하는 "
+            + "경로 탐색: 방이 없거나 약속 시각이 없거나 약속이 지났고 열차 시각표가 있으면, 요청 시각(departAt, 없으면 지금. 약속이 지난 방은 지금)에 출발하는 "
             + "추천(약속 없음)과 같은 시각표 경로 1개를 routeSource=INTERNAL, fareSource=ESTIMATED로 돌려주고 카카오를 호출하지 않습니다. "
             + "departureAt은 첫 열차에 맞춰 나서는 시각이라 요청 시각보다 늦을 수 있고, 그 차이를 waitSec(waitKind=TIMETABLE), 요청 시각부터 도착까지를 totalWithWaitSec로 줍니다. "
             + "첫 열차가 그 운행일 첫차이고 요청보다 늦게 떠나거나, 경로 막차가 끝나 다음 운행일 첫 열차로 찾았으면 noService=true와 serviceNotice로 알립니다. "

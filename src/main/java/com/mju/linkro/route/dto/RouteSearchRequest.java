@@ -18,7 +18,7 @@ import java.util.UUID;
 public record RouteSearchRequest(
         @Schema(description = "출발역 ID (isSupported=true)", example = "31") Long originStationId,
         @Schema(description = "도착역 ID (isSupported=true)", example = "35") Long destinationStationId,
-        @Schema(description = "선택. 출발 시각(ISO-8601, 오프셋 포함). 생략하면 요청 시각. 혼자 모드(열차 시각표)는 이 시각 이후 첫 열차로 경로를 찾고, 그 밖에는 혼잡도 기준 시각. 지난 시각도 그대로 쓴다. arriveAt과 함께 보낼 수 없다",
+        @Schema(description = "선택. 출발 시각(ISO-8601, 오프셋 포함). 생략하면 요청 시각. 경로 탐색(열차 시각표)은 이 시각 이후 첫 열차로 경로를 찾고, 그 밖에는 혼잡도 기준 시각. 지난 시각도 그대로 쓴다. arriveAt과 함께 보낼 수 없다",
                 example = "2026-11-06T08:00:00+09:00") String departAt,
         @Schema(description = "선택. 방 화면에서 호출할 때 방 ID. 방 멤버를 확인하고 약속 시각 기준으로 출발 예정 시각을 계산. arriveAt을 보내면 멤버 확인만 하고 약속 시각은 쓰지 않는다",
                 example = "0192f3a4-8c2d-7d4f-8b21-6e3f9a7c2b02") String roomId,

@@ -43,7 +43,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * POST /routes/search with the train timetable off ({@code linkro.subway.timetable.enabled=false}): no timetable router,
- * so solo searches (#130) keep the Kakao-first flow with the fixed-cost INTERNAL fallback. Kakao is stubbed.
+ * so plain searches (#130) keep the Kakao-first flow with the fixed-cost INTERNAL fallback. Kakao is stubbed.
  */
 @Testcontainers
 @ExtendWith(OutputCaptureExtension.class)

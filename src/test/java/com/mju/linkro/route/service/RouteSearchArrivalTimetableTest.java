@@ -20,7 +20,7 @@ import static com.mju.linkro.route.service.FirstTrainTimerTest.seoul;
 import static com.mju.linkro.route.service.RouteSearchRoomTimetableTest.ROUTER;
 import static com.mju.linkro.route.service.RouteSearchRoomTimetableTest.seoulOffset;
 import static com.mju.linkro.route.service.RouteSearchRoomTimetableTest.stationOrder;
-import static com.mju.linkro.route.service.RouteSearchSoloTimetableTest.fixture;
+import static com.mju.linkro.route.service.RouteSearchPlainTimetableTest.fixture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.anyDouble;
@@ -34,12 +34,12 @@ import static org.mockito.Mockito.*;
 class RouteSearchArrivalTimetableTest {
     static final Instant NOW = seoul("2026-11-12T02:00:00");
 
-    static RouteSearchResponse search(RouteSearchSoloTimetableTest.Fixture f, String departAt, boolean withRoom, String arriveAt) {
+    static RouteSearchResponse search(RouteSearchPlainTimetableTest.Fixture f, String departAt, boolean withRoom, String arriveAt) {
         return f.service().search(UUID.randomUUID(),
                 new RouteSearchRequest(31L, 33L, departAt, withRoom ? UUID.randomUUID().toString() : null, arriveAt));
     }
 
-    static Map<String, String> validationErrors(RouteSearchSoloTimetableTest.Fixture f, String departAt, String arriveAt) {
+    static Map<String, String> validationErrors(RouteSearchPlainTimetableTest.Fixture f, String departAt, String arriveAt) {
         BusinessException error = catchThrowableOfType(BusinessException.class, () -> search(f, departAt, false, arriveAt));
         assertThat(error.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR);
         @SuppressWarnings("unchecked")

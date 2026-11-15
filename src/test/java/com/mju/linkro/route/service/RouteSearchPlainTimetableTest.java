@@ -31,12 +31,12 @@ import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.Mockito.*;
 
 /**
- * Solo mode (#130) on the hand-made timetable of {@link FirstTrainTimerTest}: 2호선 강남(31) -> 교대(32) -> 서초(33),
+ * Plain search (#130) on the hand-made timetable of {@link FirstTrainTimerTest}: 2호선 강남(31) -> 교대(32) -> 서초(33),
  * weekday trains from 강남 at 05:36 (W1), 14:03 (W2), 23:33 (W3) and 24:46 (W4), all 4 minutes to 서초; 3호선 교대(32) ->
  * 고속터미널(40) weekdays at 05:50, 14:10 and 24:20 only; Saturday has one 2호선 train (05:35) and no 3호선 train.
  * 2026-11-12 is a Thursday, 2026-11-14 a Saturday.
  */
-class RouteSearchSoloTimetableTest {
+class RouteSearchPlainTimetableTest {
     static final Instant AFTERNOON = seoul("2026-11-12T14:00:00");
 
     record Fixture(RouteSearchService service, KakaoRouteClient kakao, CongestionLookup congestion) {
@@ -177,11 +177,11 @@ class RouteSearchSoloTimetableTest {
     @Test
     void noRouteOnTheNextServiceDayEitherFallsBackAsBefore() {
         // Friday 23:40: no 3호선 train is left, and Saturday has none at all: the flow without the timetable router.
-        Fixture solo = fixture(AFTERNOON, null, ROUTER);
-        RouteSearchResponse response = solo.search(31, 40, "2026-11-13T23:40:00+09:00", false);
+        Fixture plain = fixture(AFTERNOON, null, ROUTER);
+        RouteSearchResponse response = plain.search(31, 40, "2026-11-13T23:40:00+09:00", false);
 
         assertThat(response).isEqualTo(fixture(AFTERNOON, null, null).search(31, 40, "2026-11-13T23:40:00+09:00", false));
-        verify(solo.kakao(), times(1)).search(anyDouble(), anyDouble(), anyDouble(), anyDouble());
+        verify(plain.kakao(), times(1)).search(anyDouble(), anyDouble(), anyDouble(), anyDouble());
         assertThat(response.routes().get(0).summary().waitSec()).isNull();
         assertThat(response.routes().get(0).summary().waitKind()).isNull();
         assertThat(response.routes().get(0).summary().totalWithWaitSec()).isNull();
@@ -204,7 +204,7 @@ class RouteSearchSoloTimetableTest {
     }
 
     @Test
-    void aRoomWithoutAnAppointmentIsSoloFromDepartAt() {
+    void aRoomWithoutAnAppointmentIsPlainSearchFromDepartAt() {
         Fixture f = fixture(AFTERNOON, null, ROUTER);
         RouteSearchResponse response = f.search(31, 33, "2026-11-12T05:00:00+09:00", true);
 
@@ -242,9 +242,9 @@ class RouteSearchSoloTimetableTest {
 
     @Test
     void theSameStationIsAnsweredAsBefore() {
-        Fixture solo = fixture(AFTERNOON, null, ROUTER);
-        RouteSearchResponse response = solo.search(31, 31, "2026-11-12T14:00:00+09:00", false);
-        verifyNoInteractions(solo.kakao());
+        Fixture plain = fixture(AFTERNOON, null, ROUTER);
+        RouteSearchResponse response = plain.search(31, 31, "2026-11-12T14:00:00+09:00", false);
+        verifyNoInteractions(plain.kakao());
         assertThat(response).isEqualTo(fixture(AFTERNOON, null, null).search(31, 31, "2026-11-12T14:00:00+09:00", false));
     }
 }
