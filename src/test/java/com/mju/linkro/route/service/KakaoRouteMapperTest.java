@@ -11,12 +11,14 @@ import com.mju.linkro.subway.mock.MockFareCalculatorAccess;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /** Hand-made 2호선 강남(1)-교대(2)-서초(3) INNER and 3호선 교대(4)-고속터미널(5) DOWN, transfer at 교대. */
+@ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
 class KakaoRouteMapperTest {
     private static final SubwayGraphData DATA = new SubwayGraphData(
             List.of(new SubwayGraphData.Line(2, "2", "2호선", "#00A84D", 2), new SubwayGraphData.Line(3, "3", "3호선", "#EF7C1C", 3)),
@@ -236,5 +238,82 @@ class KakaoRouteMapperTest {
         // A Kakao fare still wins.
         assertThat(withTable.map(ok(route("SUBWAY", 1450, subway("2호선", 300, "강남", "교대", "서초"))), 31, 33))
                 .singleElement().extracting(RouteDraft::fare).isEqualTo(1450);
+    }
+
+    // ---- #142: null elements drop one candidate, never the whole search ----
+
+    /** The valid 강남 -> 서초 route the broken candidates are mixed with. */
+    static Route good() {
+        return route("SUBWAY", 1450, subway("2호선", 300, "강남", "교대", "서초"));
+    }
+
+    static Step subwayWithStops(List<Stop> stops, List<Vehicle> vehicles) {
+        return new Step(new StepProperties("SUBWAY", "Kakao text", 2000, 300, stops, vehicles),
+                new Path(List.of(List.of(127.0, 37.5), List.of(127.1, 37.6))));
+    }
+
+    static Route withSteps(Step... steps) {
+        return new Route(new RouteProperties("SUBWAY", 3000, 300, 0, new Fare(1450)), java.util.Arrays.asList(steps));
+    }
+
+    static KakaoRouteResponse okWithNulls(Route... routes) {
+        return new KakaoRouteResponse("OK", java.util.Arrays.asList(routes));
+    }
+
+    @Test
+    void aNullRouteIsSkipped() {
+        assertThat(mapper.map(okWithNulls(null, good(), null), 31, 33)).singleElement()
+                .satisfies(draft -> assertThat(draft.subwayStops()).extracting(PathStop::stationId).containsExactly(31L, 32L, 33L));
+    }
+
+    @Test
+    void nullElementsDropOnlyTheirCandidate() {
+        List<Route> broken = List.of(
+                withSteps((Step) null),                                                                     // null step
+                withSteps(step("WALKING", 60), null, subway("2호선", 300, "강남", "교대", "서초")),           // null step between
+                withSteps(subwayWithStops(java.util.Arrays.asList(new Stop("강남"), null, new Stop("서초")), List.of(new Vehicle("2호선")))), // null stop
+                withSteps(subwayWithStops(List.of(new Stop("강남"), new Stop(null), new Stop("서초")), List.of(new Vehicle("2호선")))),     // null stop name
+                withSteps(subwayWithStops(List.of(new Stop("강남"), new Stop("교대"), new Stop("서초")), java.util.Arrays.asList((Vehicle) null)))); // null vehicle
+        for (Route route : broken) {
+            assertThat(mapper.map(okWithNulls(route), 31, 33)).as(route.toString()).isEmpty();
+        }
+        List<Route> mixed = new ArrayList<>(broken);
+        mixed.add(1, good());
+        assertThat(mapper.map(new KakaoRouteResponse("OK", mixed), 31, 33)).singleElement().extracting(RouteDraft::fare).isEqualTo(1450);
+    }
+
+    @Test
+    void aNullPathPointOrCoordinateDropsTheCandidate() {
+        Step nullPoint = new Step(new StepProperties("SUBWAY", "Kakao text", 2000, 300,
+                List.of(new Stop("강남"), new Stop("교대"), new Stop("서초")), List.of(new Vehicle("2호선"))),
+                new Path(java.util.Arrays.asList(List.of(127.0, 37.5), null)));
+        Step nullCoordinate = new Step(new StepProperties("WALKING", "walk", 80, 60, List.of(), List.of()),
+                new Path(List.of(java.util.Arrays.asList(127.0, null))));
+        assertThat(mapper.map(okWithNulls(withSteps(nullPoint)), 31, 33)).isEmpty();
+        assertThat(mapper.map(okWithNulls(withSteps(nullCoordinate, subway("2호선", 300, "강남", "교대", "서초"))), 31, 33)).isEmpty();
+        // A step without path or points is still fine, as before.
+        Step noPoints = new Step(new StepProperties("SUBWAY", "Kakao text", 2000, 300,
+                List.of(new Stop("강남"), new Stop("교대"), new Stop("서초")), List.of(new Vehicle("2호선"))), new Path(null));
+        assertThat(mapper.map(okWithNulls(withSteps(noPoints)), 31, 33)).singleElement()
+                .satisfies(draft -> assertThat(draft.steps().get(0).path()).isNull());
+        assertThat(mapper.map(okWithNulls(null, withSteps(nullPoint), good()), 31, 33)).hasSize(1);
+    }
+
+    @Test
+    void anUnexpectedFailureInOneCandidateIsLoggedAndSkipped(org.springframework.boot.test.system.CapturedOutput output) {
+        // A stop list that fails when read: any runtime failure inside one candidate.
+        List<Stop> failing = new java.util.AbstractList<>() {
+            @Override public Stop get(int index) { throw new IllegalStateException("broken stop list"); }
+            @Override public int size() { return 3; }
+        };
+        Route broken = withSteps(subwayWithStops(failing, List.of(new Vehicle("2호선"))));
+
+        var drafts = mapper.map(okWithNulls(broken, good()), 31, 33);
+
+        assertThat(drafts).hasSize(1);
+        assertThat(output.getAll().lines().filter(line -> line.contains(" WARN ")))
+                .singleElement().satisfies(line -> assertThat(line.substring(line.indexOf("Kakao route candidate")))
+                        .isEqualTo("Kakao route candidate 1 skipped: IllegalStateException: broken stop list")
+                        .doesNotContain("127.").doesNotContain("37.").doesNotContain("강남"));
     }
 }

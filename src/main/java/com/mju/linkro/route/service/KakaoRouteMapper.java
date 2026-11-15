@@ -12,6 +12,7 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import com.mju.linkro.subway.fare.StationPairFare;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
@@ -21,7 +22,12 @@ import org.springframework.stereotype.Component;
  * 1~8호선, every stop matches one of our nodes, every consecutive stop pair is a RIDE edge (which gives the
  * direction), and it starts at the origin and ends at the destination station. Any other route is dropped; when no
  * route is left the caller falls back to INTERNAL.
+ *
+ * <p>Null elements anywhere in a candidate (route, step, stop, vehicle, path point) drop that candidate only (#142). Any
+ * other runtime failure while mapping one candidate is logged (WARN, candidate number and exception only: no body,
+ * coordinates or key) and skips it, so one broken candidate never fails the whole search.
  */
+@Slf4j
 @Component
 public class KakaoRouteMapper {
     private static final Pattern LINE = Pattern.compile("([1-8])호선");
@@ -44,13 +50,19 @@ public class KakaoRouteMapper {
         if (body == null || !"OK".equals(body.status()) || body.routes() == null) return List.of();
         RouteReference.Index index = reference.index();
         List<RouteDraft> drafts = new ArrayList<>();
-        for (KakaoRouteResponse.Route route : body.routes()) {
-            map(route, index, originStationId, destinationStationId).ifPresent(drafts::add);
+        List<KakaoRouteResponse.Route> routes = body.routes();
+        for (int i = 0; i < routes.size(); i++) {
+            try {
+                map(routes.get(i), index, originStationId, destinationStationId).ifPresent(drafts::add);
+            } catch (RuntimeException exception) {
+                log.warn("Kakao route candidate {} skipped: {}: {}", i + 1, exception.getClass().getSimpleName(), exception.getMessage());
+            }
         }
         return drafts;
     }
 
     private Optional<RouteDraft> map(KakaoRouteResponse.Route route, RouteReference.Index index, long origin, long destination) {
+        if (route == null) return Optional.empty();
         var properties = route.properties();
         if (properties == null || !"SUBWAY".equals(properties.type()) || route.steps() == null || route.steps().isEmpty()) {
             return Optional.empty();
@@ -62,11 +74,15 @@ public class KakaoRouteMapper {
         String alightedKakao = null;
         String alightedOurs = null;
         for (KakaoRouteResponse.Step step : route.steps()) {
+            if (step == null) return Optional.empty();
             var p = step.properties();
             if (p == null) return Optional.empty();
             int time = p.time() == null ? 0 : p.time();
             int distance = p.distance() == null ? 0 : p.distance();
             List<List<Double>> path = step.path() == null ? null : step.path().points();
+            if (path != null && path.stream().anyMatch(point -> point == null || point.stream().anyMatch(Objects::isNull))) {
+                return Optional.empty();
+            }
             if ("WALKING".equals(p.type())) {
                 steps.add(new StepDraft(RouteDraft.WALKING, walkingGuidance(p.guidance(), alightedKakao, alightedOurs), time, distance,
                         null, null, List.of(), path));

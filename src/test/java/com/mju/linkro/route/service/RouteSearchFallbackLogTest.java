@@ -7,6 +7,7 @@ import com.mju.linkro.route.dto.RouteSearchResponse.FareSource;
 import com.mju.linkro.route.kakao.KakaoRouteClient;
 import com.mju.linkro.route.kakao.KakaoRouteClient.Failed;
 import com.mju.linkro.route.kakao.KakaoRouteClient.Reason;
+import com.mju.linkro.route.kakao.KakaoRouteResponse;
 import com.mju.linkro.subway.api.CongestionLookup;
 import com.mju.linkro.subway.api.StationInfo;
 import com.mju.linkro.subway.api.StationLookup;
@@ -51,5 +52,43 @@ class RouteSearchFallbackLogTest {
         verifyNoInteractions(mapper);
         assertThat(output.getAll().lines().filter(line -> line.contains("Route search 31 -> 35 uses INTERNAL: " + reason)))
                 .singleElement().satisfies(line -> assertThat(line).contains(" " + level + " "));
+    }
+
+    /**
+     * #142: a Kakao body whose every candidate is broken (null route, null step, null path point, a list failing when
+     * read) is not a 500: no usable subway route, so INTERNAL, with Kakao called once.
+     */
+    @org.junit.jupiter.api.Test
+    void brokenKakaoCandidatesFallBackToInternalInsteadOfFailing(CapturedOutput output) {
+        StationLookup stations = mock(StationLookup.class);
+        when(stations.requireSupported(31)).thenReturn(new StationInfo(31, "강남", 37.49, 127.02, true));
+        when(stations.requireSupported(33)).thenReturn(new StationInfo(33, "서초", 37.49, 127.00, true));
+        RouteReference reference = mock(RouteReference.class);
+        when(reference.index()).thenReturn(RouteReference.Index.of(FirstTrainTimerTest.DATA));
+        KakaoRouteMapper mapper = new KakaoRouteMapper(reference, com.mju.linkro.subway.mock.MockFareCalculatorAccess.calculator());
+        List<KakaoRouteResponse.Stop> failing = new java.util.AbstractList<>() {
+            @Override public KakaoRouteResponse.Stop get(int index) { throw new IllegalStateException("broken stop list"); }
+            @Override public int size() { return 3; }
+        };
+        KakaoRouteResponse body = new KakaoRouteResponse("OK", java.util.Arrays.asList(
+                null,
+                KakaoRouteMapperTest.withSteps((KakaoRouteResponse.Step) null),
+                KakaoRouteMapperTest.withSteps(new KakaoRouteResponse.Step(new KakaoRouteResponse.StepProperties("WALKING", "walk", 80, 60,
+                        List.of(), List.of()), new KakaoRouteResponse.Path(java.util.Arrays.asList((List<Double>) null)))),
+                KakaoRouteMapperTest.withSteps(KakaoRouteMapperTest.subwayWithStops(failing, List.of(new KakaoRouteResponse.Vehicle("2호선"))))));
+        KakaoRouteClient kakao = mock(KakaoRouteClient.class);
+        when(kakao.search(anyDouble(), anyDouble(), anyDouble(), anyDouble())).thenReturn(new KakaoRouteClient.Found(body));
+        InternalRouteBuilder internal = mock(InternalRouteBuilder.class);
+        when(internal.build(31, 33)).thenReturn(new RouteDraft(List.of(), 600, 1450, FareSource.ESTIMATED, 0, 31, 33));
+        var service = new RouteSearchService(mock(RoomAccess.class), stations, kakao, mapper, internal,
+                mock(CongestionLookup.class), Clock.fixed(Instant.parse("2026-11-06T00:00:00Z"), ZoneOffset.UTC));
+
+        RouteSearchResponse response = service.search(UUID.randomUUID(), new RouteSearchRequest(31L, 33L, null, null));
+
+        assertThat(response.routeSource()).isEqualTo(RouteSearchResponse.RouteSource.INTERNAL);
+        verify(kakao, times(1)).search(anyDouble(), anyDouble(), anyDouble(), anyDouble());
+        verify(internal).build(31, 33);
+        assertThat(output.getAll()).contains("Route search 31 -> 33 uses INTERNAL: no usable subway route")
+                .contains("Kakao route candidate 4 skipped: IllegalStateException: broken stop list");
     }
 }
