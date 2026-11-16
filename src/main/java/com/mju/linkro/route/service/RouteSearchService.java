@@ -67,16 +67,22 @@ public class RouteSearchService {
      * Only days: {@link com.mju.linkro.subway.congestion.HolidayCalendar} does not tell which dates it covers.
      */
     private final int arriveAtMaxDays;
+    /**
+     * Safety cap on the plain search timetable routes ({@code linkro.route.max-timetable-candidates}, default 10, #153).
+     * The candidates normally stop well before it; reaching it is logged.
+     */
+    private final int maxTimetableCandidates;
 
     @Autowired
     public RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
                               InternalRouteBuilder internal, CongestionStatsRepository stats, CongestionResolver resolver,
                               Optional<TrainTimetable> timetable, Optional<TimetableClock> timetableClock,
                               Optional<TimetableRouteFinder> timetableRoutes,
-                              @Value("${linkro.route.arrive-at-max-days:365}") int arriveAtMaxDays) {
+                              @Value("${linkro.route.arrive-at-max-days:365}") int arriveAtMaxDays,
+                              @Value("${linkro.route.max-timetable-candidates:10}") int maxTimetableCandidates) {
         this(rooms, stations, kakao, mapper, internal, new DbCongestionLookup(stats, resolver), Clock.systemUTC(),
                 timetable.isPresent() && timetableClock.isPresent() ? new FirstTrainTimer(timetable.get(), timetableClock.get()) : null,
-                timetableRoutes.orElse(null), arriveAtMaxDays);
+                timetableRoutes.orElse(null), arriveAtMaxDays, maxTimetableCandidates);
     }
 
     RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
@@ -98,8 +104,17 @@ public class RouteSearchService {
     RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
                        InternalRouteBuilder internal, CongestionLookup congestion, Clock clock, FirstTrainTimer firstTrains,
                        TimetableRouteFinder timetableRoutes, int arriveAtMaxDays) {
+        this(rooms, stations, kakao, mapper, internal, congestion, clock, firstTrains, timetableRoutes, arriveAtMaxDays, 10);
+    }
+
+    RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
+                       InternalRouteBuilder internal, CongestionLookup congestion, Clock clock, FirstTrainTimer firstTrains,
+                       TimetableRouteFinder timetableRoutes, int arriveAtMaxDays, int maxTimetableCandidates) {
         if (arriveAtMaxDays <= 0) {
             throw new IllegalArgumentException("linkro.route.arrive-at-max-days must be positive");
+        }
+        if (maxTimetableCandidates <= 0) {
+            throw new IllegalArgumentException("linkro.route.max-timetable-candidates must be positive");
         }
         this.rooms = rooms;
         this.stations = stations;
@@ -111,6 +126,7 @@ public class RouteSearchService {
         this.firstTrains = firstTrains;
         this.timetableRoutes = timetableRoutes;
         this.arriveAtMaxDays = arriveAtMaxDays;
+        this.maxTimetableCandidates = maxTimetableCandidates;
     }
 
     public RouteSearchResponse search(UUID userId, RouteSearchRequest request) {
@@ -143,7 +159,7 @@ public class RouteSearchService {
                 log.info("Route search {} -> {} uses INTERNAL: timetable route from the request time{}", origin.id(), destination.id(),
                         departing.get().nextServiceDay() ? " (next service day)" : "");
                 return new RouteSearchResponse(RouteSource.INTERNAL,
-                        List.of(departingTimedRoute(departing.get(), origin.id(), destination.id(), requested, null)),
+                        plainSearchRoutes(departing.get(), origin.id(), destination.id(), requested),
                         passed, passed ? APPOINTMENT_PASSED_NOTICE : null);
             }
         }
@@ -300,6 +316,54 @@ public class RouteSearchService {
     }
 
     /**
+     * The plain search routes (#153): r1 is the route the plain search always gave ({@link #departingRoute}), then the
+     * alternatives of {@link TimetableCandidates}, searched from the same time (the start of the next service day when r1
+     * was searched again there). routeType compares arrival, transfers and fare across them. When the alternatives fail,
+     * r1 alone is returned. Kakao is not involved.
+     */
+    private List<Route> plainSearchRoutes(DepartingRoute first, long originId, long destinationId, Instant requested) {
+        List<DepartingRoute> departings = new ArrayList<>(List.of(first));
+        try {
+            Instant from = first.nextServiceDay() ? firstTrains.nextServiceDayStart(requested) : requested;
+            TimetableCandidates.Result result = TimetableCandidates.of(first.route(),
+                    avoid -> timetableRoutes.departingAt(originId, from, avoid).routeTo(destinationId), maxTimetableCandidates);
+            if (result.limitReached()) {
+                log.warn("Route search {} -> {} stopped at {} timetable routes (linkro.route.max-timetable-candidates)",
+                        originId, destinationId, maxTimetableCandidates);
+            }
+            result.routes().stream().skip(1).forEach(route -> departings.add(new DepartingRoute(route, first.nextServiceDay())));
+            log.info("Route search {} -> {}: {} timetable routes ({} repeated, {})", originId, destinationId, departings.size(),
+                    result.duplicates(), result.cut() ? "a later one cut" : "none cut");
+        } catch (RuntimeException exception) {
+            log.warn("Route search {} -> {}: timetable alternatives failed, returning the first route only", originId, destinationId,
+                    exception);
+        }
+        List<Route> routes = new ArrayList<>();
+        for (int i = 0; i < departings.size(); i++) {
+            routes.add(departingTimedRoute(departings.get(i), originId, destinationId, requested, null, "r" + (i + 1)));
+        }
+        List<String> types = timetableRouteTypes(routes);
+        List<Route> typed = new ArrayList<>();
+        for (int i = 0; i < routes.size(); i++) {
+            Route route = routes.get(i);
+            typed.add(new Route(route.routeId(), types.get(i), route.summary(), route.steps()));
+        }
+        return typed;
+    }
+
+    /**
+     * {@link #routeTypes} for timetable routes: FASTEST is the earliest arrival (they leave at different times), then
+     * FEWER_TRANSFERS and CHEAPEST; each label to the first route best for it unless that route has one already.
+     */
+    static List<String> timetableRouteTypes(List<Route> routes) {
+        String[] types = new String[routes.size()];
+        label(types, routes, Comparator.comparing(route -> OffsetDateTime.parse(route.summary().arrivalAt()).toInstant()), "FASTEST");
+        label(types, routes, Comparator.comparingInt(route -> route.summary().transferCount()), "FEWER_TRANSFERS");
+        label(types, routes, Comparator.comparingInt(route -> route.summary().fare()), "CHEAPEST");
+        return Arrays.asList(types);
+    }
+
+    /**
      * A timetable route of {@link #departingRoute} (plain search, or room appointment mode from now): the timetable route
      * of {@link #timedRoute} plus the wait from {@code requested} to leaving.
      * noService is the #120 judgement ({@link FirstTrainTimer#boardsFirstTrainAfter}) without moving any time; it is
@@ -309,13 +373,18 @@ public class RouteSearchService {
      *                    arrivesAfterAppointment compares the arrival with it. Null in plain search (always false)
      */
     private Route departingTimedRoute(DepartingRoute departing, long originId, long destinationId, Instant requested, Instant appointment) {
+        return departingTimedRoute(departing, originId, destinationId, requested, appointment, "r1");
+    }
+
+    private Route departingTimedRoute(DepartingRoute departing, long originId, long destinationId, Instant requested, Instant appointment,
+                                      String routeId) {
         TimedRoute timed = departing.route();
         Wait wait = new Wait((int) Duration.between(requested, timed.leaveAt()).toSeconds(), Wait.TIMETABLE,
                 (int) Duration.between(requested, timed.arriveAt()).toSeconds());
         RouteDraft path = internal.toDraft(timed.path(), originId, destinationId);
         boolean noService = departing.nextServiceDay() || (firstTrains != null
                 && firstTrains.boardsFirstTrainAfter(path, timed.boardAt(), timed.leaveAt(), requested));
-        return timedRoute("r1", timed, path, wait, noService, null, arrivesAfter(timed.arriveAt(), appointment));
+        return timedRoute(routeId, timed, path, wait, noService, null, arrivesAfter(timed.arriveAt(), appointment));
     }
 
     private Route timedRoute(String routeId, TimedRoute timed, long originId, long destinationId, Wait wait, boolean noService,
@@ -400,8 +469,8 @@ public class RouteSearchService {
         return Arrays.asList(types);
     }
 
-    private static void label(String[] types, List<RouteDraft> drafts, Comparator<RouteDraft> order, String type) {
-        RouteDraft best = drafts.stream().min(order).orElseThrow();
+    private static <T> void label(String[] types, List<T> drafts, Comparator<T> order, String type) {
+        T best = drafts.stream().min(order).orElseThrow();
         for (int i = 0; i < drafts.size(); i++) {
             if (order.compare(drafts.get(i), best) == 0) {
                 if (types[i] == null) types[i] = type;
