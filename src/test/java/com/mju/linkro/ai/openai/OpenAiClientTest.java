@@ -96,7 +96,7 @@ class OpenAiClientTest {
         var builder = RestClient.builder().baseUrl("https://api.openai.test");
         var configuredServer = MockRestServiceServer.bindTo(builder).build();
         RestClient restClient = builder.build();
-        var configured = new OpenAiClient(restClient, restClient, restClient, "test-dummy", "test-model", " low ");
+        var configured = new OpenAiClient(restClient, restClient, restClient, "test-dummy", "test-model", " low ", null);
         configuredServer.expect(requestTo(URL)).andExpect(jsonPath("$.reasoning.effort").value("low"))
                 .andRespond(withSuccess(ok, MediaType.APPLICATION_JSON));
         configured.readSign(image, ctx);
@@ -279,16 +279,36 @@ class OpenAiClientTest {
     }
 
     @Test
-    void chatCallsNeverSendReasoningEffortEvenWhenTheSignSettingIsSet() {
+    void chatCallsCarryTheChatReasoningEffortWhileSignReadsKeepTheirOwn() {
+        var builder = RestClient.builder().baseUrl("https://api.openai.test");
+        var configuredServer = MockRestServiceServer.bindTo(builder).build();
+        RestClient restClient = builder.build();
+        var configured = new OpenAiClient(restClient, restClient, restClient, "test-dummy", "test-model", "low", " medium ");
+        configuredServer.expect(requestTo(URL)).andExpect(jsonPath("$.reasoning.effort").value("medium"))
+                .andRespond(withSuccess(functionCall("resp_1", "call_1"), MediaType.APPLICATION_JSON));
+        configuredServer.expect(requestTo(URL)).andExpect(jsonPath("$.reasoning.effort").value("medium"))
+                .andRespond(withSuccess(response("답."), MediaType.APPLICATION_JSON));
+        configuredServer.expect(requestTo(URL)).andExpect(jsonPath("$.reasoning.effort").value("medium"))
+                .andRespond(withSuccess(response("툴 없는 답."), MediaType.APPLICATION_JSON));
+        configuredServer.expect(requestTo(URL)).andExpect(jsonPath("$.reasoning.effort").value("low"))
+                .andRespond(withSuccess("{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\","
+                        + "\"text\":\"{\\\"result\\\":\\\"RETAKE\\\",\\\"reason\\\":\\\"UNREADABLE\\\",\\\"stationName\\\":null,"
+                        + "\\\"lineName\\\":null,\\\"headsign\\\":null}\"}]}]}", MediaType.APPLICATION_JSON));
+        assertThat(configured.replyToChat(chatWith(new RecordingTools())).text()).isEqualTo("답.");
+        assertThat(configured.replyToChat(new ChatReplyRequest("안녕", List.of(), "방 정보")).text()).isEqualTo("툴 없는 답.");
+        configured.readSign(new SignImage(new byte[] {1}, "image/jpeg"), new SignContext("강남", "2호선", null, "사당 방면"));
+        configuredServer.verify();
+    }
+
+    @Test
+    void chatReasoningEffortUnsetSendsNothingAndTheSignSettingDoesNotLeakIntoChat() {
         var builder = RestClient.builder().baseUrl("https://api.openai.test");
         var chatServer = MockRestServiceServer.bindTo(builder).build();
         RestClient restClient = builder.build();
-        var signLow = new OpenAiClient(restClient, restClient, restClient, "test-dummy", "test-model", "low");
-        chatServer.expect(requestTo(URL)).andExpect(jsonPath("$.reasoning").doesNotExist())
-                .andRespond(withSuccess(functionCall("resp_1", "call_1"), MediaType.APPLICATION_JSON));
+        var signOnly = new OpenAiClient(restClient, restClient, restClient, "test-dummy", "test-model", "low", " ");
         chatServer.expect(requestTo(URL)).andExpect(jsonPath("$.reasoning").doesNotExist())
                 .andRespond(withSuccess(response("답."), MediaType.APPLICATION_JSON));
-        assertThat(signLow.replyToChat(chatWith(new RecordingTools())).text()).isEqualTo("답.");
+        signOnly.replyToChat(chatWith(new RecordingTools()));
         chatServer.verify();
     }
 

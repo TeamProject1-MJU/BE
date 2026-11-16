@@ -55,19 +55,22 @@ public class OpenAiClient implements AiClient {
     private final String model;
     /** Sent as reasoning.effort on sign reads only; null or blank sends nothing (the model's own default). */
     private final String visionReasoningEffort;
+    /** Sent as reasoning.effort on @링크로 chat calls only (#129), separate from the sign setting; null or blank sends nothing. */
+    private final String chatReasoningEffort;
 
     OpenAiClient(RestClient textClient, RestClient visionClient, String apiKey, String model) {
-        this(textClient, visionClient, textClient, apiKey, model, null);
+        this(textClient, visionClient, textClient, apiKey, model, null, null);
     }
 
     OpenAiClient(RestClient textClient, RestClient visionClient, RestClient explainClient, String apiKey, String model,
-                 String visionReasoningEffort) {
+                 String visionReasoningEffort, String chatReasoningEffort) {
         this.textClient = textClient;
         this.visionClient = visionClient;
         this.explainClient = explainClient;
         this.apiKey = apiKey;
         this.model = model;
         this.visionReasoningEffort = visionReasoningEffort == null || visionReasoningEffort.isBlank() ? null : visionReasoningEffort.strip();
+        this.chatReasoningEffort = chatReasoningEffort == null || chatReasoningEffort.isBlank() ? null : chatReasoningEffort.strip();
     }
 
     @Override
@@ -136,7 +139,7 @@ public class OpenAiClient implements AiClient {
                 throw unavailable(exception);
             }
         }
-        return text(call(textClient, CHAT_PROMPT, textInput(input.toString()), null), CHAT_MAX_LENGTH);
+        return text(call(textClient, CHAT_PROMPT, textInput(input.toString()), null, chatReasoningEffort), CHAT_MAX_LENGTH);
     }
 
     /**
@@ -162,6 +165,7 @@ public class OpenAiClient implements AiClient {
             body.put("tools", specs);
             body.put("store", false);
             body.put("include", List.of("reasoning.encrypted_content"));
+            if (chatReasoningEffort != null) body.put("reasoning", Map.of("effort", chatReasoningEffort));
             JsonNode root = parseResponse(send(textClient, body));
             List<JsonNode> calls = new ArrayList<>();
             for (JsonNode item : root.path("output")) {
