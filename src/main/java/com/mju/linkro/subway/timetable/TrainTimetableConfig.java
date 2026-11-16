@@ -15,17 +15,20 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.PropertySource;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 
 /**
  * Loads the train timetable once at startup (#94) and routes on it (#96) when {@code linkro.subway.module=graph} and
- * {@code linkro.subway.timetable.enabled} is not false.
+ * {@code linkro.subway.timetable.enabled} is not false. The transfer times of the timetable routes (#151) default to
+ * {@code subway-transfer-overrides.properties}.
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(name = "linkro.subway.module", havingValue = "graph")
 @ConditionalOnBooleanProperty(name = "linkro.subway.timetable.enabled", matchIfMissing = true)
 @EnableConfigurationProperties(TimetableProperties.class)
+@PropertySource(value = "classpath:subway-transfer-overrides.properties", encoding = "UTF-8")
 public class TrainTimetableConfig {
     static final String RESOURCE = "train-timetable.csv.gz";
 
@@ -47,6 +50,6 @@ public class TrainTimetableConfig {
     TimetableRouteFinder timetableRouteFinder(SubwayGraph graph, TrainTimetable timetable, TimetableClock clock,
                                               SubwayGraphProperties costs, TimetableProperties properties) {
         return new TimetableRouter(graph, timetable, clock, costs, properties.getStationAccessSeconds(),
-                Duration.ofMinutes(properties.getNoServiceWindowMinutes()));
+                Duration.ofMinutes(properties.getNoServiceWindowMinutes()), properties.getTransferOverrides());
     }
 }

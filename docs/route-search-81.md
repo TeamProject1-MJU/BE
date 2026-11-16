@@ -170,7 +170,7 @@ INTERNAL 경로는 다음과 같이 만든다.
   - 정차역 혼잡도는 첫 열차 출발(`boardAt`)부터 센다(추천의 `participantTimes`와 같다).
   - 요금은 `InternalRouteBuilder`의 `StationPairFare`(출발역→도착역 운임표, 없으면 거리)다. 추천 엔진과 같은 클래스·같은 입력이다.
   - 응답 변환은 `InternalRouteBuilder.toDraft(RoutePath, 출발, 도착)`를 고정 비용 경로와 같이 쓴다. RIDE는 SUBWAY 단계, TRANSFER는 WALKING 단계다.
-  - 시각표 경로의 WALKING 단계 `durationSec`은 하차부터 다음 승차까지(도보 + 승강장 대기)다. SUBWAY 단계에는 같은 열차의 정차와 같은 노선 다른 열차 대기가 들어 있다. `walkingMinutes`는 대기를 빼고 열차별 환승 도보(`TimedLeg.walkSec`) 합으로 계산한다.
+  - 시각표 경로의 WALKING 단계 `durationSec`은 하차부터 다음 승차까지(도보 + 승강장 대기)다. SUBWAY 단계에는 같은 열차의 정차와 같은 노선 다른 열차 대기가 들어 있다. `walkingMinutes`는 대기를 빼고 열차별 환승 도보(`TimedLeg.walkSec`) 합으로 계산한다. #151부터 이 환승 시간은 카카오맵 기준 역별 값(`transfer-overrides`)이라 `walkSec`·`walkingMinutes`도 그 값이다(필드 이름은 도보, 값은 카카오 환승 소요 기준. `docs/recommendation-74.md` "환승 시간 (#151)").
   - `routeSource`는 `INTERNAL`, 경로는 1개(`routeType: FASTEST`), `noService: false`, `serviceNotice: null`, `arrivesAfterAppointment: false`(약속까지 도착하는 경로만 고른다), `appointmentPassed: false`, `notice: null`.
 - **가장 늦은 출발이 이미 지났으면 (#140)**: 약속까지 도착하는 가장 늦은 출발(`leaveAt`)이 지금보다 이르면(둘 다 초 단위로 자름, 같은 초는 아직 제시간) 지금 나가서 제때 도착하는 경로는 없다. 이 경로를 버리고 경로 탐색처럼 지금 출발하는 시각표 경로(`departingAt(출발역, 지금)`, 다음 운행일 재탐색 포함)를 준다.
   - `departureAt` = 다음 열차에 맞춰 나서는 시각, `arrivalAt` = 그 경로의 도착, `arrivesAfterAppointment` = 도착과 약속 비교(이 경우 항상 `true`).
@@ -221,7 +221,7 @@ INTERNAL 경로는 다음과 같이 만든다.
   - 지도 선(`path`)이 카카오 경로 선이 아니라 역 좌표를 잇는 직선이다.
   - 요금 출처가 `ESTIMATED`(운임표)다. 카카오 `fare.value`는 쓰지 않는다.
   - 역 접근 시간은 설정값(기본 60초, #149)이다. 카카오맵 실측(창동 한 역, 분 단위)에서 고른 31~60초 범위의 근사값이고, 역마다 다르지 않다. 집에서 역까지 걷는 시간은 들어가지 않는다.
-  - 환승 도보는 우리 `station_connections` 값이라 앱과 다를 수 있다.
+  - 환승 시간은 #151부터 카카오맵 지하철 탭에서 읽은 역별 값(33쌍, 6쌍은 추정)이다. 분 단위(±30초)라 앱과 조금 다를 수 있다. 고정 비용 경로(INTERNAL 폴백)는 여전히 `station_connections` 값 + 120초다.
   - graph 운영에서는 시각표 경로가 없을 때만 카카오를 호출하므로, 카카오 키 문제(401·403)가 그때까지 드러나지 않는다.
 - **역 접근 시간 60초 (#149)**: 카카오맵은 미래 출발 시각을 설정하면 설정 시각 + 30초에 떠나는 열차는 건너뛰고 + 60초에 떠나는 열차는 탔다(평일 창동 실측, 분 단위 입력이라 31~60초 범위의 근사값). 그래서 기본값을 60초로 두어 창동에서 처음 타는 열차가 카카오맵과 같다(22:29 → 22:33:30, 22:44 → 22:51:30, 19:52 → 19:53:00, 19:53 → 19:56:30. `StationAccessPostgresTest`). 바뀌는 점:
   - `leaveAt`(`departureAt`)은 첫 열차 출발(`boardAt`) − 60초다. `totalTimeSec`은 같은 열차라도 60초 길고, 추천 `travelMinutes`는 1분 늘어난다.

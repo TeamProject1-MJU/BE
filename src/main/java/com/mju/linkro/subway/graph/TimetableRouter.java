@@ -6,6 +6,7 @@ import com.mju.linkro.subway.api.*;
 import com.mju.linkro.subway.graph.SubwayGraphData.*;
 import com.mju.linkro.subway.timetable.TimetableClock;
 import com.mju.linkro.subway.timetable.TimetableClock.ServiceTime;
+import com.mju.linkro.subway.timetable.TimetableProperties.TransferOverride;
 import com.mju.linkro.subway.timetable.TrainTimetable;
 import com.mju.linkro.subway.timetable.TrainTimetable.Departure;
 import java.time.Duration;
@@ -14,6 +15,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.*;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Time-dependent routes on the trains of {@link TrainTimetable} (#96).
@@ -21,8 +23,10 @@ import java.util.*;
  * <p>Both searches are Dijkstra over states (node, the edge used at that node). Riding an edge means taking one real
  * train of it: backwards the latest train that reaches the next stop in time ({@code lastDepartureArriving}),
  * forwards the next train ({@code nextDeparture}). The wait is whatever lies between two trains, so staying on one
- * train waits nothing and a change waits for the next train. A TRANSFER edge adds its walking time (station_connections)
- * before that wait; there is no fixed transfer wait and no dwell setting. Changing trains on the same platform is free,
+ * train waits nothing and a change waits for the next train. A TRANSFER edge adds its time before that wait: the seed's
+ * walking seconds (station_connections), or the {@code transfer-overrides} seconds for the pairs listed there (#151,
+ * 카카오맵 transfer times; timetable routes only, the graph and its distances stay). There is no fixed transfer wait and
+ * no dwell setting. Changing trains on the same platform is free,
  * except at a branch junction (#56) where {@link BranchRules} needs a change: there the walk of the junction's
  * {@code branch-transfers} setting is added. Times are seconds of the service day ({@link TimetableClock}), so trains
  * after midnight keep counting past 86400.
@@ -31,6 +35,7 @@ import java.util.*;
  * never a real route, and it would dodge the junction change walk. Only junction nodes keep one state per edge; at
  * other nodes the best state dominates, because the next train only depends on the time.
  */
+@Slf4j
 public class TimetableRouter implements TimetableRouteFinder {
     private static final ZoneId ZONE = ZoneId.of("Asia/Seoul");
 
@@ -54,12 +59,21 @@ public class TimetableRouter implements TimetableRouteFinder {
     /** day type ordinal -> edge -> rides, null when no train runs it. */
     private final TrainTimetable.Rides[][] rides;
 
-    /**
-     * @param accessSeconds   from leaving to standing on the first platform, added before the first train
-     * @param noServiceWindow how long before an appointment some train must arrive for the subway to count as running
-     */
+    /** Without transfer overrides: every TRANSFER edge keeps its seed seconds. */
     public TimetableRouter(SubwayGraph graph, TrainTimetable timetable, TimetableClock clock, SubwayGraphProperties costs,
                            int accessSeconds, Duration noServiceWindow) {
+        this(graph, timetable, clock, costs, accessSeconds, noServiceWindow, List.of());
+    }
+
+    /**
+     * @param accessSeconds     from leaving to standing on the first platform, added before the first train
+     * @param noServiceWindow   how long before an appointment some train must arrive for the subway to count as running
+     * @param transferOverrides seconds replacing the TRANSFER edges of these pairs, both directions (#151)
+     * @throws IllegalArgumentException when an override does not match one transfer of the graph, repeats a pair, or is
+     *         negative ({@link #overrideTransfers})
+     */
+    public TimetableRouter(SubwayGraph graph, TrainTimetable timetable, TimetableClock clock, SubwayGraphProperties costs,
+                           int accessSeconds, Duration noServiceWindow, List<TransferOverride> transferOverrides) {
         if (accessSeconds < 0) throw new IllegalArgumentException("station access seconds must not be negative");
         if (noServiceWindow == null || noServiceWindow.isNegative() || noServiceWindow.isZero()) {
             throw new IllegalArgumentException("linkro.subway.timetable.no-service-window-minutes must be positive");
@@ -90,6 +104,7 @@ public class TimetableRouter implements TimetableRouteFinder {
             junctionNode[n] = graph.junction(nodeIds[n]) != null;
         }
         edges = allEdges.toArray(new Edge[0]);
+        overrideTransfers(graph, edges, transferOverrides);
         edgeFrom = new int[edges.length];
         edgeTo = new int[edges.length];
         List<List<Integer>> in = new ArrayList<>();
@@ -112,6 +127,77 @@ public class TimetableRouter implements TimetableRouteFinder {
                 if (edges[e].type() == StepType.RIDE) rides[day.ordinal()][e] = timetable.rides(edges[e].id(), day);
             }
         }
+    }
+
+    private static final String OVERRIDES = "linkro.subway.timetable.transfer-overrides";
+
+    /**
+     * Replaces the seconds of the TRANSFER edges named by {@code overrides} in {@code edges}, both directions; the
+     * distance stays. Each entry must name one station by its stored name, two different lines stopping there and joined
+     * by TRANSFER edges both ways, and non-negative seconds; a pair (in either line order) may appear once.
+     */
+    private static void overrideTransfers(SubwayGraph graph, Edge[] edges, List<TransferOverride> overrides) {
+        if (overrides.isEmpty()) return;
+        Map<List<Long>, Integer> transferIndex = new HashMap<>();
+        for (int e = 0; e < edges.length; e++) {
+            if (edges[e].type() == StepType.TRANSFER) transferIndex.put(List.of(edges[e].fromNodeId(), edges[e].toNodeId()), e);
+        }
+        Map<List<Long>, Integer> seen = new HashMap<>();
+        Map<Integer, Integer> seconds = new HashMap<>();
+        for (int i = 0; i < overrides.size(); i++) {
+            TransferOverride entry = overrides.get(i);
+            String at = OVERRIDES + "[" + i + "] (" + entry + ")";
+            if (blank(entry.getStation()) || blank(entry.getFromLine()) || blank(entry.getToLine())) {
+                throw new IllegalArgumentException(at + ": station, from-line and to-line are required");
+            }
+            if (entry.getSeconds() < 0) throw new IllegalArgumentException(at + ": seconds must not be negative");
+            if (entry.getFromLine().equals(entry.getToLine())) throw new IllegalArgumentException(at + ": the two lines are the same");
+            List<Station> named = graph.stations().stream().filter(station -> station.name().equals(entry.getStation())).toList();
+            if (named.isEmpty()) throw new IllegalArgumentException(at + ": no station named " + entry.getStation());
+            if (named.size() > 1) throw new IllegalArgumentException(at + ": " + named.size() + " stations named " + entry.getStation());
+            long stationId = named.get(0).id();
+            long from = nodeOn(graph, stationId, entry.getFromLine(), at);
+            long to = nodeOn(graph, stationId, entry.getToLine(), at);
+            Integer there = transferIndex.get(List.of(from, to));
+            Integer back = transferIndex.get(List.of(to, from));
+            if (there == null || back == null) {
+                throw new IllegalArgumentException(at + ": no TRANSFER edges both ways between lines " + entry.getFromLine()
+                        + " and " + entry.getToLine() + " at " + entry.getStation());
+            }
+            Integer earlier = seen.putIfAbsent(List.of(Math.min(from, to), Math.max(from, to)), i);
+            if (earlier != null) throw new IllegalArgumentException(at + ": the same pair as " + OVERRIDES + "[" + earlier + "]");
+            seconds.put(there, entry.getSeconds());
+            seconds.put(back, entry.getSeconds());
+        }
+        int changed = 0;
+        for (Map.Entry<Integer, Integer> override : seconds.entrySet()) {
+            Edge edge = edges[override.getKey()];
+            if (edge.seconds() != override.getValue()) changed++;
+            edges[override.getKey()] = new Edge(edge.id(), edge.fromNodeId(), edge.toNodeId(), edge.type(), edge.direction(),
+                    override.getValue(), edge.meters());
+        }
+        log.info("Timetable transfer overrides: {} pairs, {} directed TRANSFER edges ({} changed from the seed)",
+                overrides.size(), seconds.size(), changed);
+    }
+
+    private static long nodeOn(SubwayGraph graph, long stationId, String lineCode, String at) {
+        return graph.nodesOf(stationId).stream().filter(node -> graph.line(node.lineId()).code().equals(lineCode))
+                .map(Node::id).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(at + ": line " + lineCode + " does not stop there"));
+    }
+
+    private static boolean blank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    /** Seconds of a TRANSFER or RIDE edge as the searches use them (overrides applied), for tests. */
+    int edgeSeconds(long edgeId) {
+        return Arrays.stream(edges).filter(edge -> edge.id() == edgeId).findFirst().orElseThrow().seconds();
+    }
+
+    /** Distance of an edge as the routes report it, for tests. */
+    int edgeMeters(long edgeId) {
+        return Arrays.stream(edges).filter(edge -> edge.id() == edgeId).findFirst().orElseThrow().meters();
     }
 
     @Override

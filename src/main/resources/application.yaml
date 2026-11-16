@@ -78,6 +78,9 @@ logging:
 #   timetable.station-access-seconds (default 60, #149): time from leaving to the first platform; the first train leaves at
 #   least this long after the departure time. Approximation from 카카오맵 measurements. See docs/recommendation-74.md.
 #   timetable.no-service-window-minutes (default 60): no train arriving this long before the appointment -> NO_SERVICE_TIME.
+#   timetable.transfer-overrides[i].station/from-line/to-line/seconds (#151): transfer seconds of the timetable routes per
+#   station and line pair, both directions; defaults in subway-transfer-overrides.properties (카카오맵 values). Pairs not
+#   listed keep station_connections; the fixed-cost graph never uses them. Checked at startup. See docs/recommendation-74.md.
 # - Recommendation fares come from fare-table.csv.gz (Seoul Metro fare table by station pair, adult transit card, #109)
 #   when module=graph; without it or for a missing pair, from the ridden distance. See docs/recommendation-74.md.
 # - graph.* and fare.* apply only with module=graph; defaults are in subway-graph-defaults.properties
