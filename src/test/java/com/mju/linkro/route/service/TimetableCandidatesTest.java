@@ -53,7 +53,9 @@ class TimetableCandidatesTest {
 
         TimetableCandidates.Result result = TimetableCandidates.of(first, search, 10);
 
-        assertThat(result.routes()).containsExactly(first, sadang, ddp, twoChanges);
+        // twoChanges (2 transfers, 36) is removed: ddp arrives as early with 1 transfer.
+        assertThat(result.routes()).containsExactly(first, sadang, ddp);
+        assertThat(result.removed()).isEqualTo(1);
         assertThat(result.limitReached()).isFalse();
         assertThat(result.cut()).isFalse();
         assertThat(result.duplicates()).isZero();
@@ -139,6 +141,72 @@ class TimetableCandidatesTest {
         Scripted search = new Scripted(Map.of(Set.of(10L), direct));
         assertThat(TimetableCandidates.of(first, search, 10).routes()).containsExactly(first, direct);
         assertThat(search.calls()).hasSize(1);
+    }
+
+    /** first, then each alternative found once (blocked sets grow by one station each). */
+    static TimetableCandidates.Result chain(TimedRoute first, TimedRoute... alternatives) {
+        Map<Set<Long>, TimedRoute> answers = new HashMap<>();
+        Set<Long> blocked = new HashSet<>(TimetableCandidates.transferStations(first));
+        for (TimedRoute alternative : alternatives) {
+            answers.put(Set.copyOf(blocked), alternative);
+            blocked.addAll(TimetableCandidates.transferStations(alternative));
+        }
+        return TimetableCandidates.of(first, new Scripted(answers), 10);
+    }
+
+    @Test
+    void asManyTransfersAndALaterArrivalStays() {
+        TimedRoute first = route(30, List.of(4L, 3L, 2L), 10L, 11L);
+        TimedRoute sadang = route(30, List.of(4L, 2L), 12L);
+        TimedRoute ddp = route(33, List.of(4L, 2L), 13L);
+        // ddp has as many transfers as sadang and arrives later: no general Pareto filter, it stays.
+        TimetableCandidates.Result result = chain(first, sadang, ddp);
+        assertThat(result.routes()).containsExactly(first, sadang, ddp);
+        assertThat(result.removed()).isZero();
+    }
+
+    @Test
+    void moreTransfersAndTheSameArrivalAreRemoved() {
+        TimedRoute first = route(30, List.of(4L, 2L), 10L);
+        TimedRoute more = route(30, List.of(4L, 7L, 2L), 11L, 12L);
+        TimetableCandidates.Result result = chain(first, more);
+        assertThat(result.routes()).containsExactly(first);
+        assertThat(result.removed()).isEqualTo(1);
+    }
+
+    @Test
+    void moreTransfersButAnEarlierArrivalStay() {
+        TimedRoute first = route(30, List.of(4L, 2L), 10L);
+        TimedRoute faster = route(29, List.of(4L, 7L, 2L), 11L, 12L);
+        assertThat(chain(first, faster).routes()).containsExactly(first, faster);
+    }
+
+    @Test
+    void anotherAlternativeRemovesARouteToo() {
+        TimedRoute first = route(30, List.of(4L, 3L, 2L), 10L, 11L);
+        TimedRoute one = route(35, List.of(4L, 2L), 12L);
+        TimedRoute two = route(36, List.of(4L, 7L, 2L), 13L, 14L);
+        TimetableCandidates.Result result = chain(first, one, two);
+        // two has as many transfers as the first route but more than one, which arrives earlier.
+        assertThat(result.routes()).containsExactly(first, one);
+        assertThat(result.removed()).isEqualTo(1);
+    }
+
+    @Test
+    void theFirstRouteIsNeverRemovedButCountsAsAComparison() {
+        // The first route has more transfers than sadang and arrives no earlier: it stays first anyway.
+        TimedRoute first = route(30, List.of(4L, 3L, 2L), 10L, 11L);
+        TimedRoute sadang = route(30, List.of(4L, 2L), 12L);
+        TimetableCandidates.Result kept = chain(first, sadang);
+        assertThat(kept.routes()).containsExactly(first, sadang);
+        assertThat(kept.removed()).isZero();
+
+        // As a comparison it removes an alternative with more transfers that arrives later.
+        TimedRoute oneTransfer = route(30, List.of(4L, 2L), 10L);
+        TimedRoute twoLater = route(31, List.of(4L, 7L, 2L), 11L, 12L);
+        TimetableCandidates.Result removed = chain(oneTransfer, twoLater);
+        assertThat(removed.routes()).containsExactly(oneTransfer);
+        assertThat(removed.removed()).isEqualTo(1);
     }
 
     @Test

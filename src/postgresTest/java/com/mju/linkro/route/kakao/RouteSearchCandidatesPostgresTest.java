@@ -22,7 +22,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Plain search alternatives (#153) on the migrated database and the bundled timetable with the default settings (station
  * access 60 s, transfer overrides #151): 창동 -> 강남. r1 is the route the plain search always gave (4호선 -> 3호선 -> 2호선
- * changing at 충무로 and 교대); the others avoid the transfer stations of the routes before them. Kakao is never called.
+ * changing at 충무로 and 교대); the others avoid the transfer stations of the routes before them, and a route with more
+ * transfers than another and no earlier arrival is removed. Kakao is never called.
  */
 @Testcontainers
 @ExtendWith(OutputCaptureExtension.class)
@@ -68,34 +69,34 @@ class RouteSearchCandidatesPostgresTest extends RouteSearchPostgresSupport {
 
     @Test void mondayNightGivesTheFirstRouteAndItsAlternatives(CapturedOutput output) throws Exception {
         JsonNode data = search("2026-11-16T22:30:00+09:00");
-        // r1 as before (the recommendation's route); then by arrival and transfers. The fifth search (서울역·시청,
-        // 00:00) is more than 15 minutes after r1 and is cut.
+        // r1 as before (the recommendation's route); then by arrival and transfers. 동대문역사문화공원 (1 transfer) stays
+        // although 사당 has as many and arrives earlier. Removed for more transfers without an earlier arrival:
+        // 노원·건대입구 (2, 23:36) and 동대문·신설동·성수 (3, 23:46:30). The search after them (서울역·시청, 00:00) is
+        // more than 15 minutes after r1 and is cut.
         assertThat(routes(data)).containsExactly(
                 "23:33:30 2 충무로,교대",
                 "23:33:30 1 사당",
-                "23:36 1 동대문역사문화공원",
-                "23:36 2 노원,건대입구",
-                "23:46:30 3 동대문,신설동,성수");
+                "23:36 1 동대문역사문화공원");
         assertThat(data.get("routes")).extracting(route -> route.get("routeType").isNull() ? null : route.get("routeType").asString())
-                .containsExactly("FASTEST", "FEWER_TRANSFERS", null, null, null);
+                .containsExactly("FASTEST", "FEWER_TRANSFERS", null);
         // Every route has its own wait and arrival from the request time.
         for (JsonNode route : data.get("routes")) {
             JsonNode summary = route.get("summary");
             assertThat(summary.get("waitKind").asString()).isEqualTo("TIMETABLE");
             assertThat(summary.get("totalWithWaitSec").asInt()).isEqualTo(summary.get("waitSec").asInt() + summary.get("totalTimeSec").asInt());
         }
-        assertThat(output.getAll()).contains("5 timetable routes (0 repeated, a later one cut)")
+        assertThat(output.getAll()).contains("3 timetable routes (0 repeated, a later one cut)")
                 .doesNotContain("max-timetable-candidates");
         server.verify();
     }
 
-    @Test void saturdayNightHasFourRoutes() throws Exception {
+    @Test void saturdayNightHasThreeRoutes() throws Exception {
         JsonNode data = search("2026-11-14T22:30:00+09:00");
+        // 노원·건대입구 (2 transfers, 23:44:30) is removed: 동대문역사문화공원 arrives as early with 1.
         assertThat(routes(data)).containsExactly(
                 "23:38 2 충무로,교대",
                 "23:38 1 사당",
-                "23:44:30 1 동대문역사문화공원",
-                "23:44:30 2 노원,건대입구");
+                "23:44:30 1 동대문역사문화공원");
         server.verify();
     }
 

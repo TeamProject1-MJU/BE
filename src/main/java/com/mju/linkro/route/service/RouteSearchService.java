@@ -332,6 +332,8 @@ public class RouteSearchService {
                         originId, destinationId, maxTimetableCandidates);
             }
             result.routes().stream().skip(1).forEach(route -> departings.add(new DepartingRoute(route, first.nextServiceDay())));
+            log.debug("Route search {} -> {}: {} timetable routes removed (more transfers, no earlier arrival)", originId, destinationId,
+                    result.removed());
             log.info("Route search {} -> {}: {} timetable routes ({} repeated, {})", originId, destinationId, departings.size(),
                     result.duplicates(), result.cut() ? "a later one cut" : "none cut");
         } catch (RuntimeException exception) {

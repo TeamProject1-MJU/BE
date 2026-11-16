@@ -19,6 +19,10 @@ import java.util.*;
  *       routes when one more would be added ({@link Result#limitReached}).</li>
  *   <li>Two routes are the same when they have the same line sequence and the same set of transfer stations; a change of
  *       trains on the same line (성수) is not in the line sequence. A repeated route is left out.</li>
+ *   <li>A route other than the first is removed when another route (the first included) has fewer transfers and
+ *       arrives no later. Only more transfers remove a route: of two routes with as many transfers, the later one stays
+ *       (no general Pareto filter). The first route is never removed. This runs after the search, so the removed
+ *       routes still blocked their transfer stations and counted towards {@code max}.</li>
  *   <li>After the first route, routes are ordered by arrival, then transfers.</li>
  * </ul>
  */
@@ -37,8 +41,9 @@ final class TimetableCandidates {
      * @param limitReached one more route would have been added past {@code max}
      * @param duplicates   routes left out as repeats
      * @param cut          a route was left out for arriving too late (and the search stopped)
+     * @param removed      routes removed for more transfers without an earlier arrival
      */
-    record Result(List<TimedRoute> routes, boolean limitReached, int duplicates, boolean cut) {}
+    record Result(List<TimedRoute> routes, boolean limitReached, int duplicates, boolean cut, int removed) {}
 
     private TimetableCandidates() {}
 
@@ -70,11 +75,20 @@ final class TimetableCandidates {
             }
             if (!grew) break;
         }
-        List<TimedRoute> others = new ArrayList<>(found.subList(1, found.size()));
+        List<TimedRoute> others = new ArrayList<>();
+        for (TimedRoute route : found.subList(1, found.size())) {
+            if (found.stream().noneMatch(other -> fewerTransfersNoLater(other, route))) others.add(route);
+        }
+        int removed = found.size() - 1 - others.size();
         others.sort(Comparator.comparing(TimedRoute::arriveAt).thenComparingInt(route -> route.path().transferCount()));
         List<TimedRoute> ordered = new ArrayList<>(List.of(first));
         ordered.addAll(others);
-        return new Result(List.copyOf(ordered), limitReached, duplicates, cut);
+        return new Result(List.copyOf(ordered), limitReached, duplicates, cut, removed);
+    }
+
+    /** {@code other} needs fewer transfers than {@code route} and arrives no later. */
+    static boolean fewerTransfersNoLater(TimedRoute other, TimedRoute route) {
+        return other.path().transferCount() < route.path().transferCount() && !other.arriveAt().isAfter(route.arriveAt());
     }
 
     /** Stations of the TRANSFER steps (walks between lines and branch changes). */
