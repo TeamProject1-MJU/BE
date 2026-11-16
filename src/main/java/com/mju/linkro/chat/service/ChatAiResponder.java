@@ -12,7 +12,9 @@ import org.springframework.stereotype.Component;
 
 /**
  * Answers one @링크로 question (API 10.1): AI reply as an AI message, or a SYSTEM notice when the AI fails. The
- * asker's USER message is already committed when this runs, so no failure here can lose it. Never throws.
+ * asker's USER message is already committed when this runs, so no failure here can lose it. Never throws. The AI may
+ * call the read-only tools of {@link ChatTools} for this room and asker (#129); too many rounds or an AI failure is the
+ * same SYSTEM notice as any other AI failure.
  */
 @Slf4j
 @Component
@@ -24,10 +26,11 @@ class ChatAiResponder {
     private final AiClient ai;
     private final ChatRoomContext context;
     private final ChatMessageWriter writer;
+    private final ChatTools tools;
 
     void reply(UUID roomId, Message question) {
         try {
-            GeneratedText answer = ai.replyToChat(context.build(roomId, question));
+            GeneratedText answer = ai.replyToChat(context.build(roomId, question).withTools(tools.forAsker(roomId, question.senderId())));
             if (answer == null || answer.text() == null || answer.text().isBlank()) {
                 throw new BusinessException(ErrorCode.AI_UNAVAILABLE);
             }

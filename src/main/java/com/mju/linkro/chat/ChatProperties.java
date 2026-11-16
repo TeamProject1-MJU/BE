@@ -28,4 +28,6 @@ public class ChatProperties {
     private Duration aiShutdownWait = Duration.ofSeconds(15);
     /** At startup, questions from this long ago that nobody answered get the failure notice. Zero turns the sweep off. */
     private Duration answerSweepWindow = Duration.ofMinutes(10);
+    /** One read-only tool call of an @링크로 answer (#129) may take this long; past it the tool returns NO_DATA. */
+    private Duration aiToolTimeout = Duration.ofSeconds(8);
 }

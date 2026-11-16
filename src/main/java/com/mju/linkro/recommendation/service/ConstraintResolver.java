@@ -111,17 +111,23 @@ public class ConstraintResolver {
         return names.stream().filter(text::contains).sorted().toList();
     }
 
-    /** One station for the name (a trailing 역 is ignored), or null when unknown or shared by several stations. */
-    private static Long stationId(Map<String, List<Long>> stationIds, String name) {
+    /** The supported stations with this name (a trailing 역 is ignored): none, one, or several when the name is shared. */
+    public static List<Long> stationIds(Map<String, List<Long>> stationIds, String name) {
         if (name == null) {
-            return null;
+            return List.of();
         }
         String trimmed = name.strip();
         List<Long> ids = stationIds.get(trimmed);
         if (ids == null && trimmed.length() > 1 && trimmed.endsWith("역")) {
             ids = stationIds.get(trimmed.substring(0, trimmed.length() - 1));
         }
-        return ids != null && ids.size() == 1 ? ids.get(0) : null;
+        return ids == null ? List.of() : ids;
+    }
+
+    /** One station for the name, or null when unknown or shared by several stations. */
+    private static Long stationId(Map<String, List<Long>> stationIds, String name) {
+        List<Long> ids = stationIds(stationIds, name);
+        return ids.size() == 1 ? ids.get(0) : null;
     }
 
     /** The one member with this nickname, or null when nobody or several have it. */
