@@ -171,7 +171,7 @@ class ChatToolCallingFlowTest extends ChatToolsTestBase {
         when(routes.search(any(), any())).thenReturn(new RouteSearchResponse(RouteSearchResponse.RouteSource.INTERNAL,
                 List.of(new RouteSearchResponse.Route("r1", "FASTEST", summary, List.of())), false, null));
         assertThat(answer("get_route", DEST)).contains("\"routeSource\":\"INTERNAL\"").contains("\"fareSource\":\"ESTIMATED\"")
-                .contains("\"totalMinutes\":31");
+                .contains("\"travelMinutes\":31");
 
         assertCode(answer("get_route", "{\"destinationStation\":\"없는역\"}"), "STATION_NOT_FOUND");
         assertCode(answer("get_route", "{\"originStation\":\"서울\",\"destinationStation\":\"사당\"}"), "STATION_AMBIGUOUS");

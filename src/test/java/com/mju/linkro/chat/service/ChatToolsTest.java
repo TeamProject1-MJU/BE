@@ -79,12 +79,14 @@ class ChatToolsTest extends ChatToolsTestBase {
     void passedAndLateFlagsAreExplainedInTheToolDescriptionsAndThePrompt() throws Exception {
         var byName = toolbox.specs().stream().collect(java.util.stream.Collectors.toMap(ChatToolSpec::name, ChatToolSpec::description));
         assertThat(byName.get("get_departure_plan")).contains("leaveAtPassed", "get_route");
-        assertThat(byName.get("get_route")).contains("arrivesAfterAppointment", "appointmentPassed");
+        assertThat(byName.get("get_route")).contains("arrivesAfterAppointment", "appointmentPassed", "travelMinutes", "waitMinutes", "totalWithWaitMinutes");
+        assertThat(byName.get("get_latest_recommendation")).contains("leaveAtPassed", "boardAtPassed", "get_route");
         String prompt;
         try (var in = getClass().getClassLoader().getResourceAsStream("ai/prompt/chat.txt")) {
             prompt = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
         }
-        assertThat(prompt).contains("leaveAtPassed", "arrivesAfterAppointment", "appointmentPassed", "get_route");
+        assertThat(prompt).contains("leaveAtPassed", "arrivesAfterAppointment", "appointmentPassed", "get_route", "boardAtPassed",
+                "totalWithWaitMinutes", "waitMinutes", "travelMinutes");
     }
 
     // ---- room and user are fixed ----
@@ -167,6 +169,33 @@ class ChatToolsTest extends ChatToolsTestBase {
         assertThat(member.get("firstTrain").get("boardAt").asString()).isEqualTo("2026-11-17T18:24:00+09:00");
         assertThat(member.get("arriveAt").asString()).isEqualTo("2026-11-17T18:55:00+09:00");
         assertThat(member.get("slackMinutes").asInt()).isEqualTo(5);
+    }
+
+    @Test
+    void onlyTheClockMakesAStoredRecommendationsTimesPassedAndItStaysNotStale() {
+        when(recommendations.latest(asker, roomId)).thenReturn(run(false, List.of(timeResult())));
+        // leave 18:20 KST = 09:20Z, board 18:24 KST = 09:24Z; NOW is 10:00 KST
+        JsonNode early = run("get_latest_recommendation", "{}");
+        assertThat(early.get("departuresPassed").asBoolean()).isFalse();
+        assertThat(early.get("results").get(0).get("members").get(0).get("leaveAtPassed").asBoolean()).isFalse();
+        assertThat(early.get("results").get(0).get("members").get(0).get("boardAtPassed").asBoolean()).isFalse();
+
+        // same data, clock between leave and board: only the leave time is passed
+        assertRecommendationAt(Instant.parse("2026-11-17T09:22:00Z"), true, false);
+        // clock after both
+        assertRecommendationAt(Instant.parse("2026-11-17T09:30:00Z"), true, true);
+    }
+
+    private void assertRecommendationAt(Instant at, boolean leavePassed, boolean boardPassed) {
+        var later = new ChatTools(access, roomReads, recommendationRepository, recommendations, routes, finder, congestion,
+                stationQuery, JSON, executor, properties, java.time.Clock.fixed(at, java.time.ZoneOffset.UTC)).forAsker(roomId, asker);
+        JsonNode result = JSON.readTree(later.run("get_latest_recommendation", "{}"));
+        JsonNode member = result.get("results").get(0).get("members").get(0);
+        assertThat(result.get("ok").asBoolean()).isTrue();
+        assertThat(result.get("isStale").asBoolean()).isFalse();
+        assertThat(result.get("departuresPassed").asBoolean()).isTrue();
+        assertThat(member.get("leaveAtPassed").asBoolean()).isEqualTo(leavePassed);
+        assertThat(member.get("boardAtPassed").asBoolean()).isEqualTo(boardPassed);
     }
 
     @Test
@@ -284,12 +313,27 @@ class ChatToolsTest extends ChatToolsTestBase {
         assertThat(result.get("fareSource").asString()).isEqualTo("ESTIMATED");
         assertThat(result.get("fare").asInt()).isEqualTo(1650);
         assertThat(result.get("totalTimeSec").asInt()).isEqualTo(1860);
-        assertThat(result.get("totalMinutes").asInt()).isEqualTo(31);
+        assertThat(result.get("travelMinutes").asInt()).isEqualTo(31);
+        assertThat(result.has("waitMinutes")).isFalse();
+        assertThat(result.has("totalWithWaitMinutes")).isFalse();
         assertThat(result.get("transferCount").asInt()).isEqualTo(1);
         assertThat(result.get("originStation").asString()).isEqualTo("사당");
         assertThat(result.get("steps").get(0).get("line").asString()).isEqualTo("2호선");
         assertThat(result.get("steps").get(0).get("from").asString()).isEqualTo("사당");
         assertThat(result.get("steps").get(0).get("to").asString()).isEqualTo("종로3가");
+    }
+
+    @Test
+    void routeGivesRideWaitAndTotalWithWaitMinutesSeparatelyLikeTheRouteApi() {
+        var summary = new RouteSearchResponse.Summary(1860, "2026-11-17T19:01:00+09:00", 1650, RouteSearchResponse.FareSource.ESTIMATED, 1, 3,
+                null, "2026-11-17T18:30:00+09:00", false, null, false, 190, "TIMETABLE", 2050, null);
+        when(routes.search(any(), any())).thenReturn(new RouteSearchResponse(RouteSearchResponse.RouteSource.INTERNAL,
+                List.of(new RouteSearchResponse.Route("r1", "FASTEST", summary, List.of())), false, null));
+        JsonNode result = run("get_route", "{\"destinationStation\":\"종로3가\"}");
+        assertThat(result.get("travelMinutes").asInt()).isEqualTo(31);       // 1860 sec
+        assertThat(result.get("waitMinutes").asInt()).isEqualTo(4);          // 190 sec, rounded up like the other minutes
+        assertThat(result.get("totalWithWaitMinutes").asInt()).isEqualTo(35); // 2050 sec
+        assertThat(result.get("totalTimeSec").asInt()).isEqualTo(1860);
     }
 
     @Test

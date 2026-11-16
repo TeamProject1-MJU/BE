@@ -59,6 +59,7 @@ abstract class ChatToolsTestBase {
     StationQueryService stationQuery = mock(StationQueryService.class);
     ChatProperties properties = new ChatProperties();
     ThreadPoolExecutor executor = new ThreadPoolExecutor(0, 4, 5, TimeUnit.SECONDS, new SynchronousQueue<>());
+    ObjectProvider<TimetableRouteFinder> finder;
     ChatTools tools;
     ChatToolbox toolbox;
 
@@ -81,7 +82,7 @@ abstract class ChatToolsTestBase {
                 "사당", List.of(1L), "강남", List.of(2L), "종로3가", List.of(3L), "서울", List.of(10L, 11L)));
         when(stationQuery.search(any(), any(), any(), anyInt(), anyInt())).thenReturn(new StationResponses.StationPage(List.of(), 0, 50, 0));
         when(timetable.covers(any())).thenReturn(true);
-        ObjectProvider<TimetableRouteFinder> finder = mock(ObjectProvider.class);
+        finder = mock(ObjectProvider.class);
         when(finder.getIfAvailable()).thenReturn(timetable);
         tools = new ChatTools(access, roomReads, recommendationRepository, recommendations, routes, finder, congestion,
                 stationQuery, JSON, executor, properties, Clock.fixed(NOW, ZoneOffset.UTC));

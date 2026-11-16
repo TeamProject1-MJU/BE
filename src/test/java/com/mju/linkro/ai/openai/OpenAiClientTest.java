@@ -358,6 +358,26 @@ class OpenAiClientTest {
     }
 
     @Test
+    void noReasoningRetryIsSentWhenTheTotalLimitPassedWhileTheRejectedRequestWasRunning() {
+        var builder = RestClient.builder().baseUrl("https://api.openai.test");
+        var chatServer = MockRestServiceServer.bindTo(builder).build();
+        var medium = chatMedium(builder.build());
+        medium.chatTotalLimit(java.time.Duration.ofMillis(50));
+        // the rejected request itself takes longer than the whole limit; only this one request is expected
+        chatServer.expect(requestTo(URL)).andRespond(request -> {
+            try {
+                Thread.sleep(150);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return withStatus(HttpStatus.BAD_REQUEST).contentType(MediaType.APPLICATION_JSON).body(REASONING_UNSUPPORTED).createResponse(request);
+        });
+        assertThatThrownBy(() -> medium.replyToChat(chatWith(new RecordingTools()))).isInstanceOfSatisfying(BusinessException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.AI_UNAVAILABLE));
+        chatServer.verify();
+    }
+
+    @Test
     void aBadRequestThatIsNotAboutReasoningIsNotRetried() {
         var builder = RestClient.builder().baseUrl("https://api.openai.test");
         var chatServer = MockRestServiceServer.bindTo(builder).build();

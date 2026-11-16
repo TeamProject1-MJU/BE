@@ -35,8 +35,8 @@ public class OpenAiProperties {
      * (docker-compose passes an unset variable as empty) keeps "low"; use "none" to ask for no reasoning.
      */
     private String visionReasoningEffort = "low";
-    /** @링크로 chat and tool calling only (#129, OPENAI_CHAT_REASONING_EFFORT); same rules as the sign setting, default "medium". */
-    private String chatReasoningEffort = "medium";
+    /** @링크로 chat and tool calling only (#129, OPENAI_CHAT_REASONING_EFFORT); same rules as the sign setting, default "low". */
+    private String chatReasoningEffort = "low";
     /** explainRecommendation only (#99): past it the recommendation uses template sentences. */
     @NotNull
     private Duration explainReadTimeout = Duration.ofSeconds(6);

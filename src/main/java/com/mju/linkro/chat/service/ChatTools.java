@@ -229,13 +229,20 @@ public class ChatTools {
                 throw new Fail("STALE", "추천 이후 약속·멤버가 바뀌었어요. 다시 추천받아야 해요. 이유: " + run.staleReasons());
             }
             if (run.results().isEmpty()) throw new Fail("NO_RECOMMENDATION", "최근 추천에 조건에 맞는 중간역이 없었어요.");
+            // Not being stale does not make the stored times current: they are flagged against the clock, like get_departure_plan.
+            Instant now = clock.instant();
+            boolean anyPassed = false;
             List<Object> results = new ArrayList<>();
             for (RecommendationResponse.Result result : run.results()) {
                 List<Object> members = new ArrayList<>();
                 for (RecommendationResponse.ParticipantTime time : result.participantTimes()) {
                     var train = time.boardingTrain();
+                    boolean leaveAtPassed = passed(time.departureAt(), now);
+                    boolean boardAtPassed = train != null && passed(train.departureAt(), now);
+                    anyPassed |= leaveAtPassed || boardAtPassed;
                     members.add(map("nickname", time.nickname(), "departureStation", time.departureStation().name(),
-                            "leaveAt", time.departureAt(), "arriveAt", time.arriveAt(),
+                            "leaveAt", time.departureAt(), "leaveAtPassed", leaveAtPassed, "boardAtPassed", boardAtPassed,
+                            "arriveAt", time.arriveAt(),
                             "firstTrain", train == null ? null : map("line", train.lineName(), "station", train.stationName(),
                                     "direction", train.direction(), "terminal", train.terminal(), "boardAt", train.departureAt()),
                             "slackMinutes", time.slackSeconds() == null ? null : Math.max(0, time.slackSeconds()) / 60,
@@ -246,7 +253,7 @@ public class ChatTools {
                         "averageMinutes", metrics.averageMinutes(), "maxMinutes", metrics.maxMinutes(),
                         "averageFare", metrics.averageFare(), "totalTransfers", metrics.totalTransfers(), "members", members));
             }
-            return ok("isStale", false, "createdAt", run.createdAt(), "results", results);
+            return ok("isStale", false, "departuresPassed", anyPassed, "createdAt", run.createdAt(), "results", results);
         }
 
         // ---- get_departure_plan ----
@@ -298,7 +305,10 @@ public class ChatTools {
             }
             return ok("routeSource", found.routeSource().name(), "originStation", stationName(origin),
                     "destinationStation", stationName(destination), "totalTimeSec", summary.totalTimeSec(),
-                    "totalMinutes", minutes(summary.totalTimeSec()), "fare", summary.fare(), "fareSource", summary.fareSource().name(),
+                    "travelMinutes", minutes(summary.totalTimeSec()),
+                    "waitMinutes", summary.waitSec() == null ? null : minutes(summary.waitSec()),
+                    "totalWithWaitMinutes", summary.totalWithWaitSec() == null ? null : minutes(summary.totalWithWaitSec()),
+                    "fare", summary.fare(), "fareSource", summary.fareSource().name(),
                     "transferCount", summary.transferCount(), "departureAt", summary.departureAt(), "arrivalAt", summary.arrivalAt(),
                     "noService", summary.noService(), "serviceNotice", summary.serviceNotice(),
                     "appointmentPassed", found.appointmentPassed(), "arrivesAfterAppointment", summary.arrivesAfterAppointment(),
@@ -486,6 +496,16 @@ public class ChatTools {
     }
 
     /** Whole minutes, rounded up. */
+    /** An ISO time that is before {@code now}; a missing or unreadable time is not passed. */
+    private static boolean passed(String isoTime, Instant now) {
+        if (isoTime == null) return false;
+        try {
+            return java.time.OffsetDateTime.parse(isoTime).toInstant().isBefore(now);
+        } catch (java.time.format.DateTimeParseException exception) {
+            return false;
+        }
+    }
+
     private static long minutes(long seconds) {
         return (seconds + 59) / 60;
     }

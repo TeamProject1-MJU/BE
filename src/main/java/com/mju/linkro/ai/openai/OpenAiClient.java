@@ -189,6 +189,7 @@ public class OpenAiClient implements AiClient {
                 // A model without reasoning.effort must not take @링크로 down: ask again without it, for the rest of the question too.
                 effort = null;
                 body.remove("reasoning");
+                if (System.nanoTime() - deadline > 0) throw limit("time");
                 response = send(textClient, body);
             }
             JsonNode root = parseResponse(response);

@@ -78,6 +78,7 @@ class AiModuleConfigTest {
                         "linkro.ai.openai.read-timeout=${OPENAI_READ_TIMEOUT:8s}",
                         "linkro.ai.openai.vision-read-timeout=${OPENAI_VISION_READ_TIMEOUT:10s}",
                         "OPENAI_VISION_REASONING_EFFORT=", "linkro.ai.openai.vision-reasoning-effort=${OPENAI_VISION_REASONING_EFFORT:low}",
+                        "OPENAI_CHAT_REASONING_EFFORT=", "linkro.ai.openai.chat-reasoning-effort=${OPENAI_CHAT_REASONING_EFFORT:low}",
                         "linkro.ai.openai.explain-read-timeout=${OPENAI_EXPLAIN_READ_TIMEOUT:6s}")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
@@ -86,6 +87,7 @@ class AiModuleConfigTest {
                     assertThat(props.getReadTimeout()).isEqualTo(java.time.Duration.ofSeconds(8));
                     assertThat(props.getVisionReadTimeout()).isEqualTo(java.time.Duration.ofSeconds(10));
                     assertThat(props.getVisionReasoningEffort()).isEqualTo("low");
+                    assertThat(props.getChatReasoningEffort()).isEqualTo("low");
                     assertThat(props.getExplainReadTimeout()).isEqualTo(java.time.Duration.ofSeconds(6));
                 });
     }
@@ -103,5 +105,13 @@ class AiModuleConfigTest {
         runner.withPropertyValues("linkro.ai.module=openai", "linkro.ai.openai.api-key=test-dummy", "linkro.ai.openai.model=test-model",
                         "OPENAI_VISION_REASONING_EFFORT=none", "linkro.ai.openai.vision-reasoning-effort=${OPENAI_VISION_REASONING_EFFORT:low}")
                 .run(context -> assertThat(context.getBean(OpenAiProperties.class).getVisionReasoningEffort()).isEqualTo("none"));
+    }
+
+    @Test
+    void setChatReasoningEffortIsUsedAndTheDefaultIsLow() {
+        runner.withPropertyValues("linkro.ai.module=openai", "linkro.ai.openai.api-key=test-dummy", "linkro.ai.openai.model=test-model",
+                        "OPENAI_CHAT_REASONING_EFFORT=medium", "linkro.ai.openai.chat-reasoning-effort=${OPENAI_CHAT_REASONING_EFFORT:low}")
+                .run(context -> assertThat(context.getBean(OpenAiProperties.class).getChatReasoningEffort()).isEqualTo("medium"));
+        assertThat(new OpenAiProperties().getChatReasoningEffort()).isEqualTo("low");
     }
 }

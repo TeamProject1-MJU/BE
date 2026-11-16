@@ -34,7 +34,8 @@ final class ChatToolSpecs {
                 tool(GET_LATEST_RECOMMENDATION, "이 방에서 가장 최근에 받은 중간역 추천 결과(기준별 최적역, 멤버별 나서는 시각·첫 열차·도착·여유)를 알려준다."
                         + " '추천해줘', '추천 결과 알려줘'에 쓴다. 새 추천을 실행하지는 못한다. 추천이 없으면 code가 NO_RECOMMENDATION이니"
                         + " 앱의 추천받기 버튼으로 안내한다. 추천 이후 약속·멤버가 바뀌었으면 code가 STALE이고 시각은 오지 않으니"
-                        + " 다시 추천받아 달라고 안내한다." + FAILURES, Map.of(), List.of()),
+                        + " 다시 추천받아 달라고 안내한다. 시간이 지나도 STALE이 되지는 않으니 멤버별 leaveAtPassed·boardAtPassed(또는 departuresPassed)가"
+                        + " true인 시각은 이미 지난 것이다. 그 시각을 지금 쓸 수 있는 계획처럼 말하지 말고, 지금 출발 기준은 get_route로 안내한다." + FAILURES, Map.of(), List.of()),
                 tool(GET_DEPARTURE_PLAN, "약속 시각에 맞추려면 언제 나서고 어느 열차를 타야 하는지 알려준다(나서는 시각, 첫 열차, 도착 시각, 환승 수, 소요 분, 여유)."
                         + " '약속 시간까지 몇 시 열차 타야 돼?', '몇 시에 나가야 해?'에 쓴다. 약속 시각이 있는 방에서만 되고,"
                         + " 약속이 없거나 지났으면 get_route를 쓴다. 여러 멤버를 비교하려면 compare_members_travel을 쓴다."
@@ -46,7 +47,10 @@ final class ChatToolSpecs {
                         + " '어떻게 가?', '얼마나 걸려?', '요금이 얼마야?'에 쓴다. 약속이 있는 방은 약속에 맞춘 시각표 경로다."
                         + " 약속 시각까지 몇 시에 나서야 하는지는 get_departure_plan, 멤버 전원 비교는 compare_members_travel을 쓴다."
                         + " 결과의 arrivesAfterAppointment가 true면 지금 출발해도 약속에 늦는다는 뜻이고, appointmentPassed가 true면 약속 시각이 이미 지났고"
-                        + " 지금 출발 기준 경로라는 뜻이다. 둘 다 약속에 맞는다고 말하지 않는다." + FAILURES,
+                        + " 지금 출발 기준 경로라는 뜻이다. 둘 다 약속에 맞는다고 말하지 않는다."
+                        + " 시간은 셋으로 나뉜다. travelMinutes는 타고 가는 시간, waitMinutes는 출발 전 첫 열차를 기다리는 시간(없으면 필드가 오지 않음),"
+                        + " totalWithWaitMinutes는 지금부터 도착까지 걸리는 시간(없으면 필드가 오지 않음)이다. '지금부터 얼마나 걸려?'는 totalWithWaitMinutes,"
+                        + " '타고 가는 데 얼마나?'는 travelMinutes로 답한다." + FAILURES,
                         Map.of("originStation", string("출발역 이름. 생략하면 질문한 사람의 출발역. " + STATION_NAME),
                                 "destinationStation", string("도착역 이름. " + STATION_NAME)),
                         List.of("destinationStation")),
@@ -62,7 +66,7 @@ final class ChatToolSpecs {
                         Map.of("query", string("찾을 역 이름 또는 일부.")), List.of("query")),
                 tool(COMPARE_MEMBERS_TRAVEL, "멤버 전원이 도착역까지 가는 데 걸리는 시간·요금·환승과 가장 오래 걸리는 멤버를 알려준다."
                         + " '누가 제일 오래 걸려?', '다 비슷하게 걸려?'에 쓴다. 한 사람의 경로는 get_route, 한 사람의 나서는 시각은"
-                        + " get_departure_plan을 쓴다. 출발역이 없는 멤버는 따로 알려준다." + FAILURES,
+                        + " get_departure_plan을 쓴다. 출발역이 없는 멤버는 따로 알려준다. totalMinutes는 타고 가는 시간(출발 전 대기 제외)이다." + FAILURES,
                         Map.of("destinationStation", string("도착역 이름. " + STATION_NAME)), List.of("destinationStation")));
     }
 
