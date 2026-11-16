@@ -79,7 +79,8 @@ class ChatServiceTest {
 
     ChatService build(Executor aiExecutor) {
         var writer = new ChatMessageWriter(access, messages, events);
-        var context = new ChatRoomContext(properties, messages, rooms, roomReads, recommendations);
+        var context = new ChatRoomContext(properties, messages, rooms, roomReads, recommendations,
+                java.time.Clock.fixed(Instant.parse("2026-11-12T10:25:00Z"), java.time.ZoneOffset.UTC));
         return new ChatService(writer, access, messages, new ChatAiResponder(ai, context, writer, tools),
                 new ChatRateLimiter(properties, () -> nanos[0]), aiExecutor);
     }
@@ -176,13 +177,27 @@ class ChatServiceTest {
         assertThat(request.getValue().question()).isEqualTo("사당역에서 갈만한 곳 알려줘");
         assertThat(request.getValue().recentMessages()).extracting("nickname", "content")
                 .containsExactly(org.assertj.core.groups.Tuple.tuple("철수", "어디서 볼까?"), org.assertj.core.groups.Tuple.tuple("링크로", "사당은 어때요?"));
-        assertThat(request.getValue().roomContext()).contains("금요일 저녁", "2026-11-13 19:00", "민지(출발역: 사당)", "철수(출발역: 미설정)", "시간 기준 강남");
+        // today (Seoul date, weekday, time) comes from the clock: 2026-11-12T10:25Z is Thursday 19:25 in Seoul
+        assertThat(request.getValue().roomContext()).startsWith("[지금] 2026-11-12(목) 19:25 (한국 시간)\n");
+        assertThat(request.getValue().roomContext()).contains("금요일 저녁", "2026-11-13(금) 19:00", "민지(출발역: 사당)", "철수(출발역: 미설정)", "시간 기준 강남");
         verify(messages).conversationBefore(eq(room), eq(sent.message().id()), eq(10));
 
         List<Message> all = savedMessages();
         assertThat(all).extracting(Message::senderType).containsExactly(SenderType.USER, SenderType.AI);
         assertThat(all.get(1).content()).isEqualTo("사당역 근처를 추천해요.");
         assertThat(all.get(1).senderId()).isNull();
+    }
+
+    @Test
+    void theNowLineUsesTheSeoulDateAcrossMidnightUtc() {
+        var room1 = new MeetingRoom("ABC123", "금요일 저녁", user);
+        when(rooms.findById(room)).thenReturn(Optional.of(room1));
+        // 2026-11-12T16:30Z is already Friday 2026-11-13 01:30 in Seoul
+        var context = new ChatRoomContext(properties, messages, rooms, roomReads, recommendations,
+                java.time.Clock.fixed(Instant.parse("2026-11-12T16:30:00Z"), java.time.ZoneOffset.UTC));
+        var question = new Message(UUID.randomUUID(), SenderType.USER, user, "민지", "@링크로 오늘 며칠이야?", Instant.EPOCH, null);
+        String text = context.build(room, question).roomContext();
+        assertThat(text).startsWith("[지금] 2026-11-13(금) 01:30 (한국 시간)\n").contains("약속 시각: 미정");
     }
 
     @Test

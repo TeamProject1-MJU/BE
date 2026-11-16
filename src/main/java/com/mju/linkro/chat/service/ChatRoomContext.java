@@ -13,6 +13,7 @@ import com.mju.linkro.room.dto.RoomResponses.Station;
 import com.mju.linkro.room.repository.MeetingRoomRepository;
 import com.mju.linkro.room.repository.RoomReadRepository;
 import com.mju.linkro.room.repository.RoomReadRepository.MemberRow;
+import java.time.Clock;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -20,27 +21,47 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Locale;
 import java.util.UUID;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
  * Builds what the AI gets with an @링크로 question (API 10.1): the earlier conversation and the room context
  * (participants, departures, appointment, selected station, latest recommendation). Facts only, no numbers the AI
- * could repeat wrongly. Runs without a transaction: the caller holds no database connection during the AI call.
+ * could repeat wrongly. Starts with the current Seoul date, weekday and time, which the model cannot know otherwise.
+ * Runs without a transaction: the caller holds no database connection during the AI call.
  */
 @Component
-@RequiredArgsConstructor
 class ChatRoomContext {
     /** The name the AI's own earlier answers carry in the conversation. */
     static final String AI_NAME = "링크로";
-    private static final DateTimeFormatter APPOINTMENT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.of("Asia/Seoul"));
+    private static final DateTimeFormatter APPOINTMENT = DateTimeFormatter.ofPattern("yyyy-MM-dd(E) HH:mm", Locale.KOREAN)
+            .withZone(ZoneId.of("Asia/Seoul"));
 
     private final ChatProperties properties;
     private final RoomMessageRepository messages;
     private final MeetingRoomRepository rooms;
     private final RoomReadRepository roomReads;
     private final RecommendationRepository recommendations;
+    private final Clock clock;
+
+    @Autowired
+    ChatRoomContext(ChatProperties properties, RoomMessageRepository messages, MeetingRoomRepository rooms,
+                    RoomReadRepository roomReads, RecommendationRepository recommendations, ObjectProvider<Clock> clock) {
+        this(properties, messages, rooms, roomReads, recommendations, clock.getIfAvailable(Clock::systemUTC));
+    }
+
+    ChatRoomContext(ChatProperties properties, RoomMessageRepository messages, MeetingRoomRepository rooms,
+                    RoomReadRepository roomReads, RecommendationRepository recommendations, Clock clock) {
+        this.properties = properties;
+        this.messages = messages;
+        this.rooms = rooms;
+        this.roomReads = roomReads;
+        this.recommendations = recommendations;
+        this.clock = clock;
+    }
 
     ChatReplyRequest build(UUID roomId, Message question) {
         List<ChatTurn> recent = messages.conversationBefore(roomId, question.id(), properties.getAiContextMessages()).stream()
@@ -62,7 +83,8 @@ class ChatRoomContext {
         recommendation.stream().map(ResultRow::stationId).forEach(stationIds::add);
         Map<Long, Station> stations = roomReads.stations(stationIds);
 
-        var text = new StringBuilder("약속방 이름: ").append(room.getName()).append('\n');
+        var text = new StringBuilder("[지금] ").append(APPOINTMENT.format(clock.instant())).append(" (한국 시간)\n")
+                .append("약속방 이름: ").append(room.getName()).append('\n');
         text.append("약속 시각: ").append(room.getAppointmentAt() == null ? "미정" : APPOINTMENT.format(room.getAppointmentAt())).append('\n');
         text.append("확정된 약속역: ").append(name(stations, room.getSelectedStationId(), "아직 없음")).append('\n');
         List<String> people = new ArrayList<>();
