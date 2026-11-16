@@ -178,7 +178,7 @@ class ChatServiceTest {
         assertThat(request.getValue().recentMessages()).extracting("nickname", "content")
                 .containsExactly(org.assertj.core.groups.Tuple.tuple("철수", "어디서 볼까?"), org.assertj.core.groups.Tuple.tuple("링크로", "사당은 어때요?"));
         // today (Seoul date, weekday, time) comes from the clock: 2026-11-12T10:25Z is Thursday 19:25 in Seoul
-        assertThat(request.getValue().roomContext()).startsWith("[지금] 2026-11-12(목) 19:25 (한국 시간)\n");
+        assertThat(request.getValue().roomContext()).startsWith("[지금] 2026-11-12(목) 19:25 (한국 시간)\n질문자: 민지\n약속방 이름:");
         assertThat(request.getValue().roomContext()).contains("금요일 저녁", "2026-11-13(금) 19:00", "민지(출발역: 사당)", "철수(출발역: 미설정)", "시간 기준 강남");
         verify(messages).conversationBefore(eq(room), eq(sent.message().id()), eq(10));
 
@@ -186,6 +186,21 @@ class ChatServiceTest {
         assertThat(all).extracting(Message::senderType).containsExactly(SenderType.USER, SenderType.AI);
         assertThat(all.get(1).content()).isEqualTo("사당역 근처를 추천해요.");
         assertThat(all.get(1).senderId()).isNull();
+    }
+
+    @Test
+    void theAskerLineIsTheMembersCurrentNicknameAndTheModelNeverSeesAnotherMembersNameAsTheAsker() {
+        var room1 = new MeetingRoom("ABC123", "금요일 저녁", user);
+        when(rooms.findById(room)).thenReturn(Optional.of(room1));
+        UUID other = UUID.randomUUID();
+        when(roomReads.members(List.of(room))).thenReturn(List.of(
+                new MemberRow(room, other, "철수", RoomRole.MEMBER, Instant.EPOCH, null),
+                new MemberRow(room, user, "민지새", RoomRole.OWNER, Instant.EPOCH, 1L)));
+        var context = new ChatRoomContext(properties, messages, rooms, roomReads, recommendations,
+                java.time.Clock.fixed(Instant.parse("2026-11-12T10:25:00Z"), java.time.ZoneOffset.UTC));
+        // the message still carries the old nickname; the member's current one wins
+        var question = new Message(UUID.randomUUID(), SenderType.USER, user, "민지", "@링크로 내 출발역 어디야?", Instant.EPOCH, null);
+        assertThat(context.build(room, question).roomContext()).contains("질문자: 민지새\n");
     }
 
     @Test
@@ -198,6 +213,8 @@ class ChatServiceTest {
         var question = new Message(UUID.randomUUID(), SenderType.USER, user, "민지", "@링크로 오늘 며칠이야?", Instant.EPOCH, null);
         String text = context.build(room, question).roomContext();
         assertThat(text).startsWith("[지금] 2026-11-13(금) 01:30 (한국 시간)\n").contains("약속 시각: 미정");
+        // no member row for the asker (left meanwhile): the nickname the message carried
+        assertThat(text).contains("질문자: 민지\n");
     }
 
     @Test

@@ -67,10 +67,10 @@ class ChatRoomContext {
         List<ChatTurn> recent = messages.conversationBefore(roomId, question.id(), properties.getAiContextMessages()).stream()
                 .map(message -> new ChatTurn(message.senderType() == SenderType.AI ? AI_NAME : message.nickname(), message.content()))
                 .toList();
-        return new ChatReplyRequest(LinkroMention.question(question.content()), recent, describe(roomId));
+        return new ChatReplyRequest(LinkroMention.question(question.content()), recent, describe(roomId, question));
     }
 
-    private String describe(UUID roomId) {
+    private String describe(UUID roomId, Message question) {
         Optional<MeetingRoom> found = rooms.findById(roomId);
         if (found.isEmpty()) return null;
         MeetingRoom room = found.get();
@@ -83,7 +83,11 @@ class ChatRoomContext {
         recommendation.stream().map(ResultRow::stationId).forEach(stationIds::add);
         Map<Long, Station> stations = roomReads.stations(stationIds);
 
+        // "나"/"내" in the question mean the asker: the member's current nickname, else the one the message carried.
+        String asker = members.stream().filter(member -> member.userId().equals(question.senderId())).map(MemberRow::nickname)
+                .findFirst().orElse(question.nickname());
         var text = new StringBuilder("[지금] ").append(APPOINTMENT.format(clock.instant())).append(" (한국 시간)\n")
+                .append("질문자: ").append(asker == null ? "알 수 없음" : asker).append('\n')
                 .append("약속방 이름: ").append(room.getName()).append('\n');
         text.append("약속 시각: ").append(room.getAppointmentAt() == null ? "미정" : APPOINTMENT.format(room.getAppointmentAt())).append('\n');
         text.append("확정된 약속역: ").append(name(stations, room.getSelectedStationId(), "아직 없음")).append('\n');
