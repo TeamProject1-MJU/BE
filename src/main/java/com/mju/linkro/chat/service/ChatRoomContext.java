@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.UUID;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -65,7 +66,7 @@ class ChatRoomContext {
 
     ChatReplyRequest build(UUID roomId, Message question) {
         List<ChatTurn> recent = messages.conversationBefore(roomId, question.id(), properties.getAiContextMessages()).stream()
-                .map(message -> new ChatTurn(message.senderType() == SenderType.AI ? AI_NAME : message.nickname(), message.content()))
+                .map(message -> new ChatTurn(message.senderType() == SenderType.AI ? AI_NAME : oneLine(message.nickname()), message.content()))
                 .toList();
         return new ChatReplyRequest(LinkroMention.question(question.content()), recent, describe(roomId, question));
     }
@@ -84,16 +85,17 @@ class ChatRoomContext {
         Map<Long, Station> stations = roomReads.stations(stationIds);
 
         // "나"/"내" in the question mean the asker: the member's current nickname, else the one the message carried.
-        String asker = members.stream().filter(member -> member.userId().equals(question.senderId())).map(MemberRow::nickname)
+        String asker = members.stream().filter(member -> question.senderId() != null && Objects.equals(member.userId(), question.senderId())).map(MemberRow::nickname)
                 .findFirst().orElse(question.nickname());
+        asker = oneLine(asker);
         var text = new StringBuilder("[지금] ").append(APPOINTMENT.format(clock.instant())).append(" (한국 시간)\n")
-                .append("질문자: ").append(asker == null ? "알 수 없음" : asker).append('\n')
+                .append("질문자: ").append(asker == null || asker.isEmpty() ? "알 수 없음" : asker).append('\n')
                 .append("약속방 이름: ").append(room.getName()).append('\n');
         text.append("약속 시각: ").append(room.getAppointmentAt() == null ? "미정" : APPOINTMENT.format(room.getAppointmentAt())).append('\n');
         text.append("확정된 약속역: ").append(name(stations, room.getSelectedStationId(), "아직 없음")).append('\n');
         List<String> people = new ArrayList<>();
         for (MemberRow member : members) {
-            people.add(member.nickname() + "(출발역: " + name(stations, member.stationId(), "미설정") + ")");
+            people.add(oneLine(member.nickname()) + "(출발역: " + name(stations, member.stationId(), "미설정") + ")");
         }
         text.append("참여자: ").append(String.join(", ", people)).append('\n');
         List<String> best = new ArrayList<>();
@@ -102,6 +104,11 @@ class ChatRoomContext {
         }
         text.append("최근 중간역 추천: ").append(best.isEmpty() ? "없음" : String.join(", ", best));
         return text.toString();
+    }
+
+    /** A nickname is user input that goes into the prompt: line breaks and other control characters become one space. */
+    static String oneLine(String text) {
+        return text == null ? null : text.replaceAll("[\\p{Cc}\\p{Zl}\\p{Zp}\\s]+", " ").strip();
     }
 
     private static String name(Map<Long, Station> stations, Long id, String fallback) {
