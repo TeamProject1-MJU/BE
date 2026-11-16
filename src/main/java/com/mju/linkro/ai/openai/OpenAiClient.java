@@ -13,6 +13,7 @@ import java.util.Base64;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
@@ -37,6 +38,10 @@ public class OpenAiClient implements AiClient {
     static final int CHAT_MAX_TOOL_ROUNDS = 3;
     /** All model calls and tool runs of one @링크로 question together (#129); past it no further model call is made. */
     static final Duration CHAT_TOTAL_LIMIT = Duration.ofSeconds(25);
+    /** Tools run per round (#129); the model's further calls of that round get a NO_DATA result instead of running. */
+    static final int CHAT_MAX_TOOL_CALLS_PER_ROUND = 4;
+    private static final String TOO_MANY_TOOL_CALLS = "{\"ok\":false,\"code\":\"NO_DATA\","
+            + "\"message\":\"한 번에 부를 수 있는 도구 수를 넘어 실행하지 않았어요.\"}";
 
     private static final JsonMapper MAPPER = JsonMapper.builder().build();
     private static final Map<String, Object> CONDITION_SCHEMA = schema("condition");
@@ -57,6 +62,8 @@ public class OpenAiClient implements AiClient {
     private final String visionReasoningEffort;
     /** Sent as reasoning.effort on @링크로 chat calls only (#129), separate from the sign setting; null or blank sends nothing. */
     private final String chatReasoningEffort;
+    /** {@link #CHAT_TOTAL_LIMIT}; only tests change it. */
+    private Duration chatTotalLimit = CHAT_TOTAL_LIMIT;
 
     OpenAiClient(RestClient textClient, RestClient visionClient, String apiKey, String model) {
         this(textClient, visionClient, textClient, apiKey, model, null, null);
@@ -71,6 +78,10 @@ public class OpenAiClient implements AiClient {
         this.model = model;
         this.visionReasoningEffort = visionReasoningEffort == null || visionReasoningEffort.isBlank() ? null : visionReasoningEffort.strip();
         this.chatReasoningEffort = chatReasoningEffort == null || chatReasoningEffort.isBlank() ? null : chatReasoningEffort.strip();
+    }
+
+    void chatTotalLimit(Duration limit) {
+        this.chatTotalLimit = limit;
     }
 
     @Override
@@ -139,7 +150,11 @@ public class OpenAiClient implements AiClient {
                 throw unavailable(exception);
             }
         }
-        return text(call(textClient, CHAT_PROMPT, textInput(input.toString()), null, chatReasoningEffort), CHAT_MAX_LENGTH);
+        try {
+            return text(call(textClient, CHAT_PROMPT, textInput(input.toString()), null, chatReasoningEffort), CHAT_MAX_LENGTH);
+        } catch (ReasoningRejected rejected) {
+            return text(call(textClient, CHAT_PROMPT, textInput(input.toString()), null, null), CHAT_MAX_LENGTH);
+        }
     }
 
     /**
@@ -147,10 +162,11 @@ public class OpenAiClient implements AiClient {
      * previous_response_id: each round resends the whole input so far (the question, the model's output items including
      * function_call and encrypted reasoning items, and the function_call_output items).
      * Tool results go to the model as they are; nothing here logs them. Asking for tools after
-     * {@link #CHAT_MAX_TOOL_ROUNDS} rounds, or running past {@link #CHAT_TOTAL_LIMIT}, is AI_UNAVAILABLE.
+     * {@link #CHAT_MAX_TOOL_ROUNDS} rounds, or running past {@link #CHAT_TOTAL_LIMIT} (checked before every model call and every tool run), is AI_UNAVAILABLE.
      */
     private String chatWithTools(String question, ChatToolbox tools) {
-        long deadline = System.nanoTime() + CHAT_TOTAL_LIMIT.toNanos();
+        long deadline = System.nanoTime() + chatTotalLimit.toNanos();
+        String effort = chatReasoningEffort;
         List<Map<String, Object>> specs = tools.specs().stream()
                 .map(spec -> Map.<String, Object>of("type", "function", "name", spec.name(),
                         "description", spec.description(), "parameters", spec.parameters()))
@@ -165,8 +181,17 @@ public class OpenAiClient implements AiClient {
             body.put("tools", specs);
             body.put("store", false);
             body.put("include", List.of("reasoning.encrypted_content"));
-            if (chatReasoningEffort != null) body.put("reasoning", Map.of("effort", chatReasoningEffort));
-            JsonNode root = parseResponse(send(textClient, body));
+            if (effort != null) body.put("reasoning", Map.of("effort", effort));
+            String response;
+            try {
+                response = send(textClient, body);
+            } catch (ReasoningRejected rejected) {
+                // A model without reasoning.effort must not take @링크로 down: ask again without it, for the rest of the question too.
+                effort = null;
+                body.remove("reasoning");
+                response = send(textClient, body);
+            }
+            JsonNode root = parseResponse(response);
             List<JsonNode> calls = new ArrayList<>();
             for (JsonNode item : root.path("output")) {
                 if ("function_call".equals(item.path("type").asString(""))) calls.add(item);
@@ -174,9 +199,15 @@ public class OpenAiClient implements AiClient {
             if (calls.isEmpty()) return outputText(root);
             if (round >= CHAT_MAX_TOOL_ROUNDS) throw limit("rounds");
             for (JsonNode item : root.path("output")) input.add(MAPPER.convertValue(item, Map.class));
+            int ran = 0;
             for (JsonNode call : calls) {
-                input.add(Map.of("type", "function_call_output", "call_id", call.path("call_id").asString(""),
-                        "output", tools.run(call.path("name").asString(""), call.path("arguments").asString("{}"))));
+                String output = TOO_MANY_TOOL_CALLS;
+                if (ran < CHAT_MAX_TOOL_CALLS_PER_ROUND) {
+                    if (System.nanoTime() - deadline > 0) throw limit("time");
+                    output = tools.run(call.path("name").asString(""), call.path("arguments").asString("{}"));
+                    ran++;
+                }
+                input.add(Map.of("type", "function_call_output", "call_id", call.path("call_id").asString(""), "output", output));
             }
         }
     }
@@ -209,10 +240,29 @@ public class OpenAiClient implements AiClient {
             return client.post().uri("/v1/responses")
                     .headers(headers -> headers.setBearerAuth(apiKey))
                     .contentType(MediaType.APPLICATION_JSON).body(body).retrieve()
-                    .onStatus(status -> !status.is2xxSuccessful(), (request, res) -> { throw mapStatus(res.getStatusCode()); })
+                    .onStatus(status -> !status.is2xxSuccessful(), (request, res) -> {
+                        if (body.containsKey("reasoning") && res.getStatusCode().value() == 400 && mentionsReasoning(res.getBody())) {
+                            log.warn("OpenAI rejected reasoning.effort (400); the model may not support it");
+                            throw new ReasoningRejected();
+                        }
+                        throw mapStatus(res.getStatusCode());
+                    })
                     .body(String.class);
         } catch (RestClientException exception) {
             throw unavailable(exception);
+        }
+    }
+
+    /** A 400 whose error text is about reasoning or effort; the body is only inspected, never logged. */
+    private static boolean mentionsReasoning(InputStream errorBody) throws IOException {
+        String text = new String(errorBody.readAllBytes(), StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
+        return text.contains("reasoning") || text.contains("effort");
+    }
+
+    /** The model refused reasoning.effort; chat asks again without it. Anywhere else this is a plain AI_UNAVAILABLE. */
+    private static final class ReasoningRejected extends BusinessException {
+        ReasoningRejected() {
+            super(ErrorCode.AI_UNAVAILABLE);
         }
     }
 

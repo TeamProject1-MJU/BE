@@ -218,7 +218,7 @@ class OpenAiClientTest {
     // ---- chat tool calling (#129) ----
 
     /** A tool-calling toolbox that records its calls and answers every call with {@code {"ok":true}}. */
-    private static final class RecordingTools implements ChatToolbox {
+    private static class RecordingTools implements ChatToolbox {
         final List<String> calls = new java.util.ArrayList<>();
 
         @Override
@@ -310,6 +310,104 @@ class OpenAiClientTest {
                 .andRespond(withSuccess(response("답."), MediaType.APPLICATION_JSON));
         signOnly.replyToChat(chatWith(new RecordingTools()));
         chatServer.verify();
+    }
+
+    private static String functionCalls(int count) {
+        var items = new StringBuilder();
+        for (int i = 1; i <= count; i++) {
+            if (i > 1) items.append(',');
+            items.append("{\"type\":\"function_call\",\"call_id\":\"call_").append(i)
+                    .append("\",\"name\":\"get_room_info\",\"arguments\":\"{}\",\"status\":\"completed\"}");
+        }
+        return "{\"status\":\"completed\",\"output\":[" + items + "]}";
+    }
+
+    private static final String REASONING_UNSUPPORTED = "{\"error\":{\"message\":\"Unsupported parameter: 'reasoning.effort' is not supported with this model.\"}}";
+
+    private static OpenAiClient chatMedium(RestClient restClient) {
+        return new OpenAiClient(restClient, restClient, restClient, "test-dummy", "test-model", "low", "medium");
+    }
+
+    @Test
+    void chatWithoutToolsRetriesOnceWithoutReasoningWhenTheModelRejectsEffort() {
+        var builder = RestClient.builder().baseUrl("https://api.openai.test");
+        var chatServer = MockRestServiceServer.bindTo(builder).build();
+        var medium = chatMedium(builder.build());
+        chatServer.expect(requestTo(URL)).andExpect(jsonPath("$.reasoning.effort").value("medium"))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST).contentType(MediaType.APPLICATION_JSON).body(REASONING_UNSUPPORTED));
+        chatServer.expect(requestTo(URL)).andExpect(jsonPath("$.reasoning").doesNotExist())
+                .andRespond(withSuccess(response("그대로 답해요."), MediaType.APPLICATION_JSON));
+        assertThat(medium.replyToChat(new ChatReplyRequest("안녕", List.of(), "방 정보")).text()).isEqualTo("그대로 답해요.");
+        chatServer.verify();
+    }
+
+    @Test
+    void chatToolCallingDropsReasoningForTheWholeQuestionWhenTheModelRejectsEffort() {
+        var builder = RestClient.builder().baseUrl("https://api.openai.test");
+        var chatServer = MockRestServiceServer.bindTo(builder).build();
+        var medium = chatMedium(builder.build());
+        chatServer.expect(requestTo(URL)).andExpect(jsonPath("$.reasoning.effort").value("medium"))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST).contentType(MediaType.APPLICATION_JSON).body(REASONING_UNSUPPORTED));
+        chatServer.expect(requestTo(URL)).andExpect(jsonPath("$.reasoning").doesNotExist())
+                .andRespond(withSuccess(functionCall("resp_1", "call_1"), MediaType.APPLICATION_JSON));
+        chatServer.expect(requestTo(URL)).andExpect(jsonPath("$.reasoning").doesNotExist())
+                .andExpect(jsonPath("$.input.length()").value(4))
+                .andRespond(withSuccess(response("답."), MediaType.APPLICATION_JSON));
+        assertThat(medium.replyToChat(chatWith(new RecordingTools())).text()).isEqualTo("답.");
+        chatServer.verify();
+    }
+
+    @Test
+    void aBadRequestThatIsNotAboutReasoningIsNotRetried() {
+        var builder = RestClient.builder().baseUrl("https://api.openai.test");
+        var chatServer = MockRestServiceServer.bindTo(builder).build();
+        var medium = chatMedium(builder.build());
+        chatServer.expect(requestTo(URL))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST).contentType(MediaType.APPLICATION_JSON).body("{\"error\":{\"message\":\"bad model\"}}"));
+        assertThatThrownBy(() -> medium.replyToChat(chatWith(new RecordingTools()))).isInstanceOfSatisfying(BusinessException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.AI_UNAVAILABLE));
+        chatServer.verify();
+    }
+
+    @Test
+    void onlyTheFirstFourToolCallsOfARoundRunTheRestGetNoDataResults() {
+        var tools = new RecordingTools();
+        server.expect(requestTo(URL)).andRespond(withSuccess(functionCalls(6), MediaType.APPLICATION_JSON));
+        server.expect(requestTo(URL))
+                .andExpect(jsonPath("$.input.length()").value(13))
+                .andExpect(jsonPath("$.input[7].output").value("{\"ok\":true}"))
+                .andExpect(jsonPath("$.input[10].output").value("{\"ok\":true}"))
+                .andExpect(jsonPath("$.input[11].call_id").value("call_5"))
+                .andExpect(jsonPath("$.input[11].output").value(org.hamcrest.Matchers.containsString("NO_DATA")))
+                .andExpect(jsonPath("$.input[12].call_id").value("call_6"))
+                .andExpect(jsonPath("$.input[12].output").value(org.hamcrest.Matchers.containsString("NO_DATA")))
+                .andRespond(withSuccess(response("끝."), MediaType.APPLICATION_JSON));
+        assertThat(client.replyToChat(chatWith(tools)).text()).isEqualTo("끝.");
+        assertThat(tools.calls).hasSize(4);
+        server.verify();
+    }
+
+    @Test
+    void theTotalLimitIsCheckedBeforeEachToolRunAndStopsTheAnswer() {
+        var ran = new java.util.ArrayList<String>();
+        ChatToolbox slow = new RecordingTools() {
+            @Override
+            public String run(String toolName, String argumentsJson) {
+                ran.add(toolName);
+                try {
+                    Thread.sleep(120);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return "{\"ok\":true}";
+            }
+        };
+        client.chatTotalLimit(java.time.Duration.ofMillis(60));
+        server.expect(requestTo(URL)).andRespond(withSuccess(functionCalls(3), MediaType.APPLICATION_JSON));
+        assertThatThrownBy(() -> client.replyToChat(chatWith(slow))).isInstanceOfSatisfying(BusinessException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.AI_UNAVAILABLE));
+        assertThat(ran).hasSize(1);
+        server.verify();
     }
 
     @Test

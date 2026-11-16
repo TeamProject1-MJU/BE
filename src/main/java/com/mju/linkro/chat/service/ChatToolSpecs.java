@@ -37,13 +37,16 @@ final class ChatToolSpecs {
                         + " 다시 추천받아 달라고 안내한다." + FAILURES, Map.of(), List.of()),
                 tool(GET_DEPARTURE_PLAN, "약속 시각에 맞추려면 언제 나서고 어느 열차를 타야 하는지 알려준다(나서는 시각, 첫 열차, 도착 시각, 환승 수, 소요 분, 여유)."
                         + " '약속 시간까지 몇 시 열차 타야 돼?', '몇 시에 나가야 해?'에 쓴다. 약속 시각이 있는 방에서만 되고,"
-                        + " 약속이 없거나 지났으면 get_route를 쓴다. 여러 멤버를 비교하려면 compare_members_travel을 쓴다." + FAILURES,
+                        + " 약속이 없거나 지났으면 get_route를 쓴다. 여러 멤버를 비교하려면 compare_members_travel을 쓴다."
+                        + " 결과의 leaveAtPassed가 true면 leaveAt은 이미 지난 시각이니 그 시각에 나서라고 하지 말고, get_route로 지금 출발 기준을 안내한다." + FAILURES,
                         Map.of("destinationStation", string("약속 장소 역 이름. " + STATION_NAME),
                                 "member", string("나서는 시각을 알고 싶은 멤버 닉네임. 생략하면 질문한 사람.")),
                         List.of("destinationStation")),
                 tool(GET_ROUTE, "출발역에서 도착역까지 가는 경로(소요 시간, 요금, 환승, 단계 요약)를 알려준다."
                         + " '어떻게 가?', '얼마나 걸려?', '요금이 얼마야?'에 쓴다. 약속이 있는 방은 약속에 맞춘 시각표 경로다."
-                        + " 약속 시각까지 몇 시에 나서야 하는지는 get_departure_plan, 멤버 전원 비교는 compare_members_travel을 쓴다." + FAILURES,
+                        + " 약속 시각까지 몇 시에 나서야 하는지는 get_departure_plan, 멤버 전원 비교는 compare_members_travel을 쓴다."
+                        + " 결과의 arrivesAfterAppointment가 true면 지금 출발해도 약속에 늦는다는 뜻이고, appointmentPassed가 true면 약속 시각이 이미 지났고"
+                        + " 지금 출발 기준 경로라는 뜻이다. 둘 다 약속에 맞는다고 말하지 않는다." + FAILURES,
                         Map.of("originStation", string("출발역 이름. 생략하면 질문한 사람의 출발역. " + STATION_NAME),
                                 "destinationStation", string("도착역 이름. " + STATION_NAME)),
                         List.of("destinationStation")),

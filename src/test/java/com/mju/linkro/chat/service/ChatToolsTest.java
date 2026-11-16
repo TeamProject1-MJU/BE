@@ -75,6 +75,18 @@ class ChatToolsTest extends ChatToolsTestBase {
         assertThat(byName.get("compare_members_travel")).contains("get_route", "get_departure_plan");
     }
 
+    @Test
+    void passedAndLateFlagsAreExplainedInTheToolDescriptionsAndThePrompt() throws Exception {
+        var byName = toolbox.specs().stream().collect(java.util.stream.Collectors.toMap(ChatToolSpec::name, ChatToolSpec::description));
+        assertThat(byName.get("get_departure_plan")).contains("leaveAtPassed", "get_route");
+        assertThat(byName.get("get_route")).contains("arrivesAfterAppointment", "appointmentPassed");
+        String prompt;
+        try (var in = getClass().getClassLoader().getResourceAsStream("ai/prompt/chat.txt")) {
+            prompt = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        assertThat(prompt).contains("leaveAtPassed", "arrivesAfterAppointment", "appointmentPassed", "get_route");
+    }
+
     // ---- room and user are fixed ----
 
     @Test
