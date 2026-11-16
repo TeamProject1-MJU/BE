@@ -235,7 +235,8 @@ class OpenAiClientTest {
     }
 
     private static String functionCall(String responseId, String callId) {
-        return "{\"id\":\"" + responseId + "\",\"status\":\"completed\",\"output\":[{\"type\":\"function_call\",\"id\":\"fc_" + callId
+        return "{\"id\":\"" + responseId + "\",\"status\":\"completed\",\"output\":[{\"type\":\"reasoning\",\"id\":\"rs_" + callId
+                + "\",\"summary\":[],\"encrypted_content\":\"enc_" + callId + "\"},{\"type\":\"function_call\",\"id\":\"fc_" + callId
                 + "\",\"call_id\":\"" + callId + "\",\"name\":\"get_room_info\",\"arguments\":\"{}\",\"status\":\"completed\"}]}";
     }
 
@@ -250,19 +251,45 @@ class OpenAiClientTest {
                 .andExpect(jsonPath("$.tools.length()").value(1))
                 .andExpect(jsonPath("$.tools[0].type").value("function"))
                 .andExpect(jsonPath("$.tools[0].name").value("get_room_info"))
+                .andExpect(jsonPath("$.store").value(false))
+                .andExpect(jsonPath("$.include[0]").value("reasoning.encrypted_content"))
                 .andExpect(jsonPath("$.previous_response_id").doesNotExist())
+                .andExpect(jsonPath("$.input.length()").value(1))
                 .andRespond(withSuccess(functionCall("resp_1", "call_1"), MediaType.APPLICATION_JSON));
+        // round 2 resends everything so far: the question, the model's output items, then the tool result
         server.expect(requestTo(URL))
-                .andExpect(jsonPath("$.previous_response_id").value("resp_1"))
-                .andExpect(jsonPath("$.input[0].type").value("function_call_output"))
-                .andExpect(jsonPath("$.input[0].call_id").value("call_1"))
-                .andExpect(jsonPath("$.input[0].output").value("{\"ok\":true}"))
+                .andExpect(jsonPath("$.store").value(false))
+                .andExpect(jsonPath("$.include[0]").value("reasoning.encrypted_content"))
+                .andExpect(jsonPath("$.previous_response_id").doesNotExist())
+                .andExpect(jsonPath("$.input.length()").value(4))
+                .andExpect(jsonPath("$.input[0].role").value("user"))
+                .andExpect(jsonPath("$.input[1].type").value("reasoning"))
+                .andExpect(jsonPath("$.input[1].encrypted_content").value("enc_call_1"))
+                .andExpect(jsonPath("$.input[2].type").value("function_call"))
+                .andExpect(jsonPath("$.input[2].call_id").value("call_1"))
+                .andExpect(jsonPath("$.input[3].type").value("function_call_output"))
+                .andExpect(jsonPath("$.input[3].call_id").value("call_1"))
+                .andExpect(jsonPath("$.input[3].output").value("{\"ok\":true}"))
                 .andExpect(jsonPath("$.tools.length()").value(1))
                 .andRespond(withSuccess(response("오후 7시예요."), MediaType.APPLICATION_JSON));
 
         assertThat(client.replyToChat(chatWith(tools)).text()).isEqualTo("오후 7시예요.");
         assertThat(tools.calls).containsExactly("get_room_info{}");
         server.verify();
+    }
+
+    @Test
+    void chatCallsNeverSendReasoningEffortEvenWhenTheSignSettingIsSet() {
+        var builder = RestClient.builder().baseUrl("https://api.openai.test");
+        var chatServer = MockRestServiceServer.bindTo(builder).build();
+        RestClient restClient = builder.build();
+        var signLow = new OpenAiClient(restClient, restClient, restClient, "test-dummy", "test-model", "low");
+        chatServer.expect(requestTo(URL)).andExpect(jsonPath("$.reasoning").doesNotExist())
+                .andRespond(withSuccess(functionCall("resp_1", "call_1"), MediaType.APPLICATION_JSON));
+        chatServer.expect(requestTo(URL)).andExpect(jsonPath("$.reasoning").doesNotExist())
+                .andRespond(withSuccess(response("답."), MediaType.APPLICATION_JSON));
+        assertThat(signLow.replyToChat(chatWith(new RecordingTools())).text()).isEqualTo("답.");
+        chatServer.verify();
     }
 
     @Test
@@ -293,7 +320,12 @@ class OpenAiClientTest {
         for (int round = 1; round <= 3; round++) {
             server.expect(requestTo(URL)).andRespond(withSuccess(functionCall("resp_" + round, "call_" + round), MediaType.APPLICATION_JSON));
         }
-        server.expect(requestTo(URL)).andRespond(withSuccess(response("끝."), MediaType.APPLICATION_JSON));
+        // the fourth request carries the question plus three rounds of reasoning, function_call and function_call_output
+        server.expect(requestTo(URL)).andExpect(jsonPath("$.input.length()").value(10))
+                .andExpect(jsonPath("$.input[1].encrypted_content").value("enc_call_1"))
+                .andExpect(jsonPath("$.input[4].encrypted_content").value("enc_call_2"))
+                .andExpect(jsonPath("$.input[9].call_id").value("call_3"))
+                .andRespond(withSuccess(response("끝."), MediaType.APPLICATION_JSON));
         assertThat(client.replyToChat(chatWith(tools)).text()).isEqualTo("끝.");
         assertThat(tools.calls).hasSize(3);
         server.verify();
@@ -316,13 +348,8 @@ class OpenAiClientTest {
     }
 
     @Test
-    void chatToolResponsesThatAreIncompleteOrWithoutAnIdAreAiUnavailable() {
+    void chatToolResponsesThatAreIncompleteAreAiUnavailable() {
         server.expect(requestTo(URL)).andRespond(withSuccess("{\"status\":\"incomplete\",\"output\":[]}", MediaType.APPLICATION_JSON));
-        assertThatThrownBy(() -> client.replyToChat(chatWith(new RecordingTools()))).isInstanceOfSatisfying(BusinessException.class,
-                e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.AI_UNAVAILABLE));
-        server.reset();
-        server.expect(requestTo(URL)).andRespond(withSuccess("{\"status\":\"completed\",\"output\":[{\"type\":\"function_call\","
-                + "\"call_id\":\"c\",\"name\":\"get_room_info\",\"arguments\":\"{}\"}]}", MediaType.APPLICATION_JSON));
         assertThatThrownBy(() -> client.replyToChat(chatWith(new RecordingTools()))).isInstanceOfSatisfying(BusinessException.class,
                 e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.AI_UNAVAILABLE));
     }

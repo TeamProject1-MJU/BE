@@ -5,7 +5,10 @@
 ## 흐름
 
 1. 질문 저장과 응답은 그대로예요([chat-76.md](chat-76.md)). `ChatAiResponder`가 방 맥락을 만든 뒤 질문한 사람의 도구 묶음(`ChatTools.forAsker(roomId, 질문자)`)을 요청에 붙여 `AiClient.replyToChat`을 불러요.
-2. `OpenAiClient`가 OpenAI Responses API에 도구 목록을 같이 보내요(function calling). 모델이 도구를 부르면 서버가 실행하고, 결과를 `previous_response_id`로 이어 보내 최종 답을 받아요. 도구를 안 부르면 한 번에 끝나요.
+2. `OpenAiClient`가 OpenAI Responses API에 도구 목록을 같이 보내요(function calling). 모델이 도구를 부르면 서버가 실행하고, 다음 라운드에 **지금까지의 입력 전체**(질문 + 모델이 낸 출력 항목 `reasoning`·`function_call` + `function_call_output`)를 다시 보내 최종 답을 받아요. 도구를 안 부르면 한 번에 끝나요.
+   - 도구 호출 경로의 모든 요청에 `store:false`를 보내서 OpenAI에 응답을 저장하지 않아요. `previous_response_id`는 쓰지 않아요.
+   - 저장을 끈 상태로 추론 항목을 이어 가려고 `include:["reasoning.encrypted_content"]`를 요청하고, 받은 `reasoning` 항목(암호화된 내용 포함)을 그대로 다음 라운드 입력에 넣어요.
+   - 채팅 호출은 `reasoning.effort`를 보내지 않아요(모델 기본값). `low`는 표지판 판독에만 써요.
 3. 한 질문에 도구 호출 **라운드는 최대 3번**이에요. 3번 뒤에도 또 도구를 부르면 `AI_UNAVAILABLE`이에요. 모델 호출과 도구 실행을 합쳐 **25초**(`OpenAiClient.CHAT_TOTAL_LIMIT`)가 넘으면 다음 모델 호출을 하지 않고 `AI_UNAVAILABLE`이에요.
 4. 상한 초과와 AI 실패는 기존처럼 SYSTEM 안내 메시지예요(`AI_QUOTA_EXCEEDED` 문구는 그대로, 그 밖에는 "AI가 답변을 만들지 못했어요…"). 도구 실패는 AI 실패가 아니라 사유 코드로 AI에 돌아가요.
 
@@ -65,11 +68,13 @@
 ## 알려진 한계
 
 - 25초 상한은 모델 호출 사이에 확인해요. 한 번의 모델 호출은 `OPENAI_READ_TIMEOUT`(8s)까지 갈 수 있어서 최악에는 상한을 한 번 넘겨 끝날 수 있어요.
-- `previous_response_id`로 이어 가므로 OpenAI 쪽에 응답이 저장되는 기본 설정(`store`)을 그대로 써요. 저장을 끄는 조직 설정이면 도구 호출 답변이 `AI_UNAVAILABLE`이 돼요.
+- 라운드마다 입력 전체를 다시 보내서(저장을 끈 대가) 라운드가 늘수록 요청이 커지고 토큰도 늘어요. 최대 3라운드라 한도가 있어요. 암호화된 추론 항목은 `include` 때문에 응답에 실려 와요.
+- 모델이 `include: reasoning.encrypted_content`를 받지 않으면 요청이 거절돼 `AI_UNAVAILABLE`이 돼요. 다른 모델로 바꿀 때 채팅 질문으로 한 번 확인해요.
+- 채팅 답변은 계속 500자(`CHAT_MAX_LENGTH`)에서 잘려요.
 - 도구 정의가 요청마다 실려 토큰과 지연이 늘어요. `chat.txt`와 도구 설명이 길어질수록 더 늘어요.
 - 도구 결과는 AI가 쓰는 JSON이라 한 질문에 멤버가 여럿이면 `compare_members_travel`·`get_latest_recommendation`의 결과가 커요.
 
 ## 테스트
 
-- 단위: `ChatToolsTest`(도구 8개: 정상, 방 멤버 아님·다른 방 값 무시, 없는 역·같은 이름 여러 개·미지원 역, 사유 코드, 시간 초과, 알 수 없는 도구·깨진 인자, stale 추천에 시각·역이 없음, 로그에 닉네임·역 이름·인자가 없음), `ChatToolCallingFlowTest`(모의 AI가 도구를 부르고 그 결과로 답하는 흐름을 도구마다 정상·권한 거부·없는 역·실패로, AI 실패와 상한 초과가 `AI_UNAVAILABLE` 안내로), `OpenAiClientTest`(도구 호출 → 결과 전송 → 최종 답, 3라운드까지 허용·4번째 도구 요청은 `AI_UNAVAILABLE`, 도구 라운드 중 AI 실패·429, 미완료 응답).
+- 단위: `ChatToolsTest`(도구 8개: 정상, 방 멤버 아님·다른 방 값 무시, 없는 역·같은 이름 여러 개·미지원 역, 사유 코드, 시간 초과, 알 수 없는 도구·깨진 인자, stale 추천에 시각·역이 없음, 로그에 닉네임·역 이름·인자가 없음), `ChatToolCallingFlowTest`(모의 AI가 도구를 부르고 그 결과로 답하는 흐름을 도구마다 정상·권한 거부·없는 역·실패로, AI 실패와 상한 초과가 `AI_UNAVAILABLE` 안내로), `OpenAiClientTest`(도구 호출 → 결과 전송 → 최종 답(요청에 `store:false`, `previous_response_id` 없음, 2라운드 입력에 1라운드 항목 포함), 채팅 호출에 reasoning이 안 가는지, 3라운드까지 허용·4번째 도구 요청은 `AI_UNAVAILABLE`, 도구 라운드 중 AI 실패·429, 미완료 응답).
 - PostgreSQL(`ChatToolsPostgresTest`, graph·시각표 모듈): 실제 방·멤버로 방 정보·멤버, 비멤버 거부, `get_departure_plan` 값이 추천이 쓰는 시각표 경로와 같음, 경로·멤버 비교, 역 검색·이름 규칙, 혼잡도 데이터 없음, 추천을 읽다가 약속 시각이 바뀌면 `STALE`(시각 없음), 모의 AI가 `get_departure_plan` 결과로 답하는 채팅 질문 전체 흐름.

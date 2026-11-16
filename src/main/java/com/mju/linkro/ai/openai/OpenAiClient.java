@@ -140,7 +140,9 @@ public class OpenAiClient implements AiClient {
     }
 
     /**
-     * Function calling (#129) over the Responses API: each round sends the tool results back with previous_response_id.
+     * Function calling (#129) over the Responses API. Nothing is stored at OpenAI ({@code store:false}) and there is no
+     * previous_response_id: each round resends the whole input so far (the question, the model's output items including
+     * function_call and encrypted reasoning items, and the function_call_output items).
      * Tool results go to the model as they are; nothing here logs them. Asking for tools after
      * {@link #CHAT_MAX_TOOL_ROUNDS} rounds, or running past {@link #CHAT_TOTAL_LIMIT}, is AI_UNAVAILABLE.
      */
@@ -150,8 +152,7 @@ public class OpenAiClient implements AiClient {
                 .map(spec -> Map.<String, Object>of("type", "function", "name", spec.name(),
                         "description", spec.description(), "parameters", spec.parameters()))
                 .toList();
-        Object input = textInput(question);
-        String previous = null;
+        var input = new ArrayList<Object>(textInput(question));
         for (int round = 0; ; round++) {
             if (System.nanoTime() - deadline > 0) throw limit("time");
             var body = new LinkedHashMap<String, Object>();
@@ -159,7 +160,8 @@ public class OpenAiClient implements AiClient {
             body.put("instructions", CHAT_PROMPT);
             body.put("input", input);
             body.put("tools", specs);
-            if (previous != null) body.put("previous_response_id", previous);
+            body.put("store", false);
+            body.put("include", List.of("reasoning.encrypted_content"));
             JsonNode root = parseResponse(send(textClient, body));
             List<JsonNode> calls = new ArrayList<>();
             for (JsonNode item : root.path("output")) {
@@ -167,14 +169,11 @@ public class OpenAiClient implements AiClient {
             }
             if (calls.isEmpty()) return outputText(root);
             if (round >= CHAT_MAX_TOOL_ROUNDS) throw limit("rounds");
-            var results = new ArrayList<Map<String, Object>>();
+            for (JsonNode item : root.path("output")) input.add(MAPPER.convertValue(item, Map.class));
             for (JsonNode call : calls) {
-                results.add(Map.of("type", "function_call_output", "call_id", call.path("call_id").asString(""),
+                input.add(Map.of("type", "function_call_output", "call_id", call.path("call_id").asString(""),
                         "output", tools.run(call.path("name").asString(""), call.path("arguments").asString("{}"))));
             }
-            input = results;
-            previous = root.path("id").asString(null);
-            if (previous == null) throw unavailable(new IllegalArgumentException("no response id"));
         }
     }
 
