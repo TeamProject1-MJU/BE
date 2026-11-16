@@ -255,7 +255,10 @@ class RouteSearchPostgresTest extends RouteSearchPostgresSupport {
                 .doesNotContain(" attempt 1: ").doesNotContain(KEY);
     }
 
-    /** 강남 -> 사당 on 2호선: first trains from 강남 are 05:36:00 weekdays, 05:35:30 Saturdays (as #120). */
+    /**
+     * 강남 -> 사당 on 2호선: first trains from 강남 are 05:36:00 weekdays, 05:35:30 Saturdays (as #120). The route leaves
+     * the station access time (60 s, #149) before the first train.
+     */
     @Test void plainSearchBeforeTheFirstTrainIsNoService() throws Exception {
         String[][] cases = {
                 {"2026-11-12T03:00:00+09:00", "2026-11-12T05:36:00+09:00", "11월 12일 05:36"},
@@ -302,11 +305,17 @@ class RouteSearchPostgresTest extends RouteSearchPostgresSupport {
         server.verify();
     }
 
-    private static void assertPlainSearchNoService(JsonNode data, String requested, String departureAt, String firstTrain) {
+    /** Station access time of the default configuration (#149): the route leaves this long before its first train. */
+    static final int ACCESS_SECONDS = 60;
+
+    /** @param firstTrainAt departure of the first train boarded; the route leaves {@link #ACCESS_SECONDS} before it */
+    private static void assertPlainSearchNoService(JsonNode data, String requested, String firstTrainAt, String firstTrain) {
+        String departureAt = OffsetDateTime.parse(firstTrainAt).minusSeconds(ACCESS_SECONDS).toString();
         JsonNode summary = data.get("routes").get(0).get("summary");
         assertThat(summary.get("noService").asBoolean()).as(requested).isTrue();
         assertThat(summary.get("arrivesAfterAppointment").asBoolean()).isFalse();
-        assertThat(summary.get("departureAt").asString()).as(requested).isEqualTo(departureAt);
+        assertThat(OffsetDateTime.parse(summary.get("departureAt").asString())).as(requested)
+                .isEqualTo(OffsetDateTime.parse(departureAt));
         assertThat(OffsetDateTime.parse(summary.get("arrivalAt").asString()))
                 .isEqualTo(OffsetDateTime.parse(departureAt).plusSeconds(summary.get("totalTimeSec").asInt()));
         assertThat(summary.get("serviceNotice").asString()).contains("첫차(" + firstTrain + " 출발)");

@@ -11,7 +11,7 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
 5. `ConstraintResolver`: `conditionText`가 있으면 `AiClient.interpretCondition` 1회. 서버가 범위를 검증하고 역 이름→stationId(`stations.name`, 끝의 "역" 무시, 같은 이름의 역이 여럿이면 버림), 닉네임→userId(방 멤버, 중복 닉네임이면 버림)로 매핑. 매핑 못 한 항목은 버리고 POST `message`에 알린다. 같은 항목이 `filter`에도 있으면 filter 값이 우선(항목 단위). AI 실패(어떤 예외든)는 filter만 적용하고 `conditionParseFailed=true`.
 6. `RecommendationEngine`: 이동 시간은 열차 시각표로 계산한다(#96, 아래 "열차 시각표 기반 이동 시간"). 시각표가 없을 때만 참여자당 `shortestPathsFrom` 1회(고정 소요시간)이고, 전원이 도달 가능한 역 = 후보. 방 멤버의 출발역은 후보에서 뺀다(어느 기준으로도 추천하지 않고, nearbyAlternatives에도 넣지 않는다). 이 출발역 제외는 서버 규칙이라 `appliedConstraints.excludeStationIds`에는 넣지 않는다. 그 필드는 사용자가 조건으로 뺀 역만 담는다(명세 v1.12 §8.1). 제약(참여자 **한 명당** 최대 시간·환승·요금, 개인별 한도, 제외 역)을 모두 통과한 역만 남긴다. 요금은 서울교통공사 운임표에서 (출발역, 후보역) 쌍으로 조회한다(#109, 아래 "요금"). 운임표가 없거나 쌍이 없으면 `FareCalculator.fareOf`(경로 API와 같은 `GraphFareCalculator`, 탄 경로 거리)로 계산한다.
 7. 기준별 최적역(TIME / FARE / DISTANCE, 명세 8.1 표). 허용 폭은 설정 `linkro.recommendation.fare-tolerance-won`(100), `distance-tolerance-m`(1000).
-8. 결과마다 `participantTimes`(혼잡도는 `CongestionLookup`, 출발 예정 시각은 TIMETABLE이면 첫 열차 출발 − 역 접근 시간, ESTIMATE면 약속 시각 − travelMinutes(약속이 없으면 요청 시각)), `nearbyAlternatives`(앞·뒤 한 정거장, 후보 집합에 있는 역만), 설명 문장.
+8. 결과마다 `participantTimes`(혼잡도는 `CongestionLookup`, 출발 예정 시각은 TIMETABLE이면 첫 열차 출발 − 역 접근 시간(기본 60초, #149), ESTIMATE면 약속 시각 − travelMinutes(약속이 없으면 요청 시각)), `nearbyAlternatives`(앞·뒤 한 정거장, 후보 집합에 있는 역만), 설명 문장.
 9. 설명: `AiClient.explainRecommendation`을 추천 1건당 **1회**만 호출한다(결과가 없으면 호출 없음). 요청에 모든 기준(`ExplanationRequest.items`: criterion, stationName, facts)을 담고, 응답(`ExplanationResult.texts`)은 기준별 문장이다. 기준마다 문장 안 숫자를 그 기준의 facts와 대조해서 다르거나 비었거나 빠졌으면 그 기준만 템플릿 + `explanationSource: TEMPLATE`, 호출 전체가 실패하면 모든 기준이 템플릿이다.
 10. `RecommendationRepository.save`가 run과 결과 행을 짧은 트랜잭션 하나로 저장. 계산·AI 호출은 트랜잭션 밖.
 11. 저장 뒤 `RecommendationCreatedEvent`를 Spring `ApplicationEventPublisher`로 발행(결과가 없는 run도). WebSocket `RECOMMENDATION_CREATED`는 이 이벤트를 듣는 쪽(11장)이 보낸다. 리스너 예외는 로그만 남기고 응답에 영향을 주지 않는다.
@@ -89,11 +89,11 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
 - **약속 시각 T가 있을 때**: 후보역 c마다 "T까지 c에 도착"을 조건으로 거꾸로(latest-departure) 시간 의존 다익스트라를 한 번 돌려, 각 멤버 출발역의 최늦 출발 시각을 구한다.
   - 그 출발 시각에 나서서 앞으로(earliest-arrival) 다시 탐색해 가장 일찍 도착하는 경로를 쓴다. 단, 거꾸로 경로보다 환승이 많지 않을 때만 쓴다. 1분 빠르려고 두 번 갈아타지 않게 하기 위해서다(강남→홍대입구 22시는 2호선 직행).
     - 예: 장암→모란 22시는 같은 7호선 열차로 군자에서 더 이른 5호선·8호선에 이어져 21:41에 도착한다.
-  - **이동 시간 = 실제 도착 − (첫 열차 출발 − 역 접근 시간)**, 분 단위 올림. T 전에 도착해서 기다리는 시간은 이동 시간이 아니라 `slackSeconds`다.
+  - **이동 시간 = 실제 도착 − (첫 열차 출발 − 역 접근 시간)**, 분 단위 올림. 역 접근 시간 기본 60초가 들어가므로 같은 열차라도 0초일 때보다 1분 길다(#149). T 전에 도착해서 기다리는 시간은 이동 시간이 아니라 `slackSeconds`다.
   - 후보 점수·`maxMinutes` 필터·정렬은 이 이동 시간을 쓴다.
   - 후보 탐색은 서로 독립이라 병렬로 돌리고, 결과는 역 id 순으로 모은다.
 - **약속 시각이 없을 때**: 멤버마다 요청 시각에 출발하는 앞으로(earliest-arrival) 탐색을 한 번 돌린다.
-  - 이동 시간 = 도착 − (첫 열차 출발 − 역 접근 시간). 첫 승강장 대기는 빼고, 그 열차를 타는 시점부터 센다. `slackSeconds`는 null이다.
+  - 이동 시간 = 도착 − (첫 열차 출발 − 역 접근 시간, 기본 60초). 첫 승강장 대기는 빼고, 그 열차를 타는 시점부터 센다. `slackSeconds`는 null이다.
   - 그 운행일의 막차가 지났으면 다음 운행일 첫차부터 탄다.
   - 앞으로 탐색은 일반 노드에서 가장 이른 상태만 이어 가서, 도착이 같아도 환승이 많은 경로가 남을 수 있다(불광→디지털미디어시티: 3호선으로 연신내까지 가서 걸어 같은 6호선 열차를 탐). 그래서 그 도착 시각으로 한 번 더 거꾸로 탐색한다(#107).
     - 거꾸로 탐색 결과는 다음 조건을 모두 만족할 때만 쓴다: 환승이 같거나 적다, 도착이 늦지 않다, 출발이 요청 시각보다 빠르지 않다, 실제로 나아진다(환승이 적거나, 같은 환승이면 더 늦게 출발).
@@ -168,7 +168,7 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
 
 | 필드 | TIMETABLE | ESTIMATE / 이전 실행 |
 | --- | --- | --- |
-| `departureAt` | 첫 열차 출발 − 역 접근 시간 | 약속 시각 − travelMinutes(없으면 요청 시각) |
+| `departureAt` | 첫 열차 출발 − 역 접근 시간(기본 60초) | 약속 시각 − travelMinutes(없으면 요청 시각) |
 | `arriveAt` | 마지막 열차 도착(travelMinutes = arriveAt − departureAt, 분 올림) | departureAt + 그래프 경로 초 |
 | `slackSeconds` | 약속 시각 − arriveAt. 약속이 없으면 null | 약속 시각 − arriveAt(0~59초). 약속이 없으면 null |
 | `boardingTrain` | `{lineId, lineName, stationId, stationName, direction, departureAt, terminal, trainCode}` | null |
@@ -187,8 +187,19 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
 | --- | --- | --- |
 | `linkro.recommendation.in-progress-max-seconds` | 60 | 방 단위 추천 생성 가드의 최대 점유 시간(#98) |
 | `linkro.subway.timetable.enabled` | true | false면 시각표를 적재하지 않고 기존 고정 소요시간으로 계산한다(시연 직전 비상 복귀용) |
-| `linkro.subway.timetable.station-access-seconds` | 0 | 출발해서 첫 승강장에 서기까지. 역별 자료가 없어 0이다 |
+| `linkro.subway.timetable.station-access-seconds` | 60 | 출발해서 첫 승강장에 서기까지. 모든 역에 같은 값(역별 자료 없음). 아래 "역 접근 시간" 참고 |
 | `linkro.subway.timetable.no-service-window-minutes` | 60 | 약속 직전 이 시간 안에 도착하는 열차가 없으면 `NO_SERVICE_TIME`(양수여야 하며, 아니면 기동 실패) |
+
+### 역 접근 시간 (#149)
+
+- **값과 근거**: 기본 60초(#149 전에는 0초). 카카오맵에서 미래 출발 시각을 설정하면 설정 시각 + 30초에 떠나는 열차는 건너뛰고 + 60초에 떠나는 열차는 탔다(평일 창동, 22:29·22:44·19:49~19:53 설정). 창동 한 역, 분 단위 입력 실측이라 31~60초 어느 값이든 맞고, 60초는 그 근사값이다.
+- **판정**: 정방향 탐색은 `요청 시각 + 60초` 이후(같은 초 포함)에 떠나는 열차부터 탄다. 예: 19:52 설정은 19:53:00 열차를 타고, 19:52:01 설정은 못 탄다(`StationAccessPostgresTest`).
+- **추천·약속방 모드에서 바뀌는 점** (약속이 있으면 `latestDepartures`, 운영 호출은 `maxTravelSeconds` 0이라 `floor`에 접근 시간이 들어가지 않는다)
+  - 타는 열차·도착·`slackSeconds`는 그대로이고, `leaveAt`(`departureAt`)만 첫 열차 출발 − 60초로 60초 이르다.
+  - `travelMinutes`(도착 − `leaveAt`, 올림)가 같은 열차라도 1분 늘어, `maxMinutes`·개인 상한에 걸리는 후보가 늘 수 있다.
+  - #140 "가장 늦은 출발이 이미 지났다" 판정(`leaveAt` 기준)이 60초 일찍 걸린다. 채팅 `leaveAtPassed`도 같다.
+  - 약속 없는 추천(`departingAt(출발역, 지금)`)은 지금부터 60초 안에 떠나는 열차를 건너뛴다.
+- 역에서 첫 승강장까지만 뜻한다. 집에서 역까지 걷는 시간은 들어가지 않는다.
 
 ### 요금 (#109)
 
