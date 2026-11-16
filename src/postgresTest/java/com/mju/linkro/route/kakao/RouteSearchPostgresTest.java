@@ -226,9 +226,23 @@ class RouteSearchPostgresTest extends RouteSearchPostgresSupport {
                 long origin = trip.member().departureStationId();
                 JsonNode data = ok(search(origin, jongno, requested, null), member);
                 assertThat(data.get("routeSource").asString()).isEqualTo("INTERNAL");
-                assertThat(data.get("routes").size()).isEqualTo(1);
+                // #153: the plain search gives r1 (this trip, below) and its timetable alternatives r2..rk, the
+                // alternatives by arrival, then transfers.
+                JsonNode routes = data.get("routes");
+                assertThat(routes.size()).isGreaterThanOrEqualTo(1);
+                for (int i = 0; i < routes.size(); i++) {
+                    assertThat(routes.get(i).get("routeId").asString()).isEqualTo("r" + (i + 1));
+                }
+                for (int i = 2; i < routes.size(); i++) {
+                    JsonNode before = routes.get(i - 1).get("summary");
+                    JsonNode after = routes.get(i).get("summary");
+                    int order = instant(before.get("arrivalAt")).compareTo(instant(after.get("arrivalAt")));
+                    assertThat(order < 0 || (order == 0
+                            && before.get("transferCount").asInt() <= after.get("transferCount").asInt()))
+                            .as("%s from %d: r%d before r%d", requested, origin, i, i + 1).isTrue();
+                }
                 assertThat(data.get("appointmentPassed").asBoolean()).isFalse();
-                JsonNode route = data.get("routes").get(0);
+                JsonNode route = routes.get(0);
                 assertThat(route.get("routeType").asString()).isEqualTo("FASTEST");
                 JsonNode summary = route.get("summary");
                 String as = requested + " from " + origin;
