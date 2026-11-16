@@ -309,6 +309,12 @@ public class TimetableRouter implements TimetableRouteFinder {
     @Override
     public Map<Long, TimedRoute> latestDepartures(long destinationStationId, Instant arriveBy, Set<Long> originStationIds,
                                                   int maxTravelSeconds) {
+        return latestDepartures(destinationStationId, arriveBy, originStationIds, maxTravelSeconds, null);
+    }
+
+    /** @param blocked nodes whose TRANSFER edges are not walked (#153), or null for none */
+    private Map<Long, TimedRoute> latestDepartures(long destinationStationId, Instant arriveBy, Set<Long> originStationIds,
+                                                   int maxTravelSeconds, boolean[] blocked) {
         requireStation(destinationStationId);
         ServiceTime service = serviceTime(arriveBy);
         DayType day = service.dayType();
@@ -377,7 +383,7 @@ public class TimetableRouter implements TimetableRouteFinder {
                     if (ride < 0 || edgeRides.departSec(ride) < floor) continue;
                     offer(best, queue, edgeRides.departSec(ride), state.transfers() + (change > 0 ? 1 : 0), from, e, edge,
                             edgeRides, ride, state, true);
-                } else if (relaxWalks && state.ride() != null) {
+                } else if (relaxWalks && state.ride() != null && (blocked == null || !blocked[node])) {
                     int time = state.time() - edge.seconds();
                     if (time >= floor) offer(best, queue, time, state.transfers() + 1, from, e, edge, null, -1, state, true);
                 }
@@ -391,7 +397,8 @@ public class TimetableRouter implements TimetableRouteFinder {
             // The backward search fixes when to leave; from then on the member takes the earliest way there
             // (장암 -> 모란: an earlier 5호선 and 8호선 connection). Only when it needs no more transfers: one minute is not
             // worth two extra changes (강남 -> 홍대입구 at 22:00 stays on 2호선).
-            TimedRoute replayed = forward(origin, latest.leaveAt(), destinationStationId).routeTo(destinationStationId).orElse(latest);
+            TimedRoute replayed = forward(origin, latest.leaveAt(), destinationStationId, blocked).routeTo(destinationStationId)
+                    .orElse(latest);
             boolean better = replayed.arriveAt().isBefore(latest.arriveAt()) && noWorse(replayed, latest);
             routes.put(origin, better ? replayed : latest);
         });
@@ -416,7 +423,32 @@ public class TimetableRouter implements TimetableRouteFinder {
     @Override
     public TimedTree departingAt(long originStationId, Instant leaveAt) {
         requireStation(originStationId);
-        TimedTree earliest = forward(originStationId, leaveAt, null);
+        return departing(originStationId, leaveAt, null);
+    }
+
+    /**
+     * {@link #departingAt(long, Instant)} without walking the TRANSFER edges at {@code avoidTransferStations} (#153), in
+     * the forward search and in the backward search of {@link #withFewerTransfers}. Riding through those stations and
+     * branch changes there are still allowed. An empty set is {@link #departingAt(long, Instant)}.
+     */
+    @Override
+    public TimedTree departingAt(long originStationId, Instant leaveAt, Set<Long> avoidTransferStations) {
+        requireStation(originStationId);
+        return departing(originStationId, leaveAt, blockedNodes(avoidTransferStations));
+    }
+
+    /** Nodes of the stations, or null when there are none. Unknown station ids block nothing. */
+    private boolean[] blockedNodes(Set<Long> stationIds) {
+        if (stationIds.isEmpty()) return null;
+        boolean[] blocked = new boolean[nodeIds.length];
+        for (long stationId : stationIds) {
+            for (Node node : graph.nodesOf(stationId)) blocked[nodeIndex.get(node.id())] = true;
+        }
+        return blocked;
+    }
+
+    private TimedTree departing(long originStationId, Instant leaveAt, boolean[] blocked) {
+        TimedTree earliest = forward(originStationId, leaveAt, null, blocked);
         return new TimedTree() {
             @Override
             public Set<Long> reachableStationIds() {
@@ -425,7 +457,7 @@ public class TimetableRouter implements TimetableRouteFinder {
 
             @Override
             public Optional<TimedRoute> routeTo(long stationId) {
-                return earliest.routeTo(stationId).map(route -> withFewerTransfers(route, originStationId, stationId, leaveAt));
+                return earliest.routeTo(stationId).map(route -> withFewerTransfers(route, originStationId, stationId, leaveAt, blocked));
             }
         };
     }
@@ -439,10 +471,11 @@ public class TimetableRouter implements TimetableRouteFinder {
      * keeps the forward one, so results do not move between equivalent routes. The mirror of the forward replay in
      * latestDepartures.
      */
-    private TimedRoute withFewerTransfers(TimedRoute earliest, long originStationId, long stationId, Instant leaveAt) {
+    private TimedRoute withFewerTransfers(TimedRoute earliest, long originStationId, long stationId, Instant leaveAt,
+                                          boolean[] blocked) {
         int maxTravel = (int) Duration.between(leaveAt, earliest.arriveAt()).toSeconds();
-        TimedRoute backward = latestDepartures(stationId, earliest.arriveAt(), Set.of(originStationId), Math.max(maxTravel, 1))
-                .get(originStationId);
+        TimedRoute backward = latestDepartures(stationId, earliest.arriveAt(), Set.of(originStationId), Math.max(maxTravel, 1),
+                blocked).get(originStationId);
         if (backward == null || !noWorse(backward, earliest) || backward.leaveAt().isBefore(leaveAt)) return earliest;
         boolean fewerTransfers = backward.path().transferCount() < earliest.path().transferCount();
         return fewerTransfers || backward.leaveAt().isAfter(earliest.leaveAt()) ? backward : earliest;
@@ -459,15 +492,18 @@ public class TimetableRouter implements TimetableRouteFinder {
         requireStation(originStationId);
         ServiceTime service = serviceTime(at);
         // Leaving at second 0 of the service day: every train of the day can be taken, so these are the first trains.
-        Forward search = search(originStationId, service.serviceDate(), service.dayType(), accessSeconds, null);
+        Forward search = search(originStationId, service.serviceDate(), service.dayType(), accessSeconds, null, null);
         Instant midnight = service.serviceDate().atStartOfDay(ZONE).toInstant();
         Map<Long, Instant> arrivals = new HashMap<>();
         search.arrivals().forEach((station, label) -> arrivals.put(station, midnight.plusSeconds(label.time())));
         return arrivals;
     }
 
-    /** Earliest arrivals; with a {@code target} station it stops once that station is reached. */
-    private TimedTree forward(long originStationId, Instant leaveAt, Long target) {
+    /**
+     * Earliest arrivals; with a {@code target} station it stops once that station is reached. {@code blocked} nodes do not
+     * walk their TRANSFER edges (null for none).
+     */
+    private TimedTree forward(long originStationId, Instant leaveAt, Long target, boolean[] blocked) {
         ServiceTime service = serviceTime(leaveAt);
         LocalDate date = service.serviceDate();
         DayType day = service.dayType();
@@ -479,13 +515,13 @@ public class TimetableRouter implements TimetableRouteFinder {
             day = clock.dayTypeOf(date);
             start -= 86_400;
         }
-        return tree(search(originStationId, date, day, start, target), originStationId);
+        return tree(search(originStationId, date, day, start, target, blocked), originStationId);
     }
 
     /** Earliest state at each station reached on a ride, from {@code start} (second of the service day) on. */
     private record Forward(LocalDate serviceDate, DayType day, Map<Long, Label> arrivals) {}
 
-    private Forward search(long originStationId, LocalDate date, DayType day, int start, Long target) {
+    private Forward search(long originStationId, LocalDate date, DayType day, int start, Long target, boolean[] blocked) {
         TrainTimetable.Rides[] dayRides = rides[day.ordinal()];
         PriorityQueue<Label> queue = new PriorityQueue<>(EARLIEST_FIRST);
         Label[] best = new Label[edges.length + nodeIds.length];
@@ -544,7 +580,7 @@ public class TimetableRouter implements TimetableRouteFinder {
                     if (ride < 0) continue;
                     offer(best, queue, edgeRides.arriveSec(ride), state.transfers() + (change > 0 ? 1 : 0), to, e, edge,
                             edgeRides, ride, state, false);
-                } else if (relaxWalks) {
+                } else if (relaxWalks && (blocked == null || !blocked[node])) {
                     offer(best, queue, state.time() + edge.seconds(), state.transfers() + 1, to, e, edge, null, -1, state, false);
                 }
             }

@@ -72,7 +72,9 @@ logging:
 # KAKAO_REST_API_KEY (production: ~/BE/.env, passed by docker-compose). Empty means INTERNAL routes only.
 # Optional overrides (defaults shown): linkro.route.kakao.base-url=https://dapi.kakao.com,
 #   call-timeout=3s, total-timeout=5s, retry-delay=200ms; linkro.route.arrive-at-max-days=365 (arriveAt's Seoul
-#   date may be at most this many days after today; the holiday calendar covers this year and next only). See docs/route-search-81.md.
+#   date may be at most this many days after today; the holiday calendar covers this year and next only),
+#   linkro.route.max-timetable-candidates=10 (safety cap on the plain search timetable routes, #153; reaching it is
+#   logged). See docs/route-search-81.md.
 # - timetable.enabled (default true, module=graph only): recommendations use real trains of train-timetable.csv.gz
 #   (#96). false loads no timetable and goes back to the fixed costs below (emergency switch).
 #   timetable.station-access-seconds (default 60, #149): time from leaving to the first platform; the first train leaves at

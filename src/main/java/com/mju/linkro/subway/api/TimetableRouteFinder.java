@@ -49,6 +49,12 @@ public interface TimetableRouteFinder {
     /** Earliest-arrival routes leaving {@code originStationId} at {@code leaveAt}. */
     TimedTree departingAt(long originStationId, Instant leaveAt);
 
+    /**
+     * {@link #departingAt(long, Instant)} without changing lines by a TRANSFER walk at {@code avoidTransferStations}
+     * (#153: the alternatives of a plain route search). An empty set gives the same routes as the two-argument form.
+     */
+    TimedTree departingAt(long originStationId, Instant leaveAt, Set<Long> avoidTransferStations);
+
     /** Result of {@link #departingAt}. */
     interface TimedTree {
         Set<Long> reachableStationIds();
