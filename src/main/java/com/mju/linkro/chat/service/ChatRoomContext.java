@@ -13,6 +13,7 @@ import com.mju.linkro.room.dto.RoomResponses.Station;
 import com.mju.linkro.room.repository.MeetingRoomRepository;
 import com.mju.linkro.room.repository.RoomReadRepository;
 import com.mju.linkro.room.repository.RoomReadRepository.MemberRow;
+import java.time.Clock;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -20,36 +21,57 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Locale;
+import java.util.Objects;
 import java.util.UUID;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
  * Builds what the AI gets with an @링크로 question (API 10.1): the earlier conversation and the room context
  * (participants, departures, appointment, selected station, latest recommendation). Facts only, no numbers the AI
- * could repeat wrongly. Runs without a transaction: the caller holds no database connection during the AI call.
+ * could repeat wrongly. Starts with the current Seoul date, weekday and time, which the model cannot know otherwise.
+ * Runs without a transaction: the caller holds no database connection during the AI call.
  */
 @Component
-@RequiredArgsConstructor
 class ChatRoomContext {
     /** The name the AI's own earlier answers carry in the conversation. */
     static final String AI_NAME = "링크로";
-    private static final DateTimeFormatter APPOINTMENT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.of("Asia/Seoul"));
+    private static final DateTimeFormatter APPOINTMENT = DateTimeFormatter.ofPattern("yyyy-MM-dd(E) HH:mm", Locale.KOREAN)
+            .withZone(ZoneId.of("Asia/Seoul"));
 
     private final ChatProperties properties;
     private final RoomMessageRepository messages;
     private final MeetingRoomRepository rooms;
     private final RoomReadRepository roomReads;
     private final RecommendationRepository recommendations;
+    private final Clock clock;
+
+    @Autowired
+    ChatRoomContext(ChatProperties properties, RoomMessageRepository messages, MeetingRoomRepository rooms,
+                    RoomReadRepository roomReads, RecommendationRepository recommendations, ObjectProvider<Clock> clock) {
+        this(properties, messages, rooms, roomReads, recommendations, clock.getIfAvailable(Clock::systemUTC));
+    }
+
+    ChatRoomContext(ChatProperties properties, RoomMessageRepository messages, MeetingRoomRepository rooms,
+                    RoomReadRepository roomReads, RecommendationRepository recommendations, Clock clock) {
+        this.properties = properties;
+        this.messages = messages;
+        this.rooms = rooms;
+        this.roomReads = roomReads;
+        this.recommendations = recommendations;
+        this.clock = clock;
+    }
 
     ChatReplyRequest build(UUID roomId, Message question) {
         List<ChatTurn> recent = messages.conversationBefore(roomId, question.id(), properties.getAiContextMessages()).stream()
-                .map(message -> new ChatTurn(message.senderType() == SenderType.AI ? AI_NAME : message.nickname(), message.content()))
+                .map(message -> new ChatTurn(message.senderType() == SenderType.AI ? AI_NAME : oneLine(message.nickname()), message.content()))
                 .toList();
-        return new ChatReplyRequest(LinkroMention.question(question.content()), recent, describe(roomId));
+        return new ChatReplyRequest(LinkroMention.question(question.content()), recent, describe(roomId, question));
     }
 
-    private String describe(UUID roomId) {
+    private String describe(UUID roomId, Message question) {
         Optional<MeetingRoom> found = rooms.findById(roomId);
         if (found.isEmpty()) return null;
         MeetingRoom room = found.get();
@@ -62,12 +84,18 @@ class ChatRoomContext {
         recommendation.stream().map(ResultRow::stationId).forEach(stationIds::add);
         Map<Long, Station> stations = roomReads.stations(stationIds);
 
-        var text = new StringBuilder("약속방 이름: ").append(room.getName()).append('\n');
+        // "나"/"내" in the question mean the asker: the member's current nickname, else the one the message carried.
+        String asker = members.stream().filter(member -> question.senderId() != null && Objects.equals(member.userId(), question.senderId())).map(MemberRow::nickname)
+                .findFirst().orElse(question.nickname());
+        asker = oneLine(asker);
+        var text = new StringBuilder("[지금] ").append(APPOINTMENT.format(clock.instant())).append(" (한국 시간)\n")
+                .append("질문자: ").append(asker == null || asker.isEmpty() ? "알 수 없음" : asker).append('\n')
+                .append("약속방 이름: ").append(room.getName()).append('\n');
         text.append("약속 시각: ").append(room.getAppointmentAt() == null ? "미정" : APPOINTMENT.format(room.getAppointmentAt())).append('\n');
         text.append("확정된 약속역: ").append(name(stations, room.getSelectedStationId(), "아직 없음")).append('\n');
         List<String> people = new ArrayList<>();
         for (MemberRow member : members) {
-            people.add(member.nickname() + "(출발역: " + name(stations, member.stationId(), "미설정") + ")");
+            people.add(oneLine(member.nickname()) + "(출발역: " + name(stations, member.stationId(), "미설정") + ")");
         }
         text.append("참여자: ").append(String.join(", ", people)).append('\n');
         List<String> best = new ArrayList<>();
@@ -76,6 +104,11 @@ class ChatRoomContext {
         }
         text.append("최근 중간역 추천: ").append(best.isEmpty() ? "없음" : String.join(", ", best));
         return text.toString();
+    }
+
+    /** A nickname is user input that goes into the prompt: line breaks and other control characters become one space. */
+    static String oneLine(String text) {
+        return text == null ? null : text.replaceAll("[\\p{Cc}\\p{Zl}\\p{Zp}\\s]+", " ").strip();
     }
 
     private static String name(Map<Long, Station> stations, Long id, String fallback) {
