@@ -11,7 +11,7 @@
 | --- | --- | --- |
 | 노드 | `station_lines` (역×노선) | `is_supported = false` 역은 노드를 만들지 않고, 그 노드에 닿는 간선도 버린다 |
 | RIDE 간선 | `station_connections` RIDE | 방향 있는 간선. 비용 = `travel_seconds` + `dwell-seconds` |
-| TRANSFER 간선 | `station_connections` TRANSFER | 비용 = `travel_seconds`(환승소요시간) + `transfer-wait-seconds` |
+| TRANSFER 간선 | `station_connections` TRANSFER | 비용 = `travel_seconds`(환승소요시간) + `transfer-wait-seconds`. #151의 `transfer-overrides`는 이 그래프에 쓰지 않는다 |
 | 분기 환승 | 설정 `branch-transfers` | 같은 노선 분기점의 열차 갈아타기. 아래 "분기 환승" 참고 |
 
 - **로딩**: `SubwayGraphLoader`가 `subway_lines`, `stations`, `station_lines`, `station_connections`를 JDBC로 한 번 읽는다. `SubwayGraph.of(data)`가 그 데이터로 불변 그래프를 만든다. 그래프 생성은 DB와 분리돼 있어서 손으로 만든 데이터로 단위 테스트할 수 있다.
@@ -21,7 +21,7 @@
   - RIDE가 서로 다른 노선을 잇거나, TRANSFER가 "같은 역·다른 노선"이 아니면 WARN을 남긴다.
 - `travel_seconds`는 명세 14장대로 정차 시간을 더하지 않은 원본 값이다. 대신 그래프 비용에 정차·대기 보정을 더한다(기본 dwell 30초, 환승 대기 120초, 분기 환승 대기 120초). 아래 "시간 보정 기본값" 참고.
 
-> #96 이후 추천은 이 고정 비용 대신 열차 시각표로 계산한다(`docs/recommendation-74.md`). 이 그래프 비용은 경로 API의 내부 경로와 추천 폴백(`linkro.subway.timetable.enabled=false` 등)에 쓰인다. V15가 RIDE 간선 20개의 `travel_seconds`를 시각표 중앙값으로 바꿨다.
+> #96 이후 추천은 이 고정 비용 대신 열차 시각표로 계산한다(`docs/recommendation-74.md`). 이 그래프 비용은 경로 API의 내부 경로와 추천 폴백(`linkro.subway.timetable.enabled=false` 등)에 쓰인다. V15가 RIDE 간선 20개의 `travel_seconds`를 시각표 중앙값으로 바꿨다. 시각표 경로의 환승 시간은 #151부터 `linkro.subway.timetable.transfer-overrides`(카카오맵 기준)로 덮어쓰지만, 이 그래프와 `SubwayGraph` bean, `station_connections` 값은 그대로다.
 
 ## 탐색 규칙
 
@@ -80,7 +80,7 @@
 | `linkro.subway.module` | (없음 = mock) | `graph`면 이 구현을 쓴다 |
 | `linkro.subway.congestion` | (없음 = mock) | 혼잡도 mock 사용 여부. 실제 구현이 붙으면 바꾼다 |
 | `linkro.subway.graph.dwell-seconds` | 30 | RIDE 간선마다 더하는 정차 시간 |
-| `linkro.subway.graph.transfer-wait-seconds` | 120 | 일반 환승마다 더하는 열차 대기 |
+| `linkro.subway.graph.transfer-wait-seconds` | 120 | 일반 환승마다 더하는 열차 대기(이 그래프 전용, 시각표 경로는 쓰지 않음) |
 | `linkro.subway.graph.branch-transfer-wait-seconds` | 120 | 분기 환승마다 더하는 열차 대기 |
 | `linkro.subway.graph.default-branch-transfer-seconds` | 120 | 설정에 없는 분기점의 환승 시간(거리 0) |
 | `linkro.subway.graph.branch-transfers[i].station/line/seconds/meters` | 위 표 3건 | 분기점별 환승 시간·거리 |

@@ -81,7 +81,7 @@ V14(#89)에서 1호선 방향을 서울시 상행/하행 기준으로 바로잡�
 - 그래서 edges.csv의 1호선 direction은 DB와 반대다. 스크립트로 SQL을 다시 만들면 V11과 같은 결과가 나오고, 1호선 방향은 V14가 고친다.
 - edges.csv를 읽어 방향을 쓰는 새 코드나 비교 작업(#54 등)은 1호선을 뒤집어 읽어야 한다.
 
-**TRANSFER**: 환승 파일에서 호선과 환승노선이 모두 1~8호선인 행만 넣는다. 환승거리 → distance_m, 환승소요시간(mm:ss) → travel_seconds, direction은 null.
+**TRANSFER**: 환승 파일에서 호선과 환승노선이 모두 1~8호선인 행만 넣는다. 환승거리 → distance_m, 환승소요시간(mm:ss) → travel_seconds, direction은 null. 시드 값의 의미(공공데이터 도보 시간)는 그대로다. 시각표 경로만 #151의 `transfer-overrides`(카카오맵 기준)로 덮어쓴다(`docs/recommendation-74.md`).
 
 제외한 행 (스크립트가 모두 출력한다):
 - 같은 노선 안 환승: 2호선 성수→2호선, 2호선 신도림→2호선, 5호선 강동→5호선
