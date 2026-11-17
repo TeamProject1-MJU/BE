@@ -29,6 +29,7 @@ import static com.mju.linkro.subway.arrival.ArrivalFixtures.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.endsWith;
 import static org.hamcrest.Matchers.startsWith;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
@@ -355,5 +356,48 @@ class ArrivalServiceTest {
             release.countDown();
             pool.shutdownNow();
         }
+    }
+
+    /** 서울역(1, 1호선 code 150 / 4호선 code 426) and 회현(104, 4호선 code 425) as seeded; 서울역 -> 회현 is UP (#159). */
+    private void seoulStation() {
+        station(1, "서울역");
+        node(1, 1, 1, "1", "150");
+        node(1, 4, 113, "4", "426");
+        station(104, "회현");
+        node(104, 4, 112, "4", "425");
+        when(stations.rideDirection(113, 112)).thenReturn(Optional.of(DirectionCode.UP));
+    }
+
+    @Test
+    void seoulStationIsQueriedAsSeoul() {
+        // "서울역" returns only GTX-A (1032) rows; "서울" holds 1호선, 4호선, 경의중앙선 and 공항철도 (real call, 2026-11-17).
+        seoulStation();
+        server.expect(ExpectedCount.once(), requestTo(endsWith("/realtimeStationArrival/0/30/%EC%84%9C%EC%9A%B8")))
+                .andRespond(withSuccess(json("seoul.json"), MediaType.APPLICATION_JSON));
+        // 4호선 toward 회현: 4호선 codes build no external id, so the edge 서울역 -> 회현 (UP) keeps 상행 진접행 only.
+        assertThat(SeoulSubwayIds.stationId("4", "425")).isEmpty();
+        ArrivalResponse towardHoehyeon = get(1, "4", "104", null, "10");
+        assertThat(summary(towardHoehyeon)).containsExactly("UP 330 5분 30초 후");
+        assertThat(towardHoehyeon.trains()).extracting(Train::destinationName).containsExactly("진접");
+        verify(stations).rideDirection(113, 112);
+        // The same cached answer: 4호선 both ways, 1호선 alone; 경의중앙선 (1063) and 공항철도 (1065) never show.
+        assertThat(summary(get(1, "4", null, null, "10"))).containsExactly("DOWN 200 3분 20초 후", "UP 330 5분 30초 후");
+        assertThat(summary(get(1, "1", null, null, "10"))).containsExactly("DOWN 120 2분 후");
+        server.verify();
+    }
+
+    @Test
+    void seoulStationNameOnLines1And4Only() {
+        ArrivalStationNames names = new ArrivalStationNames();
+        assertThat(names.queryName("1", "서울역")).isEqualTo("서울");
+        assertThat(names.queryName("4", " 서울역 ")).isEqualTo("서울");
+        // Stations without an exception keep their name; the five earlier exceptions are unchanged.
+        assertThat(names.queryName("2", "시청")).isEqualTo("시청");
+        assertThat(names.queryName("1", "시청")).isEqualTo("시청");
+        assertThat(names.queryName("6", "응암")).isEqualTo("응암순환(상선)");
+        assertThat(names.queryName("6", "새절")).isEqualTo("새절(신사)");
+        assertThat(names.queryName("6", "증산")).isEqualTo("증산(명지대앞)");
+        assertThat(names.queryName("6", "월드컵경기장")).isEqualTo("월드컵경기장(성산)");
+        assertThat(names.queryName("7", "어린이대공원")).isEqualTo("어린이대공원(세종대)");
     }
 }
