@@ -33,8 +33,12 @@ import java.util.*;
 final class TimetableCandidates {
     /** Routes arriving more than this after the first route are left out, unless configured otherwise. */
     static final Duration DEFAULT_CUT = Duration.ofMinutes(15);
-    /** A route with more transfers than another is removed only when it arrives more than this later (#155). */
-    static final Duration DEFAULT_GRACE = Duration.ofMinutes(7);
+    /**
+     * A route with more transfers than another is removed only when it arrives more than this later (#155). 6 minutes:
+     * against 카카오맵 on five routes at four request times it kept every route 카카오맵 showed and added as few others as
+     * 5 minutes (7 kept six more 2-3 transfer routes 6.5-7 minutes later).
+     */
+    static final Duration DEFAULT_GRACE = Duration.ofMinutes(6);
 
     /** The search of one more route without changing lines at the given stations. */
     @FunctionalInterface

@@ -74,7 +74,7 @@ public class RouteSearchService {
     private final int maxTimetableCandidates;
     /** {@code linkro.route.timetable-candidate-cut-minutes} (default 15, at least 1, #155): see {@link TimetableCandidates}. */
     private final Duration candidateCut;
-    /** {@code linkro.route.timetable-candidate-grace-minutes} (default 7, not negative, #155): see {@link TimetableCandidates}. */
+    /** {@code linkro.route.timetable-candidate-grace-minutes} (default 6, not negative, #155): see {@link TimetableCandidates}. */
     private final Duration candidateGrace;
 
     @Autowired
@@ -85,7 +85,7 @@ public class RouteSearchService {
                               @Value("${linkro.route.arrive-at-max-days:365}") int arriveAtMaxDays,
                               @Value("${linkro.route.max-timetable-candidates:10}") int maxTimetableCandidates,
                               @Value("${linkro.route.timetable-candidate-cut-minutes:15}") int candidateCutMinutes,
-                              @Value("${linkro.route.timetable-candidate-grace-minutes:7}") int candidateGraceMinutes) {
+                              @Value("${linkro.route.timetable-candidate-grace-minutes:6}") int candidateGraceMinutes) {
         this(rooms, stations, kakao, mapper, internal, new DbCongestionLookup(stats, resolver), Clock.systemUTC(),
                 timetable.isPresent() && timetableClock.isPresent() ? new FirstTrainTimer(timetable.get(), timetableClock.get()) : null,
                 timetableRoutes.orElse(null), arriveAtMaxDays, maxTimetableCandidates, candidateCutMinutes, candidateGraceMinutes);
