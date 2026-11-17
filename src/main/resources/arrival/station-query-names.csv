@@ -1,5 +1,6 @@
 # Seoul realtime arrival API: our station name -> official query name, only where they differ.
 # Each row was confirmed by a real call on 2026-11-10 (INFO-200 with our name, INFO-000 with the official one).
+# 서울역은 2026-11-17 실제 호출로 확인(INFO-000 with 서울, 서울역은 GTX-A만 반환)
 # Stations not listed are queried by our stations.name; an INFO-200 there is NO_DATA. See docs/arrivals-86.md.
 line_code,station_name,query_name
 6,응암,응암순환(상선)
@@ -7,3 +8,5 @@ line_code,station_name,query_name
 6,증산,증산(명지대앞)
 6,월드컵경기장,월드컵경기장(성산)
 7,어린이대공원,어린이대공원(세종대)
+1,서울역,서울
+4,서울역,서울
