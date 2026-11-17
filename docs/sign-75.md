@@ -15,6 +15,15 @@ API 명세 v1.12 9.1(`POST /api/v1/ai/direction-check`, multipart), 상세설계
 - 사진에서 다른 노선임이 확인되면 WRONG/LINE_NOT_ON_ROUTE, 반대 방향이 명확하면 WRONG/DIRECTION_MISMATCH. 표지판 아님은 RETAKE/NOT_A_SIGN, 판독 불가는 RETAKE/UNREADABLE, 비교 근거 부족은 RETAKE/MISSING_INFO. RETAKE는 유효한 요청의 판독 결과(HTTP 200)이며 잘못된 요청(HTTP 400)과 구분한다.
 - headsign 없는 일반 노선·지선 사진에 행선지명만 있으면 방향을 추정하지 않고 RETAKE/MISSING_INFO로 처리한다. 이때 재촬영만으로 해결되지 않을 수 있다. 사진에 명시된 방향 표시 또는 경로에서 확보한 정확한 headsign이 필요하다.
 
+## 방향 표시 글자가 없는 표지판 (#158)
+
+실제 승강장 표지판에는 상행/하행/내선/외선 글자 없이 역번호(예: 202), 노선 색, 이전·다음 역 이름과 화살표만 있는 경우가 많다. headsign 없는 요청에서 아래 단서를 추가로 쓴다. 응답 필드는 바꾸지 않는다(내부 전용).
+
+- AI 응답(구조화 출력)에 `stationCode`(읽은 역번호), `nextStation`(화살표·"다음역"·강조 표시가 가리키는, 이 승강장 열차의 다음 정차역)을 추가로 받는다. 노선 글자가 없으면 AI가 역번호 첫 자리로 `lineName`을 적고, 노선 색은 확인용으로만 쓴다.
+- `stationCode`가 DB `station_lines.station_code`(요청 역·노선)와 같으면 읽지 못한 역명·노선명을 요청 값으로 채운다.
+- 명시적 방향 표시가 없으면 `nextStation`을 DB RIDE 연결(요청 역에서 같은 노선의 바로 다음 역)과 대조해 방향 코드를 정하고 요청 direction과 비교한다. AI의 방향 추정은 쓰지 않는다. 역명(또는 역번호)이 요청 역과 같아야 하고, 노선을 못 읽었는데 같은 이름의 다음 역이 이 역의 다른 노선에도 있으면 판단하지 않는다. 방면 표시의 종착역처럼 바로 다음 역이 아닌 이름은 근거가 되지 않는다(RETAKE/MISSING_INFO 유지).
+- 이때 `recognized.headsign`이 비어 있으면 읽은 다음 역 이름을 넣고, `recognized.lineName`은 요청 노선명으로 채운다.
+
 ## 시간표 조사 결과와 계약 결정 (#132)
 
 `TrainTimetable.TrainKey`는 운행일 종류·노선·열차 코드·출발역·종착역을 보존한다. 로더는 원본 direction 열로 행선지를 매핑하지 않고 정차 순서로 RIDE 연결을 구성한다. 조회는 연결(edge 또는 다음 역), 운행일, 시각 등으로 열차를 선택한다. `TimetableRouter`가 선택한 열차의 terminal이 `TimedLeg.terminal`에 담긴다. 현재 입력 세 개에는 선택 열차·다음 역·운행일·시각이 없어 이를 해당 경로의 행선지로 확정할 수 없다. 이번 변경은 시간표에서 임의의 열차를 골라 채우지 않는다.

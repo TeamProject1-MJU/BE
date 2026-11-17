@@ -63,7 +63,7 @@ public class SignCheckService {
 
         long started = System.nanoTime();
         SignReading reading = ai.readSign(signImage, context);
-        if (context.directionOnly()) reading = checkDirectionEvidence(reading, request.direction());
+        if (context.directionOnly()) reading = checkDirectionEvidence(reading, request, stationName, lineName);
         log.info("Sign check: result={} reason={} ai={}ms", reading.result(), reading.reason(), (System.nanoTime() - started) / 1_000_000);
 
         return new SignCheckResponse(reading.result(), reading.reason(),
@@ -71,11 +71,45 @@ public class SignCheckService {
                 new Place(stationName, lineName, request.headsign()), message(reading));
     }
 
-    /** Never accept the model's geographic inference from a terminal name as direction evidence. */
-    private static SignReading checkDirectionEvidence(SignReading reading, DirectionCode expected) {
-        if (reading.result() == SignResult.RETAKE || reading.reason() == SignReason.LINE_NOT_ON_ROUTE) return reading;
-        String text = reading.headsign() == null ? "" : reading.headsign().replaceAll("\\s+", "");
-        DirectionCode observed = switch (text) {
+    /**
+     * Never accept the model's geographic inference from a terminal name as direction evidence. Evidence is an explicit
+     * direction mark, or the next stop the sign points to, looked up in our own graph. A station number such as 202
+     * stands in for an unread station or line name when it is this station's number on this line.
+     */
+    private SignReading checkDirectionEvidence(SignReading reading, SignRouteRequest.Valid request,
+                                               String expectedStation, String expectedLine) {
+        if (reading.reason() == SignReason.LINE_NOT_ON_ROUTE || reading.reason() == SignReason.NOT_A_SIGN
+                || reading.reason() == SignReason.UNREADABLE) return reading;
+        boolean codeMatches = reading.stationCode() != null
+                && routes.codeMatches(request.stationId(), request.lineId(), reading.stationCode());
+        String station = !isBlank(reading.stationName()) ? reading.stationName() : codeMatches ? expectedStation : null;
+        String line = !isBlank(reading.lineName()) ? reading.lineName() : codeMatches ? expectedLine : null;
+        DirectionCode expected = request.direction();
+        DirectionCode observed = explicitDirection(reading.headsign());
+        String headsign = reading.headsign();
+        if (observed == null) {
+            observed = directionFromNextStop(reading.nextStation(), request, station, expectedStation, line, expectedLine, codeMatches);
+            if (observed == null) return retake(station, line, headsign);
+            if (line == null) line = expectedLine; // the next stop exists only on this line here
+            if (headsign == null) headsign = reading.nextStation();
+        } else if (reading.result() == SignResult.RETAKE || (observed == expected && reading.result() != SignResult.CORRECT)) {
+            return retake(station, line, headsign);
+        }
+        if (isBlank(station) || isBlank(line)) return retake(station, line, headsign);
+        // Codes from another family (e.g. UP vs INNER) do not establish an opposite direction.
+        boolean comparable = observed == expected
+                || (observed == DirectionCode.UP && expected == DirectionCode.DOWN)
+                || (observed == DirectionCode.DOWN && expected == DirectionCode.UP)
+                || (observed == DirectionCode.INNER && expected == DirectionCode.OUTER)
+                || (observed == DirectionCode.OUTER && expected == DirectionCode.INNER);
+        if (!comparable) return retake(station, line, headsign);
+        return new SignReading(observed == expected ? SignResult.CORRECT : SignResult.WRONG,
+                observed == expected ? null : SignReason.DIRECTION_MISMATCH, station, line, headsign);
+    }
+
+    private static DirectionCode explicitDirection(String headsign) {
+        String text = headsign == null ? "" : headsign.replaceAll("\\s+", "");
+        return switch (text) {
             case "UP", "상행" -> DirectionCode.UP;
             case "DOWN", "하행" -> DirectionCode.DOWN;
             case "INNER", "내선", "내선순환" -> DirectionCode.INNER;
@@ -83,23 +117,51 @@ public class SignCheckService {
             case "LOOP", "응암순환" -> DirectionCode.LOOP;
             default -> null;
         };
-        if (observed == null || reading.stationName() == null || reading.stationName().isBlank()
-                || reading.lineName() == null || reading.lineName().isBlank()
-                || (observed == expected && reading.result() != SignResult.CORRECT)) {
-            return new SignReading(SignResult.RETAKE, SignReason.MISSING_INFO,
-                    reading.stationName(), reading.lineName(), reading.headsign());
-        }
-        // Codes from another family (e.g. UP vs INNER) do not establish an opposite direction.
-        boolean comparable = observed == expected
-                || (observed == DirectionCode.UP && expected == DirectionCode.DOWN)
-                || (observed == DirectionCode.DOWN && expected == DirectionCode.UP)
-                || (observed == DirectionCode.INNER && expected == DirectionCode.OUTER)
-                || (observed == DirectionCode.OUTER && expected == DirectionCode.INNER);
-        if (!comparable) return new SignReading(SignResult.RETAKE, SignReason.MISSING_INFO,
-                reading.stationName(), reading.lineName(), reading.headsign());
-        return new SignReading(observed == expected ? SignResult.CORRECT : SignResult.WRONG,
-                observed == expected ? null : SignReason.DIRECTION_MISMATCH,
-                reading.stationName(), reading.lineName(), reading.headsign());
+    }
+
+    /**
+     * The direction of this station's RIDE edge to the named next stop on the route's line. Requires the sign to be
+     * this station (by name or number), and a single matching edge. With no line read, a next stop of the same name
+     * on another line of this station makes it ambiguous.
+     */
+    private DirectionCode directionFromNextStop(String nextStation, SignRouteRequest.Valid request, String station,
+                                                String expectedStation, String line, String expectedLine,
+                                                boolean codeMatches) {
+        if (isBlank(nextStation)) return null;
+        if (!codeMatches && !sameStation(station, expectedStation)) return null;
+        if (line != null && !sameLine(line, expectedLine)) return null;
+        var matches = routes.nextStops(request.stationId()).stream()
+                .filter(stop -> sameStation(stop.stationName(), nextStation)).toList();
+        if (line == null && !codeMatches && matches.stream().anyMatch(stop -> stop.lineId() != request.lineId())) return null;
+        var directions = matches.stream().filter(stop -> stop.lineId() == request.lineId())
+                .map(SignRouteLookup.NextStop::direction).distinct().toList();
+        return directions.size() == 1 ? directions.get(0) : null;
+    }
+
+    /** "을지로입구역", "을지로입구 (IBK기업은행)" and "을지로입구" are the same station. */
+    static boolean sameStation(String read, String name) {
+        if (isBlank(read) || isBlank(name)) return false;
+        return stationKey(read).equals(stationKey(name));
+    }
+
+    private static String stationKey(String name) {
+        String key = name.replaceAll("\\(.*?\\)", "").replaceAll("\\s+", "");
+        return key.length() > 2 && key.endsWith("역") ? key.substring(0, key.length() - 1) : key;
+    }
+
+    /** "2호선", "2 호선" and "2" are the same line. */
+    static boolean sameLine(String read, String name) {
+        String a = read.replaceAll("\\s+", "").replaceFirst("호선$", "");
+        String b = name.replaceAll("\\s+", "").replaceFirst("호선$", "");
+        return a.equals(b);
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private static SignReading retake(String station, String line, String headsign) {
+        return new SignReading(SignResult.RETAKE, SignReason.MISSING_INFO, station, line, headsign);
     }
 
     /** JPG/PNG up to 5MB, decided by the file's first bytes (the client's Content-Type is not trusted). */
