@@ -91,14 +91,14 @@ class RouteSearchCandidatesPostgresTest extends RouteSearchPostgresSupport {
         server.verify();
     }
 
-    @Test void saturdayNightHasFourRoutes() throws Exception {
+    @Test void saturdayNightHasThreeRoutes() throws Exception {
         JsonNode data = search("2026-11-14T22:30:00+09:00");
-        // 노원·건대입구 (2 transfers, 23:44:30) stays since #155: 동대문역사문화공원 arrives at the same time with 1.
+        // 노원·건대입구 (2 transfers, 23:44:30) arrives 6.5 minutes after 사당 (1 transfer, 23:38): more than the 6 minute
+        // grace, so it is removed (with 7 minutes it stayed).
         assertThat(routes(data)).containsExactly(
                 "23:38 2 충무로,교대",
                 "23:38 1 사당",
-                "23:44:30 1 동대문역사문화공원",
-                "23:44:30 2 노원,건대입구");
+                "23:44:30 1 동대문역사문화공원");
         server.verify();
     }
 
