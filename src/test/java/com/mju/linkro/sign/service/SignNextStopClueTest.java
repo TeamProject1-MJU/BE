@@ -132,6 +132,36 @@ class SignNextStopClueTest {
         }
     }
 
+    /** The real AI answer for the 잠실 concourse photo (one live call, 2026-11-17): no station name or number on the sign. */
+    static final String REAL_JAMSIL_CONCOURSE = """
+            {"result":"RETAKE","reason":"MISSING_INFO","stationName":null,"lineName":"2호선","headsign":null,\
+            "stationCode":null,"towardStations":["선릉","교대","사당","신도림"]}""";
+
+    @ParameterizedTest
+    @CsvSource({"INNER,CORRECT", "OUTER,WRONG"})
+    void signWithoutStationNameOrNumberIsTakenAsTheRouteStation(String direction, SignResult result) {
+        SignReading reading = tools.jackson.databind.json.JsonMapper.builder().build()
+                .readValue(REAL_JAMSIL_CONCOURSE, SignReading.class);
+        SignCheckResponse response = check("잠실", direction, reading);
+        assertThat(response.result()).isEqualTo(result);
+        assertThat(response.reason()).isEqualTo(reasonOf(result));
+        assertThat(response.recognized()).isEqualTo(new SignCheckResponse.Place(null, "2호선", "선릉 · 교대 · 사당 · 신도림"));
+    }
+
+    @Test
+    void unreadStationStillNeedsTheLineRulesAndAReadNameMustMatch() {
+        // Line unread: 선릉·교대 are not on 잠실's other line (8호선), so the graph still decides.
+        assertThat(check("잠실", "INNER", read(null, null, null, "선릉", "교대")).result()).isEqualTo(SignResult.CORRECT);
+        for (SignReading reading : List.of(
+                read("삼성", "2호선", null, "선릉", "교대", "사당", "신도림"),   // another station's name
+                read(null, "2호선", "220", "선릉", "교대", "사당", "신도림"),     // another station's number
+                read(null, "8호선", null, "선릉", "교대", "사당", "신도림"))) {   // another line
+            SignCheckResponse response = check("잠실", "INNER", reading);
+            assertThat(response.result()).as(reading.toString()).isEqualTo(SignResult.RETAKE);
+            assertThat(response.reason()).isEqualTo(SignReason.MISSING_INFO);
+        }
+    }
+
     @Test
     void branchStationsUseTheBranchDirection() {
         // 성수지선: 성수 -> 용답 -> 신답 -> 용두 -> 신설동 is DOWN in V11.
@@ -193,6 +223,9 @@ class SignNextStopClueTest {
         assertThat(service.check(SignTestImages.png(), new SignRouteRequest(a, LINE2, "INNER", null)).result())
                 .isEqualTo(SignResult.CORRECT);
         when(ai.readSign(any(), any())).thenReturn(read("A", null, null, "B")); // B is reached on line 1 too
+        assertThat(service.check(SignTestImages.png(), new SignRouteRequest(a, LINE2, "INNER", null)).reason())
+                .isEqualTo(SignReason.MISSING_INFO);
+        when(ai.readSign(any(), any())).thenReturn(read(null, null, null, "B"));
         assertThat(service.check(SignTestImages.png(), new SignRouteRequest(a, LINE2, "INNER", null)).reason())
                 .isEqualTo(SignReason.MISSING_INFO);
         when(ai.readSign(any(), any())).thenReturn(read("A", null, null, "D"));

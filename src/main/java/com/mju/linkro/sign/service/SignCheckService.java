@@ -95,14 +95,22 @@ public class SignCheckService {
         DirectionCode observed = explicitDirection(reading.headsign());
         String headsign = reading.headsign();
         if (observed == null) {
-            observed = directionToward(reading.towardStations(), request, station, expectedStation, line, expectedLine, codeMatches);
+            // Concourse signs often show no station name or number: the user stands at the route's station.
+            boolean stationUnread = station == null && isBlank(reading.stationCode());
+            observed = directionToward(reading.towardStations(), request, station, expectedStation, line, expectedLine,
+                    codeMatches || stationUnread);
             if (observed == null) return retake(station, line, headsign);
             if (line == null) line = expectedLine; // the listed stations are reached only on this line here
             if (headsign == null) headsign = String.join(" · ", reading.towardStations());
+            if (station == null) return verdict(observed, expected, null, line, headsign);
         } else if (reading.result() == SignResult.RETAKE || (observed == expected && reading.result() != SignResult.CORRECT)) {
             return retake(station, line, headsign);
         }
         if (isBlank(station) || isBlank(line)) return retake(station, line, headsign);
+        return verdict(observed, expected, station, line, headsign);
+    }
+
+    private static SignReading verdict(DirectionCode observed, DirectionCode expected, String station, String line, String headsign) {
         // Codes from another family (e.g. UP vs INNER) do not establish an opposite direction.
         boolean comparable = observed == expected
                 || (observed == DirectionCode.UP && expected == DirectionCode.DOWN)
@@ -131,16 +139,17 @@ public class SignCheckService {
      * one direction code at a time (so line 2 INNER/OUTER stay on the loop and branches use their own UP/DOWN). A
      * station counts for the direction that reaches it in fewer stops; a tie, or listed stations in different
      * directions, gives no answer. Names not on this line are skipped. Requires the sign to be this station (by name
-     * or number). With no line read, a listed station also reachable on another line of this station is ambiguous.
+     * or number) or to show neither ({@code atStation}). With no line read, a listed station also reachable on another
+     * line of this station is ambiguous.
      */
     private DirectionCode directionToward(List<String> toward, SignRouteRequest.Valid request, String station,
-                                          String expectedStation, String line, String expectedLine, boolean codeMatches) {
+                                          String expectedStation, String line, String expectedLine, boolean atStation) {
         if (toward.isEmpty()) return null;
-        if (!codeMatches && !sameStation(station, expectedStation)) return null;
+        if (!atStation && !sameStation(station, expectedStation)) return null;
         if (line != null && !sameLine(line, expectedLine)) return null;
         List<SignRouteLookup.RideEdge> edges = routes.rideEdges(request.stationId());
         Map<DirectionCode, Map<String, Integer>> reach = reach(edges, request.lineId(), request.stationId());
-        boolean lineKnown = line != null || codeMatches;
+        boolean lineKnown = line != null;
         Set<Long> otherLines = new HashSet<>();
         edges.forEach(edge -> { if (edge.lineId() != request.lineId()) otherLines.add(edge.lineId()); });
         DirectionCode decided = null;
