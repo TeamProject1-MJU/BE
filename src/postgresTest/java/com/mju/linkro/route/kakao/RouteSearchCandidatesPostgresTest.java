@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Plain search alternatives (#153) on the migrated database and the bundled timetable with the default settings (station
  * access 60 s, transfer overrides #151): 창동 -> 강남. r1 is the route the plain search always gave (4호선 -> 3호선 -> 2호선
  * changing at 충무로 and 교대); the others avoid the transfer stations of the routes before them, and a route with more
- * transfers than another and arriving more than the grace (7 min, #155) later is removed. Kakao is never called.
+ * transfers than another and arriving more than the grace (6 min, #155) later is removed. Kakao is never called.
  */
 @Testcontainers
 @ExtendWith(OutputCaptureExtension.class)
@@ -71,7 +71,7 @@ class RouteSearchCandidatesPostgresTest extends RouteSearchPostgresSupport {
         JsonNode data = search("2026-11-16T22:30:00+09:00");
         // r1 as before (the recommendation's route); then by arrival and transfers. 동대문역사문화공원 (1 transfer) stays
         // although 사당 has as many and arrives earlier. 노원·건대입구 (2 transfers, 23:36) stays since #155: it arrives
-        // with 동대문역사문화공원, within the 7 minute grace. Removed: 동대문·신설동·성수 (3, 23:46:30, 10 minutes after
+        // with 동대문역사문화공원, within the 6 minute grace. Removed: 동대문·신설동·성수 (3, 23:46:30, 10 minutes after
         // 동대문역사문화공원). The search after it (서울역·시청, 00:00) is more than 15 minutes after r1 and is cut.
         assertThat(routes(data)).containsExactly(
                 "23:33:30 2 충무로,교대",

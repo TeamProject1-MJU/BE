@@ -15,9 +15,9 @@ import static com.mju.linkro.route.kakao.RouteSearchCandidatesPostgresTest.route
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Plain search alternatives with the default cut (15 min) and grace (7 min) of #155 on the migrated database and the
+ * Plain search alternatives with the default cut (15 min) and grace (6 min) of #155 on the migrated database and the
  * bundled timetable (station access 60 s, transfer overrides #151). Monday 2026-11-16. A route with more transfers stays
- * unless it arrives more than 7 minutes after one with fewer.
+ * unless it arrives more than 6 minutes after one with fewer.
  */
 @Testcontainers
 @SpringBootTest(properties = {

@@ -30,9 +30,9 @@ class TimetableCandidatesGraceTest {
     }
 
     @Test
-    void theDefaultsAreFifteenAndSevenMinutes() {
+    void theDefaultsAreFifteenAndSixMinutes() {
         assertThat(CUT).isEqualTo(Duration.ofMinutes(15));
-        assertThat(GRACE).isEqualTo(Duration.ofMinutes(7));
+        assertThat(GRACE).isEqualTo(Duration.ofMinutes(6));
     }
 
     @Test

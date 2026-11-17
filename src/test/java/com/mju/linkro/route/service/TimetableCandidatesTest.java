@@ -167,7 +167,7 @@ class TimetableCandidatesTest {
 
     @Test
     void moreTransfersAndMoreThanTheGraceLaterAreRemoved() {
-        // #155: removed only when arriving more than the grace (7 min) later; the same arrival stays (TimetableCandidatesGraceTest).
+        // #155: removed only when arriving more than the grace (6 min) later; the same arrival stays (TimetableCandidatesGraceTest).
         TimedRoute first = route(30, List.of(4L, 2L), 10L);
         TimedRoute more = route(38, List.of(4L, 7L, 2L), 11L, 12L);
         TimetableCandidates.Result result = chain(first, more);
@@ -188,7 +188,7 @@ class TimetableCandidatesTest {
         TimedRoute one = route(35, List.of(4L, 2L), 12L);
         TimedRoute two = route(43, List.of(4L, 7L, 2L), 13L, 14L);
         TimetableCandidates.Result result = chain(first, one, two);
-        // two has as many transfers as the first route but more than one, which arrives 8 minutes earlier (grace 7, #155).
+        // two has as many transfers as the first route but more than one, which arrives 8 minutes earlier (grace 6, #155).
         assertThat(result.routes()).containsExactly(first, one);
         assertThat(result.removed()).isEqualTo(1);
     }
