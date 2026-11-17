@@ -3,8 +3,10 @@ package com.mju.linkro.sign.service;
 import com.mju.linkro.common.exception.BusinessException;
 import com.mju.linkro.common.exception.ErrorCode;
 import com.mju.linkro.subway.api.DirectionCode;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -45,7 +47,10 @@ public class SignRouteLookup {
     /** One RIDE edge on a line: from a station to the next stop, in a direction. */
     public record RideEdge(long lineId, long fromStationId, long toStationId, String toStationName, DirectionCode direction) {}
 
-    /** Every RIDE edge of every line serving this station, so a caller can walk each line and see other lines too. */
+    /**
+     * Every RIDE edge of every line serving this station, so a caller can walk each line and see other lines too.
+     * Edges with a missing or unknown direction are skipped: they are no evidence, and must not fail the check.
+     */
     public List<RideEdge> rideEdges(long stationId) {
         return jdbc.query("""
                 select sl.line_id, sl.station_id, next_sl.station_id, next_s.name, c.direction from station_connections c
@@ -54,7 +59,13 @@ public class SignRouteLookup {
                 join stations next_s on next_s.id = next_sl.station_id
                 where c.connection_type = 'RIDE' and next_sl.line_id = sl.line_id
                   and sl.line_id in (select line_id from station_lines where station_id = :station)
-                """, Map.of("station", stationId), (rs, row) -> new RideEdge(rs.getLong(1), rs.getLong(2), rs.getLong(3),
-                rs.getString(4), DirectionCode.valueOf(rs.getString(5))));
+                """, Map.of("station", stationId), (rs, row) -> {
+                    DirectionCode code = direction(rs.getString(5));
+                    return code == null ? null : new RideEdge(rs.getLong(1), rs.getLong(2), rs.getLong(3), rs.getString(4), code);
+                }).stream().filter(Objects::nonNull).toList();
+    }
+
+    private static DirectionCode direction(String value) {
+        return Arrays.stream(DirectionCode.values()).filter(code -> code.name().equals(value)).findFirst().orElse(null);
     }
 }
