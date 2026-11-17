@@ -17,7 +17,14 @@ import com.mju.linkro.subway.api.StationLookup;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
+import java.util.Set;
 import java.util.Map;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
@@ -73,7 +80,7 @@ public class SignCheckService {
 
     /**
      * Never accept the model's geographic inference from a terminal name as direction evidence. Evidence is an explicit
-     * direction mark, or the next stop the sign points to, looked up in our own graph. A station number such as 202
+     * direction mark, or the stations the sign points to (next stop or major stations), located on our own graph. A station number such as 202
      * stands in for an unread station or line name when it is this station's number on this line.
      */
     private SignReading checkDirectionEvidence(SignReading reading, SignRouteRequest.Valid request,
@@ -88,10 +95,10 @@ public class SignCheckService {
         DirectionCode observed = explicitDirection(reading.headsign());
         String headsign = reading.headsign();
         if (observed == null) {
-            observed = directionFromNextStop(reading.nextStation(), request, station, expectedStation, line, expectedLine, codeMatches);
+            observed = directionToward(reading.towardStations(), request, station, expectedStation, line, expectedLine, codeMatches);
             if (observed == null) return retake(station, line, headsign);
-            if (line == null) line = expectedLine; // the next stop exists only on this line here
-            if (headsign == null) headsign = reading.nextStation();
+            if (line == null) line = expectedLine; // the listed stations are reached only on this line here
+            if (headsign == null) headsign = String.join(" · ", reading.towardStations());
         } else if (reading.result() == SignResult.RETAKE || (observed == expected && reading.result() != SignResult.CORRECT)) {
             return retake(station, line, headsign);
         }
@@ -120,22 +127,68 @@ public class SignCheckService {
     }
 
     /**
-     * The direction of this station's RIDE edge to the named next stop on the route's line. Requires the sign to be
-     * this station (by name or number), and a single matching edge. With no line read, a next stop of the same name
-     * on another line of this station makes it ambiguous.
+     * The direction in which the sign's stations lie on the route's line, walking our RIDE edges from this station
+     * one direction code at a time (so line 2 INNER/OUTER stay on the loop and branches use their own UP/DOWN). A
+     * station counts for the direction that reaches it in fewer stops; a tie, or listed stations in different
+     * directions, gives no answer. Names not on this line are skipped. Requires the sign to be this station (by name
+     * or number). With no line read, a listed station also reachable on another line of this station is ambiguous.
      */
-    private DirectionCode directionFromNextStop(String nextStation, SignRouteRequest.Valid request, String station,
-                                                String expectedStation, String line, String expectedLine,
-                                                boolean codeMatches) {
-        if (isBlank(nextStation)) return null;
+    private DirectionCode directionToward(List<String> toward, SignRouteRequest.Valid request, String station,
+                                          String expectedStation, String line, String expectedLine, boolean codeMatches) {
+        if (toward.isEmpty()) return null;
         if (!codeMatches && !sameStation(station, expectedStation)) return null;
         if (line != null && !sameLine(line, expectedLine)) return null;
-        var matches = routes.nextStops(request.stationId()).stream()
-                .filter(stop -> sameStation(stop.stationName(), nextStation)).toList();
-        if (line == null && !codeMatches && matches.stream().anyMatch(stop -> stop.lineId() != request.lineId())) return null;
-        var directions = matches.stream().filter(stop -> stop.lineId() == request.lineId())
-                .map(SignRouteLookup.NextStop::direction).distinct().toList();
-        return directions.size() == 1 ? directions.get(0) : null;
+        List<SignRouteLookup.RideEdge> edges = routes.rideEdges(request.stationId());
+        Map<DirectionCode, Map<String, Integer>> reach = reach(edges, request.lineId(), request.stationId());
+        boolean lineKnown = line != null || codeMatches;
+        Set<Long> otherLines = new HashSet<>();
+        edges.forEach(edge -> { if (edge.lineId() != request.lineId()) otherLines.add(edge.lineId()); });
+        DirectionCode decided = null;
+        for (String name : toward) {
+            String key = stationKey(name);
+            if (key.equals(stationKey(expectedStation))) continue;
+            if (!lineKnown && otherLines.stream().anyMatch(other -> reach(edges, other, request.stationId()).values()
+                    .stream().anyMatch(stops -> stops.containsKey(key)))) return null;
+            DirectionCode nearest = null;
+            int best = Integer.MAX_VALUE;
+            boolean tie = false;
+            for (var entry : reach.entrySet()) {
+                Integer stops = entry.getValue().get(key);
+                if (stops == null) continue;
+                if (stops < best) { best = stops; nearest = entry.getKey(); tie = false; }
+                else if (stops == best) tie = true;
+            }
+            if (nearest == null) continue;
+            if (tie || (decided != null && decided != nearest)) return null;
+            decided = nearest;
+        }
+        return decided;
+    }
+
+    /** Per direction code leaving {@code start} on this line: stops to each station (by name key) along that code. */
+    private static Map<DirectionCode, Map<String, Integer>> reach(List<SignRouteLookup.RideEdge> edges, long lineId, long start) {
+        Map<Long, List<SignRouteLookup.RideEdge>> out = new HashMap<>();
+        edges.stream().filter(edge -> edge.lineId() == lineId)
+                .forEach(edge -> out.computeIfAbsent(edge.fromStationId(), id -> new ArrayList<>()).add(edge));
+        Map<DirectionCode, Map<String, Integer>> result = new EnumMap<>(DirectionCode.class);
+        for (var first : out.getOrDefault(start, List.of())) {
+            DirectionCode code = first.direction();
+            if (result.containsKey(code)) continue;
+            Map<String, Integer> stops = new HashMap<>();
+            Set<Long> seen = new HashSet<>(List.of(start));
+            ArrayDeque<long[]> queue = new ArrayDeque<>();
+            queue.add(new long[]{start, 0});
+            while (!queue.isEmpty()) {
+                long[] at = queue.poll();
+                for (var edge : out.getOrDefault(at[0], List.of())) {
+                    if (edge.direction() != code || !seen.add(edge.toStationId())) continue;
+                    stops.putIfAbsent(stationKey(edge.toStationName()), (int) at[1] + 1);
+                    queue.add(new long[]{edge.toStationId(), at[1] + 1});
+                }
+            }
+            result.put(code, stops);
+        }
+        return result;
     }
 
     /** "을지로입구역", "을지로입구 (IBK기업은행)" and "을지로입구" are the same station. */

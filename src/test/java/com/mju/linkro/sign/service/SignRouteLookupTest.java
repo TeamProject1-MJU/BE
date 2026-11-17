@@ -68,10 +68,12 @@ class SignRouteLookupTest {
             assertThat(lookup.codeMatches(2, 2, "201")).isFalse();
             assertThat(lookup.codeMatches(2, 1, "202")).isFalse();
             assertThat(lookup.codeMatches(2, 2, null)).isFalse();
-            assertThat(lookup.nextStops(2)).containsExactlyInAnyOrder(
-                    new SignRouteLookup.NextStop(2, "을지로3가", DirectionCode.INNER),
-                    new SignRouteLookup.NextStop(2, "시청", DirectionCode.OUTER));
-            assertThat(lookup.nextStops(1)).containsExactly(new SignRouteLookup.NextStop(2, "을지로입구", DirectionCode.INNER));
+            assertThat(lookup.rideEdges(2)).containsExactlyInAnyOrder(
+                    new SignRouteLookup.RideEdge(2, 1, 2, "을지로입구", DirectionCode.INNER),
+                    new SignRouteLookup.RideEdge(2, 2, 3, "을지로3가", DirectionCode.INNER),
+                    new SignRouteLookup.RideEdge(2, 3, 2, "을지로입구", DirectionCode.OUTER),
+                    new SignRouteLookup.RideEdge(2, 2, 1, "시청", DirectionCode.OUTER));
+            assertThat(lookup.rideEdges(1)).hasSize(4); // 시청 is on line 1 too, which has no RIDE edges here
         } finally {
             db.shutdown();
         }

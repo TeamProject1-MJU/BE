@@ -129,17 +129,17 @@ class OpenAiClientTest {
     }
 
     @Test
-    void readSignAsksForStationCodeAndNextStationAndParsesThem() {
+    void readSignAsksForStationCodeAndTowardStationsAndParsesThem() {
         server.expect(requestTo(URL))
                 .andExpect(jsonPath("$.text.format.schema.required[5]").value("stationCode"))
-                .andExpect(jsonPath("$.text.format.schema.required[6]").value("nextStation"))
-                .andExpect(jsonPath("$.instructions").value(containsString("nextStation")))
+                .andExpect(jsonPath("$.text.format.schema.required[6]").value("towardStations"))
+                .andExpect(jsonPath("$.instructions").value(containsString("towardStations")))
                 .andRespond(withSuccess(response("{\\\"result\\\":\\\"RETAKE\\\",\\\"reason\\\":\\\"MISSING_INFO\\\","
                         + "\\\"stationName\\\":\\\"을지로입구\\\",\\\"lineName\\\":null,\\\"headsign\\\":null,"
-                        + "\\\"stationCode\\\":\\\"202\\\",\\\"nextStation\\\":\\\"시청\\\"}"), MediaType.APPLICATION_JSON));
+                        + "\\\"stationCode\\\":\\\"202\\\",\\\"towardStations\\\":[\\\"시청\\\"]}"), MediaType.APPLICATION_JSON));
         var result = client.readSign(new SignImage(new byte[]{1}, "image/png"),
                 new SignContext("을지로입구", "2호선", DirectionCode.OUTER, null));
-        assertThat(result).isEqualTo(new SignReading(SignResult.RETAKE, SignReason.MISSING_INFO, "을지로입구", null, null, "202", "시청"));
+        assertThat(result).isEqualTo(new SignReading(SignResult.RETAKE, SignReason.MISSING_INFO, "을지로입구", null, null, "202", List.of("시청")));
         server.verify();
     }
 

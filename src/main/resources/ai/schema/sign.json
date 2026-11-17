@@ -1,7 +1,7 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["result", "reason", "stationName", "lineName", "headsign", "stationCode", "nextStation"],
+  "required": ["result", "reason", "stationName", "lineName", "headsign", "stationCode", "towardStations"],
   "properties": {
     "result": {"type": "string", "enum": ["CORRECT", "WRONG", "RETAKE"]},
     "reason": {"type": ["string", "null"],
@@ -10,6 +10,6 @@
     "lineName": {"type": ["string", "null"]},
     "headsign": {"type": ["string", "null"]},
     "stationCode": {"type": ["string", "null"]},
-    "nextStation": {"type": ["string", "null"]}
+    "towardStations": {"type": "array", "items": {"type": "string"}}
   }
 }

@@ -42,18 +42,19 @@ public class SignRouteLookup {
         return codes.stream().anyMatch(code::equalsIgnoreCase);
     }
 
-    /** One RIDE edge leaving this station: the stop it reaches, on which line, in which direction. */
-    public record NextStop(long lineId, String stationName, DirectionCode direction) {}
+    /** One RIDE edge on a line: from a station to the next stop, in a direction. */
+    public record RideEdge(long lineId, long fromStationId, long toStationId, String toStationName, DirectionCode direction) {}
 
-    /** Every next stop from this station, on all of its lines, so a caller can tell whether a name is ambiguous. */
-    public List<NextStop> nextStops(long stationId) {
+    /** Every RIDE edge of every line serving this station, so a caller can walk each line and see other lines too. */
+    public List<RideEdge> rideEdges(long stationId) {
         return jdbc.query("""
-                select sl.line_id, next_s.name, c.direction from station_lines sl
-                join station_connections c on c.from_station_line_id = sl.id
+                select sl.line_id, sl.station_id, next_sl.station_id, next_s.name, c.direction from station_connections c
+                join station_lines sl on sl.id = c.from_station_line_id
                 join station_lines next_sl on next_sl.id = c.to_station_line_id
                 join stations next_s on next_s.id = next_sl.station_id
-                where sl.station_id = :station and next_sl.line_id = sl.line_id and c.connection_type = 'RIDE'
-                """, Map.of("station", stationId), (rs, row) -> new NextStop(rs.getLong(1), rs.getString(2),
-                DirectionCode.valueOf(rs.getString(3))));
+                where c.connection_type = 'RIDE' and next_sl.line_id = sl.line_id
+                  and sl.line_id in (select line_id from station_lines where station_id = :station)
+                """, Map.of("station", stationId), (rs, row) -> new RideEdge(rs.getLong(1), rs.getLong(2), rs.getLong(3),
+                rs.getString(4), DirectionCode.valueOf(rs.getString(5))));
     }
 }
