@@ -72,6 +72,10 @@ public class RouteSearchService {
      * The candidates normally stop well before it; reaching it is logged.
      */
     private final int maxTimetableCandidates;
+    /** {@code linkro.route.timetable-candidate-cut-minutes} (default 15, at least 1, #155): see {@link TimetableCandidates}. */
+    private final Duration candidateCut;
+    /** {@code linkro.route.timetable-candidate-grace-minutes} (default 6, not negative, #155): see {@link TimetableCandidates}. */
+    private final Duration candidateGrace;
 
     @Autowired
     public RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
@@ -79,10 +83,12 @@ public class RouteSearchService {
                               Optional<TrainTimetable> timetable, Optional<TimetableClock> timetableClock,
                               Optional<TimetableRouteFinder> timetableRoutes,
                               @Value("${linkro.route.arrive-at-max-days:365}") int arriveAtMaxDays,
-                              @Value("${linkro.route.max-timetable-candidates:10}") int maxTimetableCandidates) {
+                              @Value("${linkro.route.max-timetable-candidates:10}") int maxTimetableCandidates,
+                              @Value("${linkro.route.timetable-candidate-cut-minutes:15}") int candidateCutMinutes,
+                              @Value("${linkro.route.timetable-candidate-grace-minutes:6}") int candidateGraceMinutes) {
         this(rooms, stations, kakao, mapper, internal, new DbCongestionLookup(stats, resolver), Clock.systemUTC(),
                 timetable.isPresent() && timetableClock.isPresent() ? new FirstTrainTimer(timetable.get(), timetableClock.get()) : null,
-                timetableRoutes.orElse(null), arriveAtMaxDays, maxTimetableCandidates);
+                timetableRoutes.orElse(null), arriveAtMaxDays, maxTimetableCandidates, candidateCutMinutes, candidateGraceMinutes);
     }
 
     RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
@@ -110,11 +116,25 @@ public class RouteSearchService {
     RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
                        InternalRouteBuilder internal, CongestionLookup congestion, Clock clock, FirstTrainTimer firstTrains,
                        TimetableRouteFinder timetableRoutes, int arriveAtMaxDays, int maxTimetableCandidates) {
+        this(rooms, stations, kakao, mapper, internal, congestion, clock, firstTrains, timetableRoutes, arriveAtMaxDays,
+                maxTimetableCandidates, (int) TimetableCandidates.DEFAULT_CUT.toMinutes(), (int) TimetableCandidates.DEFAULT_GRACE.toMinutes());
+    }
+
+    RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
+                       InternalRouteBuilder internal, CongestionLookup congestion, Clock clock, FirstTrainTimer firstTrains,
+                       TimetableRouteFinder timetableRoutes, int arriveAtMaxDays, int maxTimetableCandidates,
+                       int candidateCutMinutes, int candidateGraceMinutes) {
         if (arriveAtMaxDays <= 0) {
             throw new IllegalArgumentException("linkro.route.arrive-at-max-days must be positive");
         }
         if (maxTimetableCandidates <= 0) {
             throw new IllegalArgumentException("linkro.route.max-timetable-candidates must be positive");
+        }
+        if (candidateCutMinutes < 1) {
+            throw new IllegalArgumentException("linkro.route.timetable-candidate-cut-minutes must be at least 1: " + candidateCutMinutes);
+        }
+        if (candidateGraceMinutes < 0) {
+            throw new IllegalArgumentException("linkro.route.timetable-candidate-grace-minutes must not be negative: " + candidateGraceMinutes);
         }
         this.rooms = rooms;
         this.stations = stations;
@@ -127,6 +147,8 @@ public class RouteSearchService {
         this.timetableRoutes = timetableRoutes;
         this.arriveAtMaxDays = arriveAtMaxDays;
         this.maxTimetableCandidates = maxTimetableCandidates;
+        this.candidateCut = Duration.ofMinutes(candidateCutMinutes);
+        this.candidateGrace = Duration.ofMinutes(candidateGraceMinutes);
     }
 
     public RouteSearchResponse search(UUID userId, RouteSearchRequest request) {
@@ -326,13 +348,14 @@ public class RouteSearchService {
         try {
             Instant from = first.nextServiceDay() ? firstTrains.nextServiceDayStart(requested) : requested;
             TimetableCandidates.Result result = TimetableCandidates.of(first.route(),
-                    avoid -> timetableRoutes.departingAt(originId, from, avoid).routeTo(destinationId), maxTimetableCandidates);
+                    avoid -> timetableRoutes.departingAt(originId, from, avoid).routeTo(destinationId), maxTimetableCandidates,
+                    candidateCut, candidateGrace);
             if (result.limitReached()) {
                 log.warn("Route search {} -> {} stopped at {} timetable routes (linkro.route.max-timetable-candidates)",
                         originId, destinationId, maxTimetableCandidates);
             }
             result.routes().stream().skip(1).forEach(route -> departings.add(new DepartingRoute(route, first.nextServiceDay())));
-            log.debug("Route search {} -> {}: {} timetable routes removed (more transfers, no earlier arrival)", originId, destinationId,
+            log.debug("Route search {} -> {}: {} timetable routes removed (more transfers, more than the grace later)", originId, destinationId,
                     result.removed());
             log.info("Route search {} -> {}: {} timetable routes ({} repeated, {})", originId, destinationId, departings.size(),
                     result.duplicates(), result.cut() ? "a later one cut" : "none cut");

@@ -53,9 +53,9 @@ class TimetableCandidatesTest {
 
         TimetableCandidates.Result result = TimetableCandidates.of(first, search, 10);
 
-        // twoChanges (2 transfers, 36) is removed: ddp arrives as early with 1 transfer.
-        assertThat(result.routes()).containsExactly(first, sadang, ddp);
-        assertThat(result.removed()).isEqualTo(1);
+        // twoChanges (2 transfers, 36) stays (#155): ddp has 1 transfer but arrives at the same time, within the grace.
+        assertThat(result.routes()).containsExactly(first, sadang, ddp, twoChanges);
+        assertThat(result.removed()).isZero();
         assertThat(result.limitReached()).isFalse();
         assertThat(result.cut()).isFalse();
         assertThat(result.duplicates()).isZero();
@@ -166,9 +166,10 @@ class TimetableCandidatesTest {
     }
 
     @Test
-    void moreTransfersAndTheSameArrivalAreRemoved() {
+    void moreTransfersAndMoreThanTheGraceLaterAreRemoved() {
+        // #155: removed only when arriving more than the grace (6 min) later; the same arrival stays (TimetableCandidatesGraceTest).
         TimedRoute first = route(30, List.of(4L, 2L), 10L);
-        TimedRoute more = route(30, List.of(4L, 7L, 2L), 11L, 12L);
+        TimedRoute more = route(38, List.of(4L, 7L, 2L), 11L, 12L);
         TimetableCandidates.Result result = chain(first, more);
         assertThat(result.routes()).containsExactly(first);
         assertThat(result.removed()).isEqualTo(1);
@@ -185,9 +186,9 @@ class TimetableCandidatesTest {
     void anotherAlternativeRemovesARouteToo() {
         TimedRoute first = route(30, List.of(4L, 3L, 2L), 10L, 11L);
         TimedRoute one = route(35, List.of(4L, 2L), 12L);
-        TimedRoute two = route(36, List.of(4L, 7L, 2L), 13L, 14L);
+        TimedRoute two = route(43, List.of(4L, 7L, 2L), 13L, 14L);
         TimetableCandidates.Result result = chain(first, one, two);
-        // two has as many transfers as the first route but more than one, which arrives earlier.
+        // two has as many transfers as the first route but more than one, which arrives 8 minutes earlier (grace 6, #155).
         assertThat(result.routes()).containsExactly(first, one);
         assertThat(result.removed()).isEqualTo(1);
     }
@@ -201,9 +202,9 @@ class TimetableCandidatesTest {
         assertThat(kept.routes()).containsExactly(first, sadang);
         assertThat(kept.removed()).isZero();
 
-        // As a comparison it removes an alternative with more transfers that arrives later.
+        // As a comparison it removes an alternative with more transfers that arrives more than the grace later (#155).
         TimedRoute oneTransfer = route(30, List.of(4L, 2L), 10L);
-        TimedRoute twoLater = route(31, List.of(4L, 7L, 2L), 11L, 12L);
+        TimedRoute twoLater = route(38, List.of(4L, 7L, 2L), 11L, 12L);
         TimetableCandidates.Result removed = chain(oneTransfer, twoLater);
         assertThat(removed.routes()).containsExactly(oneTransfer);
         assertThat(removed.removed()).isEqualTo(1);
