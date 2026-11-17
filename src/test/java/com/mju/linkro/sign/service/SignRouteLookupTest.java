@@ -7,7 +7,21 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder;
 import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
+import com.mju.linkro.ai.api.AiClient;
+import com.mju.linkro.ai.api.SignReading;
+import com.mju.linkro.ai.api.SignReason;
+import com.mju.linkro.ai.api.SignResult;
+import com.mju.linkro.sign.SignTestImages;
+import com.mju.linkro.sign.dto.SignRouteRequest;
+import com.mju.linkro.subway.api.LineLookup;
+import com.mju.linkro.subway.api.StationInfo;
+import com.mju.linkro.subway.api.StationLookup;
+import java.util.List;
+import java.util.Optional;
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class SignRouteLookupTest {
     @Test
@@ -41,6 +55,56 @@ class SignRouteLookupTest {
             }
             assertThatThrownBy(() -> lookup.requireDirection(3,6,DirectionCode.DOWN)).isInstanceOf(BusinessException.class);
             assertThatThrownBy(() -> lookup.requireDirection(4,6,DirectionCode.DOWN)).isInstanceOf(BusinessException.class);
+        } finally {
+            db.shutdown();
+        }
+    }
+
+    @Test
+    void stationCodeAndNextStopsComeFromTheGraph() {
+        var db = new EmbeddedDatabaseBuilder().generateUniqueName(true).setType(EmbeddedDatabaseType.H2).build();
+        try {
+            var jdbc = new org.springframework.jdbc.core.JdbcTemplate(db);
+            jdbc.execute("create table stations(id bigint primary key, name varchar, is_supported boolean)");
+            jdbc.execute("create table station_lines(id bigint primary key, station_id bigint, line_id bigint, station_code varchar)");
+            jdbc.execute("create table station_connections(from_station_line_id bigint, to_station_line_id bigint, connection_type varchar, direction varchar)");
+            jdbc.update("insert into stations values(1,'시청',true),(2,'을지로입구',true),(3,'을지로3가',true),(4,'을지로4가',true)");
+            jdbc.update("insert into station_lines values(21,1,2,'201'),(22,2,2,'202'),(23,3,2,'203'),(24,4,2,'204'),(11,1,1,'151'),(33,3,3,'320')");
+            jdbc.update("""
+                    insert into station_connections values
+                    (21,22,'RIDE','INNER'),(22,23,'RIDE','INNER'),(23,22,'RIDE','OUTER'),(22,21,'RIDE','OUTER'),
+                    (21,11,'TRANSFER',null),(23,33,'TRANSFER',null),
+                    (23,24,'RIDE',null),(24,23,'RIDE','SIDEWAYS'),(22,24,'RIDE',' ')
+                    """);
+            var lookup = new SignRouteLookup(new NamedParameterJdbcTemplate(db));
+            assertThat(lookup.codeMatches(2, 2, "202")).isTrue();
+            assertThat(lookup.codeMatches(2, 2, " 2-02 ")).isTrue();
+            assertThat(lookup.codeMatches(2, 2, "202 ")).isTrue();
+            assertThat(lookup.codeMatches(2, 2, "201")).isFalse();
+            assertThat(lookup.codeMatches(2, 1, "202")).isFalse();
+            assertThat(lookup.codeMatches(2, 2, null)).isFalse();
+            assertThat(lookup.rideEdges(2)).containsExactlyInAnyOrder(
+                    new SignRouteLookup.RideEdge(2, 1, 2, "을지로입구", DirectionCode.INNER),
+                    new SignRouteLookup.RideEdge(2, 2, 3, "을지로3가", DirectionCode.INNER),
+                    new SignRouteLookup.RideEdge(2, 3, 2, "을지로입구", DirectionCode.OUTER),
+                    new SignRouteLookup.RideEdge(2, 2, 1, "시청", DirectionCode.OUTER));
+            assertThat(lookup.rideEdges(1)).hasSize(4); // 시청 is on line 1 too, which has no RIDE edges here
+
+            // Edges without a usable direction (null, unknown, blank) are skipped, never thrown on, and decide nothing.
+            var stations = mock(StationLookup.class);
+            var lines = mock(LineLookup.class);
+            var ai = mock(AiClient.class);
+            when(stations.require(2)).thenReturn(new StationInfo(2, "을지로입구", 0, 0, true));
+            when(lines.name(2)).thenReturn(Optional.of("2호선"));
+            var service = new SignCheckService(ai, stations, lines, lookup);
+            when(ai.readSign(any(), any())).thenReturn(new SignReading(SignResult.RETAKE, SignReason.MISSING_INFO,
+                    "을지로입구", "2호선", null, null, List.of("을지로4가")));
+            assertThat(service.check(SignTestImages.png(), new SignRouteRequest(2L, 2L, "OUTER", null)).reason())
+                    .isEqualTo(SignReason.MISSING_INFO);
+            when(ai.readSign(any(), any())).thenReturn(new SignReading(SignResult.RETAKE, SignReason.MISSING_INFO,
+                    "을지로입구", "2호선", null, null, List.of("시청")));
+            assertThat(service.check(SignTestImages.png(), new SignRouteRequest(2L, 2L, "OUTER", null)).result())
+                    .isEqualTo(SignResult.CORRECT);
         } finally {
             db.shutdown();
         }

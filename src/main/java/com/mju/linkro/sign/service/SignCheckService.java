@@ -17,7 +17,14 @@ import com.mju.linkro.subway.api.StationLookup;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
+import java.util.Set;
 import java.util.Map;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
@@ -63,7 +70,7 @@ public class SignCheckService {
 
         long started = System.nanoTime();
         SignReading reading = ai.readSign(signImage, context);
-        if (context.directionOnly()) reading = checkDirectionEvidence(reading, request.direction());
+        if (context.directionOnly()) reading = checkDirectionEvidence(reading, request, stationName, lineName);
         log.info("Sign check: result={} reason={} ai={}ms", reading.result(), reading.reason(), (System.nanoTime() - started) / 1_000_000);
 
         return new SignCheckResponse(reading.result(), reading.reason(),
@@ -71,11 +78,53 @@ public class SignCheckService {
                 new Place(stationName, lineName, request.headsign()), message(reading));
     }
 
-    /** Never accept the model's geographic inference from a terminal name as direction evidence. */
-    private static SignReading checkDirectionEvidence(SignReading reading, DirectionCode expected) {
-        if (reading.result() == SignResult.RETAKE || reading.reason() == SignReason.LINE_NOT_ON_ROUTE) return reading;
-        String text = reading.headsign() == null ? "" : reading.headsign().replaceAll("\\s+", "");
-        DirectionCode observed = switch (text) {
+    /**
+     * Never accept the model's geographic inference from a terminal name as direction evidence. Evidence is an explicit
+     * direction mark, or the stations the sign points to (next stop or major stations), located on our own graph. A station number such as 202
+     * stands in for an unread station or line name when it is this station's number on this line.
+     */
+    private SignReading checkDirectionEvidence(SignReading reading, SignRouteRequest.Valid request,
+                                               String expectedStation, String expectedLine) {
+        if (reading.reason() == SignReason.LINE_NOT_ON_ROUTE || reading.reason() == SignReason.NOT_A_SIGN
+                || reading.reason() == SignReason.UNREADABLE) return reading;
+        boolean codeMatches = reading.stationCode() != null
+                && routes.codeMatches(request.stationId(), request.lineId(), reading.stationCode());
+        String station = !isBlank(reading.stationName()) ? reading.stationName() : codeMatches ? expectedStation : null;
+        String line = !isBlank(reading.lineName()) ? reading.lineName() : codeMatches ? expectedLine : null;
+        DirectionCode expected = request.direction();
+        DirectionCode observed = explicitDirection(reading.headsign());
+        String headsign = reading.headsign();
+        if (observed == null) {
+            // Concourse signs often show no station name or number: the user stands at the route's station.
+            boolean stationUnread = station == null && isBlank(reading.stationCode());
+            observed = directionToward(reading.towardStations(), request, station, expectedStation, line, expectedLine,
+                    codeMatches || stationUnread);
+            if (observed == null) return retake(station, line, headsign);
+            if (line == null) line = expectedLine; // the listed stations are reached only on this line here
+            if (headsign == null) headsign = String.join(" · ", reading.towardStations());
+            if (station == null) return verdict(observed, expected, null, line, headsign);
+        } else if (reading.result() == SignResult.RETAKE || (observed == expected && reading.result() != SignResult.CORRECT)) {
+            return retake(station, line, headsign);
+        }
+        if (isBlank(station) || isBlank(line)) return retake(station, line, headsign);
+        return verdict(observed, expected, station, line, headsign);
+    }
+
+    private static SignReading verdict(DirectionCode observed, DirectionCode expected, String station, String line, String headsign) {
+        // Codes from another family (e.g. UP vs INNER) do not establish an opposite direction.
+        boolean comparable = observed == expected
+                || (observed == DirectionCode.UP && expected == DirectionCode.DOWN)
+                || (observed == DirectionCode.DOWN && expected == DirectionCode.UP)
+                || (observed == DirectionCode.INNER && expected == DirectionCode.OUTER)
+                || (observed == DirectionCode.OUTER && expected == DirectionCode.INNER);
+        if (!comparable) return retake(station, line, headsign);
+        return new SignReading(observed == expected ? SignResult.CORRECT : SignResult.WRONG,
+                observed == expected ? null : SignReason.DIRECTION_MISMATCH, station, line, headsign);
+    }
+
+    private static DirectionCode explicitDirection(String headsign) {
+        String text = headsign == null ? "" : headsign.replaceAll("\\s+", "");
+        return switch (text) {
             case "UP", "상행" -> DirectionCode.UP;
             case "DOWN", "하행" -> DirectionCode.DOWN;
             case "INNER", "내선", "내선순환" -> DirectionCode.INNER;
@@ -83,23 +132,98 @@ public class SignCheckService {
             case "LOOP", "응암순환" -> DirectionCode.LOOP;
             default -> null;
         };
-        if (observed == null || reading.stationName() == null || reading.stationName().isBlank()
-                || reading.lineName() == null || reading.lineName().isBlank()
-                || (observed == expected && reading.result() != SignResult.CORRECT)) {
-            return new SignReading(SignResult.RETAKE, SignReason.MISSING_INFO,
-                    reading.stationName(), reading.lineName(), reading.headsign());
+    }
+
+    /**
+     * The direction in which the sign's stations lie on the route's line, walking our RIDE edges from this station
+     * one direction code at a time (so line 2 INNER/OUTER stay on the loop and branches use their own UP/DOWN). A
+     * station counts for the direction that reaches it in fewer stops; a tie, or listed stations in different
+     * directions, gives no answer. Names not on this line are skipped. Requires the sign to be this station (by name
+     * or number) or to show neither ({@code atStation}). With no line read, a listed station also reachable on another
+     * line of this station is ambiguous.
+     */
+    private DirectionCode directionToward(List<String> toward, SignRouteRequest.Valid request, String station,
+                                          String expectedStation, String line, String expectedLine, boolean atStation) {
+        if (toward.isEmpty()) return null;
+        if (!atStation && !sameStation(station, expectedStation)) return null;
+        if (line != null && !sameLine(line, expectedLine)) return null;
+        List<SignRouteLookup.RideEdge> edges = routes.rideEdges(request.stationId());
+        Map<DirectionCode, Map<String, Integer>> reach = reach(edges, request.lineId(), request.stationId());
+        boolean lineKnown = line != null;
+        Set<Long> otherLines = new HashSet<>();
+        edges.forEach(edge -> { if (edge.lineId() != request.lineId()) otherLines.add(edge.lineId()); });
+        DirectionCode decided = null;
+        for (String name : toward) {
+            String key = stationKey(name);
+            if (key.equals(stationKey(expectedStation))) continue;
+            if (!lineKnown && otherLines.stream().anyMatch(other -> reach(edges, other, request.stationId()).values()
+                    .stream().anyMatch(stops -> stops.containsKey(key)))) return null;
+            DirectionCode nearest = null;
+            int best = Integer.MAX_VALUE;
+            boolean tie = false;
+            for (var entry : reach.entrySet()) {
+                Integer stops = entry.getValue().get(key);
+                if (stops == null) continue;
+                if (stops < best) { best = stops; nearest = entry.getKey(); tie = false; }
+                else if (stops == best) tie = true;
+            }
+            if (nearest == null) continue;
+            if (tie || (decided != null && decided != nearest)) return null;
+            decided = nearest;
         }
-        // Codes from another family (e.g. UP vs INNER) do not establish an opposite direction.
-        boolean comparable = observed == expected
-                || (observed == DirectionCode.UP && expected == DirectionCode.DOWN)
-                || (observed == DirectionCode.DOWN && expected == DirectionCode.UP)
-                || (observed == DirectionCode.INNER && expected == DirectionCode.OUTER)
-                || (observed == DirectionCode.OUTER && expected == DirectionCode.INNER);
-        if (!comparable) return new SignReading(SignResult.RETAKE, SignReason.MISSING_INFO,
-                reading.stationName(), reading.lineName(), reading.headsign());
-        return new SignReading(observed == expected ? SignResult.CORRECT : SignResult.WRONG,
-                observed == expected ? null : SignReason.DIRECTION_MISMATCH,
-                reading.stationName(), reading.lineName(), reading.headsign());
+        return decided;
+    }
+
+    /** Per direction code leaving {@code start} on this line: stops to each station (by name key) along that code. */
+    private static Map<DirectionCode, Map<String, Integer>> reach(List<SignRouteLookup.RideEdge> edges, long lineId, long start) {
+        Map<Long, List<SignRouteLookup.RideEdge>> out = new HashMap<>();
+        edges.stream().filter(edge -> edge.lineId() == lineId)
+                .forEach(edge -> out.computeIfAbsent(edge.fromStationId(), id -> new ArrayList<>()).add(edge));
+        Map<DirectionCode, Map<String, Integer>> result = new EnumMap<>(DirectionCode.class);
+        for (var first : out.getOrDefault(start, List.of())) {
+            DirectionCode code = first.direction();
+            if (result.containsKey(code)) continue;
+            Map<String, Integer> stops = new HashMap<>();
+            Set<Long> seen = new HashSet<>(List.of(start));
+            ArrayDeque<long[]> queue = new ArrayDeque<>();
+            queue.add(new long[]{start, 0});
+            while (!queue.isEmpty()) {
+                long[] at = queue.poll();
+                for (var edge : out.getOrDefault(at[0], List.of())) {
+                    if (edge.direction() != code || !seen.add(edge.toStationId())) continue;
+                    stops.putIfAbsent(stationKey(edge.toStationName()), (int) at[1] + 1);
+                    queue.add(new long[]{edge.toStationId(), at[1] + 1});
+                }
+            }
+            result.put(code, stops);
+        }
+        return result;
+    }
+
+    /** "을지로입구역", "을지로입구 (IBK기업은행)" and "을지로입구" are the same station. */
+    static boolean sameStation(String read, String name) {
+        if (isBlank(read) || isBlank(name)) return false;
+        return stationKey(read).equals(stationKey(name));
+    }
+
+    private static String stationKey(String name) {
+        String key = name.replaceAll("\\(.*?\\)", "").replaceAll("\\s+", "");
+        return key.length() > 2 && key.endsWith("역") ? key.substring(0, key.length() - 1) : key;
+    }
+
+    /** "2호선", "2 호선" and "2" are the same line. */
+    static boolean sameLine(String read, String name) {
+        String a = read.replaceAll("\\s+", "").replaceFirst("호선$", "");
+        String b = name.replaceAll("\\s+", "").replaceFirst("호선$", "");
+        return a.equals(b);
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private static SignReading retake(String station, String line, String headsign) {
+        return new SignReading(SignResult.RETAKE, SignReason.MISSING_INFO, station, line, headsign);
     }
 
     /** JPG/PNG up to 5MB, decided by the file's first bytes (the client's Content-Type is not trusted). */
