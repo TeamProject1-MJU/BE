@@ -293,4 +293,20 @@ class ArrivalApiPostgresTest {
     private MockHttpServletRequestBuilder auth(MockHttpServletRequestBuilder request) {
         return request.header("Authorization", "Bearer " + jwt.createAccessToken(user));
     }
+
+    @Test void everyQueryNameExceptionIsASeededStationOfItsLine() throws Exception {
+        // station-query-names.csv keys (line code, our name) must exist in the migrated seed, or a typo maps nothing (#166).
+        java.util.List<String> lines;
+        try (var in = ArrivalStationNames.class.getResourceAsStream(ArrivalStationNames.RESOURCE)) {
+            lines = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8).lines().toList();
+        }
+        java.util.Set<String> keys = ArrivalStationNames.parse(lines).keySet();
+        assertThat(keys).hasSize(28);
+        for (String key : keys) {
+            String[] parts = key.split("\\|", 2);
+            assertThat(jdbc.queryForObject("select count(*) from station_lines sl join stations s on s.id = sl.station_id "
+                    + "join subway_lines l on l.id = sl.line_id where l.line_code = ? and s.name = ?", Long.class, parts[0], parts[1]))
+                    .as(key).isEqualTo(1L);
+        }
+    }
 }
