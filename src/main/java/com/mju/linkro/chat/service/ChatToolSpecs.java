@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The eight read-only tools of @링크로 (#129). Each description says when to use the tool and when not, because the
+ * The tools of @링크로: eight read-only ones (#129) and run_recommendation (#168), the only one that writes. Each description says when to use the tool and when not, because the
  * AI has to choose between look-alikes (get_route, get_departure_plan, compare_members_travel). No tool takes a room
  * or user: they are fixed on the server.
  */
@@ -19,6 +19,7 @@ final class ChatToolSpecs {
     static final String GET_CONGESTION = "get_congestion";
     static final String SEARCH_STATIONS = "search_stations";
     static final String COMPARE_MEMBERS_TRAVEL = "compare_members_travel";
+    static final String RUN_RECOMMENDATION = "run_recommendation";
 
     private static final String STATION_NAME = "역 이름. 끝의 '역'은 있어도 없어도 된다(예: 강남, 강남역).";
     private static final String FAILURES = " 실패하면 ok가 false이고 code에 이유가 온다. 그러면 추측하지 말고 앱의 경로 보기에서 확인하라고 안내한다.";
@@ -67,7 +68,25 @@ final class ChatToolSpecs {
                 tool(COMPARE_MEMBERS_TRAVEL, "멤버 전원이 도착역까지 가는 데 걸리는 시간·요금·환승과 가장 오래 걸리는 멤버를 알려준다."
                         + " '누가 제일 오래 걸려?', '다 비슷하게 걸려?'에 쓴다. 한 사람의 경로는 get_route, 한 사람의 나서는 시각은"
                         + " get_departure_plan을 쓴다. 출발역이 없는 멤버는 따로 알려준다. totalMinutes는 타고 가는 시간(출발 전 대기 제외)이다." + FAILURES,
-                        Map.of("destinationStation", string("도착역 이름. " + STATION_NAME)), List.of("destinationStation")));
+                        Map.of("destinationStation", string("도착역 이름. " + STATION_NAME)), List.of("destinationStation")),
+                tool(RUN_RECOMMENDATION, "사용자가 조건을 말하며 중간역 추천을 해 달라고 할 때 추천을 새로 실행하고 이 방의 추천 기록에 저장한다(앱의 추천받기와 같다)."
+                        + " '환승 1번 이하로 40분 안쪽인 역 추천해줘', '그냥 추천해줘'에 쓴다. 조건이 없으면 인자 없이 부른다."
+                        + " 한 질문에 한 번만 실행되고, 두 번째 호출은 code가 ALREADY_RUN이다. 이미 받은 추천 결과를 알려 달라는 질문에는 쓰지 않고 get_latest_recommendation을 쓴다."
+                        + " 인자가 범위를 벗어나면(code VALIDATION_ERROR) 실행하지 않으니 사용자에게 값을 다시 묻는다."
+                        + " hasResults가 false면 조건에 맞는 역이 없다는 뜻이니 조건을 풀어 보자고 말로 안내한다."
+                        + " 성공하면 bestStation(시간이 가장 짧은 역)과 appliedConstraints로 답하고, 앱의 [상세보기]에서 전체 결과를 볼 수 있다고 안내한다."
+                        + " 실패하면 ok가 false이고 code에 이유가 온다(TOO_FEW_MEMBERS 멤버 2명 미만, DEPARTURE_MISSING 출발역 없는 멤버가 있음,"
+                        + " APPOINTMENT_PASSED 약속 시각이 지남, NO_SERVICE 약속 시각 전에 도착하는 열차가 없음, RECOMMENDATION_IN_PROGRESS 이미 계산 중)."
+                        + " 이유를 말로 알리고 추측하지 않는다.",
+                        Map.of("maxMinutes", integer("모든 참여자의 이동 시간 상한(분), 1~300."),
+                                "maxTransfers", integer("환승 횟수 상한, 0~10."),
+                                "maxFareWon", integer("요금 상한(원), 1~100000."),
+                                "excludeStations", Map.of("type", "array", "description", "추천에서 뺄 역 이름 목록. " + STATION_NAME, "items", Map.of("type", "string")),
+                                "memberLimits", Map.of("type", "array", "description", "특정 멤버만의 이동 시간 상한 목록.",
+                                        "items", Map.of("type", "object",
+                                                "properties", Map.of("nickname", string("멤버 닉네임."), "maxMinutes", integer("그 멤버의 이동 시간 상한(분), 1~300.")),
+                                                "required", List.of("nickname", "maxMinutes"), "additionalProperties", false))),
+                        List.of()));
     }
 
     private static ChatToolSpec tool(String name, String description, Map<String, Object> properties, List<String> required) {
@@ -81,6 +100,10 @@ final class ChatToolSpecs {
 
     private static Map<String, Object> string(String description) {
         return Map.of("type", "string", "description", description);
+    }
+
+    private static Map<String, Object> integer(String description) {
+        return Map.of("type", "integer", "description", description);
     }
 
     private static Map<String, Object> enumeration(String description, String... values) {

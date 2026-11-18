@@ -10,6 +10,7 @@ import com.mju.linkro.common.exception.BusinessException;
 import com.mju.linkro.common.exception.ErrorCode;
 import com.mju.linkro.room.service.RoomAccess;
 import java.sql.SQLException;
+import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
 import lombok.RequiredArgsConstructor;
@@ -36,6 +37,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 public class ChatMessageWriter {
     /** Matches ck_msg_content (V8); the AI reply is cut to fit it. */
     static final int DB_MAX_LENGTH = 4000;
+    /** meta.type of an answer that carries a recommendation run (#168). */
+    static final String RECOMMENDATION_META = "RECOMMENDATION";
 
     private final RoomAccess access;
     private final RoomMessageRepository messages;
@@ -64,6 +67,15 @@ public class ChatMessageWriter {
         return save(roomId, SenderType.AI, null, truncate(content));
     }
 
+    /**
+     * An AI answer that opens the recommendation run {@code runId} (#168): meta is
+     * {@code {"type":"RECOMMENDATION","runId":"..."}}, the same in GET and in the STOMP event.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Message recordAiRecommendation(UUID roomId, String content, UUID runId) {
+        return save(roomId, SenderType.AI, null, truncate(content), Map.of("type", RECOMMENDATION_META, "runId", runId.toString()));
+    }
+
     /** SYSTEM messages have no sender (ck_msg_sender). Joins the caller's transaction when there is one. */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Message recordSystem(UUID roomId, String content) {
@@ -71,9 +83,15 @@ public class ChatMessageWriter {
     }
 
     private Message save(UUID roomId, SenderType type, UUID senderId, String content) {
+        return save(roomId, type, senderId, content, null);
+    }
+
+    private Message save(UUID roomId, SenderType type, UUID senderId, String content, Map<String, ?> meta) {
         Message saved;
         try {
-            saved = messages.insert(UuidCreator.getTimeOrderedEpoch(), roomId, type, senderId, content);
+            UUID id = UuidCreator.getTimeOrderedEpoch();
+            saved = meta == null ? messages.insert(id, roomId, type, senderId, content)
+                    : messages.insert(id, roomId, type, senderId, content, meta);
         } catch (DataIntegrityViolationException failure) {
             // The room was deleted (last member left) after the membership check: it is gone, not a server error.
             for (Throwable cause = failure; cause != null; cause = cause.getCause()) {

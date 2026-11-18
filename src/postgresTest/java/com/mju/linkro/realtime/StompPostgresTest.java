@@ -89,6 +89,7 @@ class StompPostgresTest {
     @Autowired RoomEvents roomEvents;
     @Autowired com.mju.linkro.room.service.ProposalVoteService voteService;
     @Autowired ApplicationEventPublisher publisher;
+    @Autowired com.mju.linkro.chat.service.ChatMessageWriter chatWriter;
     @Autowired PlatformTransactionManager transactions;
     @Autowired SimpleBrokerMessageHandler brokerHandler;
     /** Pass-through unless a test scripts it (the CONNECT race tests). */
@@ -324,6 +325,22 @@ class StompPostgresTest {
         assertThat(message.get("content").asString()).isEqualTo("안녕하세요");
         assertThat(message.get("meta").isNull()).isTrue();
         assertThat(event.propertyNames()).containsExactlyInAnyOrder("type", "roomId", "payload", "at");
+    }
+
+    @Test void anAnswerThatOpensARecommendationRunCarriesItsMetaInTheEventAndOthersCarryNull() throws Exception {
+        Client client = connectAs(member);
+        client.subscribe(room);
+        UUID run = UUID.randomUUID();
+        chatWriter.recordAiRecommendation(room, "추천이에요", run);
+        chatWriter.recordAi(room, "그냥 답변이에요");
+
+        JsonNode withRun = client.next("MESSAGE_CREATED").get("payload");
+        assertThat(withRun.get("senderType").asString()).isEqualTo("AI");
+        assertThat(withRun.get("meta").propertyNames()).containsExactlyInAnyOrder("type", "runId");
+        assertThat(withRun.get("meta").get("type").asString()).isEqualTo("RECOMMENDATION");
+        assertThat(withRun.get("meta").get("runId").asString()).isEqualTo(run.toString());
+        JsonNode plain = client.next("MESSAGE_CREATED").get("payload");
+        assertThat(plain.get("meta").isNull()).isTrue();
     }
 
     @Test void nonMemberSubscribeIsRefusedAndReceivesNothing() throws Exception {

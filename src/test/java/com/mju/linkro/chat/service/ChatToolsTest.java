@@ -59,11 +59,11 @@ class ChatToolsTest extends ChatToolsTestBase {
     // ---- the tool list ----
 
     @Test
-    void exactlyTheEightReadOnlyToolsAreOfferedAndNoneTakesARoomOrUser() {
+    void exactlyTheEightReadOnlyToolsAndRunRecommendationAreOfferedAndNoneTakesARoomOrUser() {
         List<ChatToolSpec> specs = toolbox.specs();
         assertThat(specs).extracting(ChatToolSpec::name).containsExactly("get_room_info", "list_members",
                 "get_latest_recommendation", "get_departure_plan", "get_route", "get_congestion", "search_stations",
-                "compare_members_travel");
+                "compare_members_travel", "run_recommendation");
         for (ChatToolSpec spec : specs) {
             assertThat(spec.parameters().toString()).as(spec.name()).doesNotContain("roomId", "userId", "room", "user");
             assertThat(spec.description()).as(spec.name()).isNotBlank();
@@ -459,7 +459,7 @@ class ChatToolsTest extends ChatToolsTestBase {
     @Test
     void anUnknownToolOrBrokenArgumentsAreReasonCodesNotErrors() {
         assertFails(run("delete_room", "{}"), "NO_DATA");
-        assertFails(run("run_recommendation", "{}"), "NO_DATA");
+        assertFails(run("select_station", "{}"), "NO_DATA");
         assertFails(run("get_route", "not json"), "STATION_NOT_FOUND");
         assertFails(run("get_route", null), "STATION_NOT_FOUND");
         verify(access, never()).lockOwner(any(), any());

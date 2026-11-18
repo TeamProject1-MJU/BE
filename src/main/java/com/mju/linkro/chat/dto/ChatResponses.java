@@ -12,8 +12,9 @@ public final class ChatResponses {
     private ChatResponses() {}
 
     /**
-     * One room message (API 10.1, 10.2, WS MESSAGE_CREATED). senderId and nickname are null for AI and SYSTEM, and
-     * meta is null for every message today (no kind is in use, API 10.3).
+     * One room message (API 10.1, 10.2, WS MESSAGE_CREATED). senderId and nickname are null for AI and SYSTEM. meta is
+     * {@code {"type":"RECOMMENDATION","runId":"..."}} on an AI answer whose question ran a recommendation with results
+     * (#168), and null on every other message.
      */
     @JsonInclude(JsonInclude.Include.ALWAYS)
     @Schema(name = "ChatMessage", requiredProperties = {"id", "senderType", "senderId", "nickname", "content", "createdAt", "meta"})
@@ -24,7 +25,7 @@ public final class ChatResponses {
             @Schema(types = {"string", "null"}, description = "USER일 때 보낸 사람의 현재 닉네임. 나간 사용자도 닉네임이 남아요.") String nickname,
             String content,
             Instant createdAt,
-            @Schema(implementation = Object.class, types = {"object", "null"}, description = "확장 필드. 현재는 항상 null") JsonNode meta) {}
+            @Schema(implementation = Object.class, types = {"object", "null"}, description = "확장 필드. @링크로가 추천을 실행해 결과가 있는 AI 답변만 {\"type\":\"RECOMMENDATION\",\"runId\":\"추천 실행 id\"}, 그 밖에는 null. runId로 8.3 GET을 조회") JsonNode meta) {}
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
     @Schema(name = "ChatMessageSent", requiredProperties = {"message", "aiPending"})

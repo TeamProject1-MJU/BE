@@ -30,4 +30,6 @@ public class ChatProperties {
     private Duration answerSweepWindow = Duration.ofMinutes(10);
     /** One read-only tool call of an @링크로 answer (#129) may take this long; past it the tool returns NO_DATA. */
     private Duration aiToolTimeout = Duration.ofSeconds(8);
+    /** run_recommendation (#168) calculates and explains a whole recommendation, so it gets its own, longer limit; past it the tool returns NO_DATA and the answer carries no meta. */
+    private Duration aiRecommendationToolTimeout = Duration.ofSeconds(12);
 }

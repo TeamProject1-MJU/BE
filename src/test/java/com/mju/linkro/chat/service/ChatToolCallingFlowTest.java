@@ -85,7 +85,7 @@ class ChatToolCallingFlowTest extends ChatToolsTestBase {
         var request = ArgumentCaptor.forClass(ChatReplyRequest.class);
         verify(ai).replyToChat(request.capture());
         assertThat(request.getValue().tools()).isNotNull();
-        assertThat(request.getValue().tools().specs()).hasSize(8);
+        assertThat(request.getValue().tools().specs()).hasSize(9);
         verify(access).requireMember(roomId, asker);
     }
 
