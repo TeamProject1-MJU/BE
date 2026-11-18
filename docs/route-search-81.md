@@ -424,8 +424,8 @@ KAKAO 경로의 `totalTimeSec`을 카카오 `routes[].properties.totalTime` 대�
   - 04:00 → `NO_SERVICE_TIME`, 05:39 → `ARRIVAL_UNREACHABLE`
   - #140 가장 늦은 출발이 지남: 지금 14:05 `arriveAt` 14:10, 지금 23:50 `arriveAt` 00:05(slack 28분) → `ARRIVAL_UNREACHABLE`. 지금 14:03:00.9(출발과 같은 초) → 14:03 경로, 14:03:01 → `ARRIVAL_UNREACHABLE`
   - #170 slack 상한: `arriveAt` 14:37(slack 정확히 30분) → 경로, 14:37:01 → `NO_SERVICE_TIME`(로그 확인). 지금 23:50 `arriveAt` 00:10(이미 떠난 막차, slack 33분) → `NO_SERVICE_TIME`. 약속 15:00인 방의 약속방 모드(slack 53분)는 그대로 경로
-- `RouteSearchArrivalSlackSettingsTest`(#170): 기본 30, 1이면 기동, 0·−1이면 기동 실패
   - 라우터 없음 → `arriveAt` 무시, `arriveAt` 없는 응답과 같음, WARN(좌표 없음). 같은 역 → 이전과 같음
+- `RouteSearchArrivalSlackSettingsTest`(#170): 기본 30, 1이면 기동, 0·−1이면 기동 실패
 - `RouteSearchPlainTimetableTest`(#130, 같은 시각표)
   - 방 없음: `departingAt` 경로와 출발·도착·`totalTimeSec`·역 순서·환승이 같고 카카오 호출 0회, `waitSec`·`totalWithWaitSec`, 혼잡도 기준 = 첫 열차 출발, `departAt` 생략 = 지금
   - 03:00 → 첫차 05:36 `noService`, 첫차 정각 05:36 → `false`
