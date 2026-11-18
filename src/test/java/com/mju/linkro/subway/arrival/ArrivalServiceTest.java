@@ -174,11 +174,11 @@ class ArrivalServiceTest {
         // Toward 새절: 하행 only.
         ArrivalResponse towardSaejeol = get(160, "6", "161", null, "10");
         assertThat(summary(towardSaejeol)).containsExactly("DOWN 0 응암순환(상선) 도착", "DOWN 90 1분 40초 후");
-        // Toward 역촌 (LOOP): not filtered, every row of the line stays (same cached answer).
+        // Toward 역촌 (LOOP): 상행 only at 응암 (#164; same cached answer).
         ArrivalResponse towardYeokchon = get(160, "6", "187", null, "10");
         server.verify();
-        assertThat(summary(towardYeokchon)).containsExactly("DOWN 0 응암순환(상선) 도착", "DOWN 90 1분 40초 후", "UP 190 3분 20초 후", "UP 490 8분 20초 후");
-        assertThat(towardYeokchon.trains().get(2).destinationName()).isEqualTo("응암순환(상선)");
+        assertThat(summary(towardYeokchon)).containsExactly("UP 190 3분 20초 후", "UP 490 8분 20초 후");
+        assertThat(towardYeokchon.trains().get(0).destinationName()).isEqualTo("응암순환(상선)");
     }
 
     @Test
@@ -405,5 +405,33 @@ class ArrivalServiceTest {
         assertThat(names.queryName("6", "증산")).isEqualTo("증산(명지대앞)");
         assertThat(names.queryName("6", "월드컵경기장")).isEqualTo("월드컵경기장(성산)");
         assertThat(names.queryName("7", "어린이대공원")).isEqualTo("어린이대공원(세종대)");
+    }
+
+    /**
+     * 응암 at 2026-11-18 12:41 (operating answer received 12:41:07~12:41:19, #164): 상행 6140 and 6142 응암순환(상선)행
+     * (barvlDt 360, 840) and 하행 6147 봉화산행 at 독바위 (300) and 6149 신내행 at 역촌 (720). The fixture keeps these
+     * fields; recptnDt is 12:41:07 for every row, and arvlCd 99, arvlMsg2, trainLineNm and statnFid/Tid are filled in.
+     */
+    @Test
+    void eungamLoopRequestsKeep상행AndDownRequestsKeep하행() {
+        clock.advance(Duration.between(NOW, java.time.Instant.parse("2026-11-18T03:41:07Z")));
+        server.expect(ExpectedCount.once(), requestTo(containsString("/0/30/%EC%9D%91%EC%95%94%EC%88%9C%ED%99%98%28%EC%83%81%EC%84%A0%29")))
+                .andRespond(withSuccess(json("eungam-20261118.json"), MediaType.APPLICATION_JSON));
+        when(stations.rideDirection(6160, 6161)).thenReturn(Optional.of(DirectionCode.DOWN));
+        when(stations.rideDirection(6160, 6187)).thenReturn(Optional.of(DirectionCode.LOOP));
+
+        // 응암 -> 역촌 (LOOP, by the edge or by directionCode): the 상행 trains entering the loop.
+        ArrivalResponse loop = get(160, "6", "187", null, "10");
+        assertThat(summary(loop)).containsExactly("UP 360 6분 후", "UP 840 14분 후");
+        assertThat(loop.trains()).extracting(Train::destinationName).containsExactly("응암순환(상선)", "응암순환(상선)");
+        assertThat(summary(get(160, "6", null, "LOOP", "10"))).containsExactly("UP 360 6분 후", "UP 840 14분 후");
+        // 응암 -> 새절 (DOWN): the 하행 trains leaving toward 새절 after the loop.
+        ArrivalResponse down = get(160, "6", "161", null, "10");
+        assertThat(summary(down)).containsExactly("DOWN 300 5분 후", "DOWN 720 12분 후");
+        assertThat(down.trains()).extracting(Train::destinationName).containsExactly("봉화산", "신내");
+        // No direction: all four rows.
+        assertThat(summary(get(160, "6", null, null, "10")))
+                .containsExactly("DOWN 300 5분 후", "UP 360 6분 후", "DOWN 720 12분 후", "UP 840 14분 후");
+        server.verify();
     }
 }

@@ -27,6 +27,11 @@ public final class SeoulSubwayIds {
      * every line, so a new entry here needs a reason there.
      */
     static final Set<String> SEED_DIRECTION_REVERSED = Set.of();
+    /**
+     * Query name of 6호선 응암, where trains entering the loop (toward 역촌) are 상행 "응암순환(상선)행" and 하행 trains
+     * leave toward 새절 (operating answer of 2026-11-18, docs/arrivals-86.md). A LOOP request there keeps 상행 only (#164).
+     */
+    static final String LOOP_ENTRY_QUERY_NAME = "응암순환(상선)";
 
     private static final Map<String, DirectionCode> UPDN = Map.of("상행", DirectionCode.UP, "하행", DirectionCode.DOWN,
             "내선", DirectionCode.INNER, "외선", DirectionCode.OUTER);
