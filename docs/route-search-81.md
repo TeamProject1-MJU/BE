@@ -67,7 +67,7 @@
 | 403 | `NOT_ROOM_MEMBER` | `roomId` 방의 멤버가 아님 |
 | 404 | `ROOM_NOT_FOUND` / `STATION_NOT_FOUND` / `ROUTE_NOT_FOUND` | 방 없음 / 역 없음 / 내부 그래프로도 경로 없음 |
 | 422 | `STATION_UNSUPPORTED` | 출발·도착역이 `is_supported = false` |
-| 422 | `NO_SERVICE_TIME` | `arriveAt` 직전 60분(`linkro.subway.timetable.no-service-window-minutes`) 안에 도착하는 열차가 전 노선에 없음. 추천(8.1)과 같은 검사(`TimetableRouteFinder.noTrainArrivesBefore`)와 같은 문구("해당 시간대에는 지하철이 운행하지 않습니다. 약속 시간을 바꿔 주세요.") |
+| 422 | `NO_SERVICE_TIME` | `arriveAt` 직전 60분(`linkro.subway.timetable.no-service-window-minutes`) 안에 도착하는 열차가 전 노선에 없음. 추천(8.1)과 같은 검사(`TimetableRouteFinder.noTrainArrivesBefore`)와 같은 문구("해당 시간대에는 지하철이 운행하지 않습니다. 약속 시간을 바꿔 주세요."). #170부터 `arriveAt`까지 도착하는 경로가 `arriveAt`보다 30분(`linkro.route.arrival-max-slack-minutes`)을 넘게 일찍 도착하는 경우도 포함 |
 | 422 | `ARRIVAL_UNREACHABLE` | #130. 열차는 있지만 그 출발역에서 `arriveAt`까지 도착하는 열차가 없음(예: 첫차 직후 도착 시각). #140부터 `arriveAt`까지 도착하는 가장 늦은 출발이 이미 지난 경우(지금 출발해서는 제시간에 도착할 수 없음)도 포함. "그 시각까지 도착할 수 있는 열차가 없습니다. 도착 시각을 늦춰 주세요." 명세 2장 에러 코드 표에는 아직 없다 |
 
 ## 카카오 호출 규격
@@ -286,6 +286,12 @@ INTERNAL 경로는 다음과 같이 만든다.
   - `appointmentPassed: false`, `notice: null`이다. 약속이 지난 방이어도 `arriveAt`이 기준이라 "지금 출발" 안내를 하지 않는다.
 - **거절 (422, 다른 흐름으로 가지 않음)**
   - `NO_SERVICE_TIME`: `arriveAt` 직전 60분 안에 도착하는 열차가 전 노선에 없다(예: 04:00). 추천과 같은 검사·문구다.
+  - `NO_SERVICE_TIME`(#170): 그 시각까지 도착하는 가장 늦은 출발 경로를 찾았지만 `slackSeconds`(`arriveAt − arrivalAt`)가 30분을 넘는다. 그 시각대 열차가 끝나 앞 시간대의 막차 경로가 나온 경우다(예: 응암→잠실 `arriveAt` 02:14 → 00:54 도착, 80분 일찍). 정확히 30분(1800초)은 통과, 1초라도 넘으면 거절한다.
+    - 검사 위치: `RouteSearchService.arrivalRoute`에서 경로를 구한 직후, "가장 늦은 출발이 이미 지났다"(#140) 검사보다 앞. 그래서 이미 떠난 막차이면서 slack도 30분을 넘으면 `ARRIVAL_UNREACHABLE`이 아니라 `NO_SERVICE_TIME`이다. slack은 한 번만 계산해 응답의 `slackSeconds`에 그대로 쓴다.
+    - 약속방 모드와 추천은 같은 `arriveByRoute`/`latestDepartures`를 쓰지만 이 검사를 하지 않는다(도착 시각 지정에서만).
+    - 설정: `linkro.route.arrival-max-slack-minutes`(기본 30, 1 이상). 1 미만이면 기동 실패(`... must be at least 1: {값}`).
+    - 로그: INFO `Route search {출발역 ID} -> {도착역 ID}: the route arriving by the requested time arrives {slack 분} min early (limit {기준 분} min): NO_SERVICE_TIME`
+    - 근거(측정): 06:00~23:30 도착 시각에서는 slack 30분 초과가 0건이고, 00~02시대 도착 시각에서만 생겼다. 경로가 나온 24,310건 중 1,111건이다.
   - `ARRIVAL_UNREACHABLE`: 열차는 다니지만 그 시각까지 도착할 수 없다(예: 평일 05:40 강남→사당, 첫차 05:36:00 출발이 사당에 05:46 도착).
   - `ARRIVAL_UNREACHABLE`(#140): 그 시각까지 도착하는 가장 늦은 출발이 이미 지났다(`leaveAt` < 지금, 초 단위, 같은 초는 허용). 예: 지금 14:05에 `arriveAt` 14:10을 보냈는데 제때 도착하는 마지막 열차가 14:03에 떠났다. 이전에는 지난 출발 시각을 200으로 돌려줬다. 로그는 INFO `... the latest departure arriving by the requested time has left`.
 - **카카오**: 호출하지 않는다. 쿨다운 상태도 바뀌지 않는다. 로그는 INFO 한 줄(`Route search {출발역 ID} -> {도착역 ID} uses INTERNAL: timetable route arriving by the requested time`)이다.
@@ -416,7 +422,9 @@ KAKAO 경로의 `totalTimeSec`을 카카오 `routes[].properties.totalTime` 대�
   - `departAt` + `arriveAt` → 400(두 필드), 지금 1초 전·형식 오류 → 400, 지금(같은 초)은 통과
   - 상한(고정 시계, 오늘 2026-11-12 + 365일): 2027-11-12 23:59:59 → 경로(W3, `slackSeconds` 1379), 2027-11-13 00:00 → 400. 상한 날짜는 서울 날짜 기준(UTC 11-11 23:30 = 서울 11-12), 설정 일수 30이면 2026-12-12까지
   - 04:00 → `NO_SERVICE_TIME`, 05:39 → `ARRIVAL_UNREACHABLE`
-  - #140 가장 늦은 출발이 지남: 지금 14:05 `arriveAt` 14:10, 지금 23:50 `arriveAt` 00:10 → `ARRIVAL_UNREACHABLE`. 지금 14:03:00.9(출발과 같은 초) → 14:03 경로, 14:03:01 → `ARRIVAL_UNREACHABLE`
+  - #140 가장 늦은 출발이 지남: 지금 14:05 `arriveAt` 14:10, 지금 23:50 `arriveAt` 00:05(slack 28분) → `ARRIVAL_UNREACHABLE`. 지금 14:03:00.9(출발과 같은 초) → 14:03 경로, 14:03:01 → `ARRIVAL_UNREACHABLE`
+  - #170 slack 상한: `arriveAt` 14:37(slack 정확히 30분) → 경로, 14:37:01 → `NO_SERVICE_TIME`(로그 확인). 지금 23:50 `arriveAt` 00:10(이미 떠난 막차, slack 33분) → `NO_SERVICE_TIME`. 약속 15:00인 방의 약속방 모드(slack 53분)는 그대로 경로
+- `RouteSearchArrivalSlackSettingsTest`(#170): 기본 30, 1이면 기동, 0·−1이면 기동 실패
   - 라우터 없음 → `arriveAt` 무시, `arriveAt` 없는 응답과 같음, WARN(좌표 없음). 같은 역 → 이전과 같음
 - `RouteSearchPlainTimetableTest`(#130, 같은 시각표)
   - 방 없음: `departingAt` 경로와 출발·도착·`totalTimeSec`·역 순서·환승이 같고 카카오 호출 0회, `waitSec`·`totalWithWaitSec`, 혼잡도 기준 = 첫 열차 출발, `departAt` 생략 = 지금
@@ -450,3 +458,13 @@ KAKAO 경로의 `totalTimeSec`을 카카오 `routes[].properties.totalTime` 대�
   - #130 `arriveAt`(카카오 호출 0회): 강남·노원 → 종로3가, 다음 화요일·토요일 19:00에 추천(약속 있음) trip과 출발·도착(초)·역 순서·환승·요금·`travelMinutes`가 같고 `slackSeconds`가 맞음. 약속이 있는 방에서 다른 `arriveAt`이 이김. 400(함께 보냄·과거·2099-01-01), 04:00 → `NO_SERVICE_TIME`, 05:40 강남→사당 → `ARRIVAL_UNREACHABLE`
   - #130 약속 없는 방 → 경로 탐색(카카오 0회)
   - #130 경로 탐색(카카오 호출 0회): 강남·노원 → 종로3가 평일·토요일 13:00에 추천(약속 없음) trip과 출발·도착(초)·역 순서·환승·요금·`travelMinutes`가 같고 `waitSec`·`totalWithWaitSec`이 맞음, 로그 한 줄. 강남→사당 평일 03:00·05:00 → 05:36:00, 토요일 01:30 → 05:35:30(`noService`). 토요일 23:50 → 재탐색, 일요일 05:35:30. 토요일 00:50 수유→사당 → 재탐색, 토요일 첫 열차. 14:00·23:30 → 다음 열차, `noService: false`. 지난 약속 → `appointmentPassed`·`notice` 유지
+
+## API 명세 반영할 변경 (#170)
+
+명세 파일은 이번 작업에서 고치지 않았다. 다음 명세 갱신 때 반영한다.
+
+- 6.1 경로 검색, 도착 시각 기준(`arriveAt`)의 422 `NO_SERVICE_TIME` 조건에 추가: "`arriveAt`까지 도착하는 경로가 `arriveAt`보다 30분(설정값 `linkro.route.arrival-max-slack-minutes`)을 넘게 일찍 도착하면(그 시각대 운행 종료)". 정확히 30분은 경로를 돌려준다.
+- 같은 절: 이미 떠난 막차이면서 slack이 30분을 넘으면 `ARRIVAL_UNREACHABLE`이 아니라 `NO_SERVICE_TIME`이다(검사 순서).
+- `summary.slackSeconds` 설명: 도착 시각 기준 경로에서는 1800 이하라는 점.
+- 2장 에러 코드 표의 `NO_SERVICE_TIME` 설명에 도착 시각 기준의 새 조건을 덧붙인다(문구는 그대로 "해당 시간대에는 지하철이 운행하지 않습니다. 약속 시간을 바꿔 주세요.").
+- 약속방 모드·추천(8.1)은 바뀌지 않는다.
