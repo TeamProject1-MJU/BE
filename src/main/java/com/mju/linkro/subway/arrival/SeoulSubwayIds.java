@@ -27,8 +27,6 @@ public final class SeoulSubwayIds {
      * every line, so a new entry here needs a reason there.
      */
     static final Set<String> SEED_DIRECTION_REVERSED = Set.of();
-    /** Query names whose statnFid/statnTid do not follow the neighbour rule: no direction filter there. */
-    static final Set<String> NO_DIRECTION_FILTER = Set.of("응암순환(상선)");
 
     private static final Map<String, DirectionCode> UPDN = Map.of("상행", DirectionCode.UP, "하행", DirectionCode.DOWN,
             "내선", DirectionCode.INNER, "외선", DirectionCode.OUTER);
