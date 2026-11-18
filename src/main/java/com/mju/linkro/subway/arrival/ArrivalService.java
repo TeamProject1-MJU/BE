@@ -102,7 +102,7 @@ public class ArrivalService {
         if (answer instanceof Empty empty) return ArrivalResponse.unavailable(Reason.NO_DATA, format(empty.receivedAt()));
         Found found = (Found) answer;
 
-        Predicate<Arrival> direction = direction(queryName, node.get(), query);
+        Predicate<Arrival> direction = direction(node.get(), query);
         Instant now = clock.instant();
         List<Train> trains = new ArrayList<>();
         for (Arrival arrival : found.arrivals()) {
@@ -124,12 +124,11 @@ public class ArrivalService {
     /**
      * nextStationId first: on lines whose station id can be built, statnTid must be that id; elsewhere the RIDE edge
      * to it gives the direction. Then directionCode. updnLine is compared except for LOOP (the loop runs as 하행).
-     * Stations in {@link SeoulSubwayIds#NO_DIRECTION_FILTER} and requests without both keep every train of the line.
+     * Requests without both keep every train of the line.
      * Both the edge direction and directionCode are in seed terms, so they go through
      * {@link SeoulSubwayIds#seoulDirection} before the comparison (no line is flipped since V14, #89).
      */
-    private Predicate<Arrival> direction(String queryName, ArrivalStationRepository.Node node, ArrivalQuery query) {
-        if (SeoulSubwayIds.NO_DIRECTION_FILTER.contains(queryName)) return arrival -> true;
+    private Predicate<Arrival> direction(ArrivalStationRepository.Node node, ArrivalQuery query) {
         DirectionCode direction = query.directionCode();
         if (query.nextStationId() != null) {
             Optional<ArrivalStationRepository.Node> next = stations.node(query.nextStationId(), query.lineId());

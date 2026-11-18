@@ -165,14 +165,20 @@ class ArrivalServiceTest {
     }
 
     @Test
-    void eungamUsesItsOfficialNameAndNoDirectionFilter() {
+    void eungamUsesItsOfficialNameAndTheEdgeDirection() {
         server.expect(ExpectedCount.once(), requestTo(containsString("/0/30/%EC%9D%91%EC%95%94%EC%88%9C%ED%99%98%28%EC%83%81%EC%84%A0%29")))
                 .andRespond(withSuccess(json("eungam.json"), MediaType.APPLICATION_JSON));
-        // statnFid/Tid break the neighbour rule here, so nextStationId and directionCode are ignored.
-        ArrivalResponse response = get(160, "6", "161", "UP", "10");
+        // Seed edges: 응암 -> 새절 is DOWN, 응암 -> 역촌 is LOOP (V11). 응암 has no direction exception any more (#162).
+        when(stations.rideDirection(6160, 6161)).thenReturn(Optional.of(DirectionCode.DOWN));
+        when(stations.rideDirection(6160, 6187)).thenReturn(Optional.of(DirectionCode.LOOP));
+        // Toward 새절: 하행 only.
+        ArrivalResponse towardSaejeol = get(160, "6", "161", null, "10");
+        assertThat(summary(towardSaejeol)).containsExactly("DOWN 0 응암순환(상선) 도착", "DOWN 90 1분 40초 후");
+        // Toward 역촌 (LOOP): not filtered, every row of the line stays (same cached answer).
+        ArrivalResponse towardYeokchon = get(160, "6", "187", null, "10");
         server.verify();
-        assertThat(summary(response)).containsExactly("DOWN 0 응암순환(상선) 도착", "DOWN 90 1분 40초 후", "UP 190 3분 20초 후", "UP 490 8분 20초 후");
-        assertThat(response.trains().get(2).destinationName()).isEqualTo("응암순환(상선)");
+        assertThat(summary(towardYeokchon)).containsExactly("DOWN 0 응암순환(상선) 도착", "DOWN 90 1분 40초 후", "UP 190 3분 20초 후", "UP 490 8분 20초 후");
+        assertThat(towardYeokchon.trains().get(2).destinationName()).isEqualTo("응암순환(상선)");
     }
 
     @Test
