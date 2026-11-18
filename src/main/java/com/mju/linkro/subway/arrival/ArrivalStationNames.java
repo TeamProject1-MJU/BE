@@ -40,7 +40,8 @@ public class ArrivalStationNames {
                 header = false;
                 continue;
             }
-            String[] cells = text.split(",", -1);
+            // Only the first two commas split: a query name may contain one (남한산성입구(성남법원,검찰청), #166).
+            String[] cells = text.split(",", 3);
             if (cells.length != 3) throw new IllegalArgumentException("expected " + HEADER + ": " + text);
             if (names.put(cells[0].strip() + "|" + cells[1].strip(), cells[2].strip()) != null) {
                 throw new IllegalArgumentException("duplicate row: " + text);
