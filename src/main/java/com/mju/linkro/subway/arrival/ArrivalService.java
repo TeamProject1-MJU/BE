@@ -102,7 +102,7 @@ public class ArrivalService {
         if (answer instanceof Empty empty) return ArrivalResponse.unavailable(Reason.NO_DATA, format(empty.receivedAt()));
         Found found = (Found) answer;
 
-        Predicate<Arrival> direction = direction(node.get(), query);
+        Predicate<Arrival> direction = direction(queryName, node.get(), query);
         Instant now = clock.instant();
         List<Train> trains = new ArrayList<>();
         for (Arrival arrival : found.arrivals()) {
@@ -124,11 +124,12 @@ public class ArrivalService {
     /**
      * nextStationId first: on lines whose station id can be built, statnTid must be that id; elsewhere the RIDE edge
      * to it gives the direction. Then directionCode. updnLine is compared except for LOOP (the loop runs as 하행).
-     * Requests without both keep every train of the line.
+     * Requests without both keep every train of the line. At 응암 ({@link SeoulSubwayIds#LOOP_ENTRY_QUERY_NAME}) a LOOP
+     * request keeps 상행 only: the trains entering the loop are 상행 there (#164).
      * Both the edge direction and directionCode are in seed terms, so they go through
      * {@link SeoulSubwayIds#seoulDirection} before the comparison (no line is flipped since V14, #89).
      */
-    private Predicate<Arrival> direction(ArrivalStationRepository.Node node, ArrivalQuery query) {
+    private Predicate<Arrival> direction(String queryName, ArrivalStationRepository.Node node, ArrivalQuery query) {
         DirectionCode direction = query.directionCode();
         if (query.nextStationId() != null) {
             Optional<ArrivalStationRepository.Node> next = stations.node(query.nextStationId(), query.lineId());
@@ -138,6 +139,9 @@ public class ArrivalService {
                 Optional<DirectionCode> edge = stations.rideDirection(node.id(), next.get().id());
                 if (edge.isPresent()) direction = edge.get();
             }
+        }
+        if (direction == DirectionCode.LOOP && SeoulSubwayIds.LOOP_ENTRY_QUERY_NAME.equals(queryName)) {
+            return arrival -> SeoulSubwayIds.direction(arrival.updnLine()) == DirectionCode.UP;
         }
         if (direction == null || direction == DirectionCode.LOOP) return arrival -> true;
         DirectionCode wanted = SeoulSubwayIds.seoulDirection(node.lineCode(), direction);

@@ -1,0 +1,82 @@
+{
+ "errorMessage": {
+  "status": 200,
+  "code": "INFO-000",
+  "message": "정상 처리되었습니다.",
+  "total": 4
+ },
+ "realtimeArrivalList": [
+  {
+   "subwayId": "1006",
+   "updnLine": "상행",
+   "trainLineNm": "응암순환(상선)행 - 응암순환(상선)방면",
+   "bstatnNm": "응암순환(상선)",
+   "statnId": "1006000610",
+   "statnNm": "응암순환(상선)",
+   "statnFid": "1006000611",
+   "statnTid": "1006000610",
+   "barvlDt": "360",
+   "arvlCd": "99",
+   "arvlMsg2": "6분 후",
+   "arvlMsg3": "",
+   "recptnDt": "2026-11-18 12:41:07",
+   "lstcarAt": "0",
+   "btrainSttus": "일반",
+   "btrainNo": "6140"
+  },
+  {
+   "subwayId": "1006",
+   "updnLine": "상행",
+   "trainLineNm": "응암순환(상선)행 - 응암순환(상선)방면",
+   "bstatnNm": "응암순환(상선)",
+   "statnId": "1006000610",
+   "statnNm": "응암순환(상선)",
+   "statnFid": "1006000611",
+   "statnTid": "1006000610",
+   "barvlDt": "840",
+   "arvlCd": "99",
+   "arvlMsg2": "14분 후",
+   "arvlMsg3": "",
+   "recptnDt": "2026-11-18 12:41:07",
+   "lstcarAt": "0",
+   "btrainSttus": "일반",
+   "btrainNo": "6142"
+  },
+  {
+   "subwayId": "1006",
+   "updnLine": "하행",
+   "trainLineNm": "봉화산행 - 역촌방면",
+   "bstatnNm": "봉화산",
+   "statnId": "1006000610",
+   "statnNm": "응암순환(상선)",
+   "statnFid": "1006000610",
+   "statnTid": "1006000611",
+   "barvlDt": "300",
+   "arvlCd": "99",
+   "arvlMsg2": "5분 후",
+   "arvlMsg3": "독바위",
+   "recptnDt": "2026-11-18 12:41:07",
+   "lstcarAt": "0",
+   "btrainSttus": "일반",
+   "btrainNo": "6147"
+  },
+  {
+   "subwayId": "1006",
+   "updnLine": "하행",
+   "trainLineNm": "신내행 - 역촌방면",
+   "bstatnNm": "신내",
+   "statnId": "1006000610",
+   "statnNm": "응암순환(상선)",
+   "statnFid": "1006000610",
+   "statnTid": "1006000611",
+   "barvlDt": "720",
+   "arvlCd": "99",
+   "arvlMsg2": "12분 후",
+   "arvlMsg3": "역촌",
+   "recptnDt": "2026-11-18 12:41:07",
+   "lstcarAt": "0",
+   "btrainSttus": "일반",
+   "btrainNo": "6149"
+  }
+ ]
+}
