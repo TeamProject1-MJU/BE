@@ -31,7 +31,7 @@ API 명세 v1.12 10.1(#27), 10.2(#28), 상세설계서 3.3.4, ERD v1.13 `room_me
 - `size`는 기본 30, 1~100. `cursor`가 UUID가 아니거나 `size`가 범위 밖이면 `VALIDATION_ERROR`(400)예요.
 - `hasMore`는 한 건 더 읽어서 판단해요. `hasMore`가 false이면 `nextCursor`는 null이에요.
 - USER 메시지의 `nickname`은 users의 현재 닉네임이고, 나간 사용자의 과거 메시지도 닉네임이 남아요(15장의 "나간 사용자" 표시는 프론트와 확인할 일). AI·SYSTEM은 `senderId`·`nickname`이 null이에요.
-- `meta`는 모든 메시지에서 null이에요(10.3 MVP 제외).
+- `meta`는 기본 null이에요(10.3 MVP 제외). 예외는 @링크로가 추천을 실행해 결과가 있는 AI 답변 하나뿐이에요(#168): `{"type":"RECOMMENDATION","runId":"<추천 실행 id>"}`. 앱은 runId가 있으면 답변 아래에 [상세보기]를 보여주고 8.3 `GET /rooms/{roomId}/recommendations/{runId}`를 열어요. USER·SYSTEM 메시지와 추천이 없거나 결과가 없는 답변, 오류·시간 초과 답변은 null이에요. 조회(10.2)와 실시간(`MESSAGE_CREATED`)이 같은 형식이고, 이 형식 외의 필드는 아직 없어요(추후 `stationId`·`resultId`를 더할 수 있게 객체로 둠). 그 실행의 8.3 `conditionText`는 링크로가 적은 조건 요약이고(표시용, 해석하지 않음, 조건 계산은 `appliedConstraints`) 요약이 없으면 null이에요. 배포 순서는 FE가 meta가 null이 아닌 메시지를 받을 수 있게 고친 뒤 BE예요. 근거와 규칙은 [chat-tool-calling-129.md](chat-tool-calling-129.md)의 "추천 실행 도구".
 
 ## @링크로 AI 답변
 
@@ -103,6 +103,7 @@ API 명세 v1.12 10.1(#27), 10.2(#28), 상세설계서 3.3.4, ERD v1.13 `room_me
 | `ai-call-interval` | 10s | 한 사용자의 @링크로 호출 간격. 0이면 제한 없음 |
 | `ai-shutdown-wait` | 15s | 종료 때 답변이 끝나길 기다리는 시간 |
 | `ai-tool-timeout` | 8s | 도구 한 번 호출의 제한 시간(#129, 넘으면 `NO_DATA`) |
+| `ai-recommendation-tool-timeout` | 12s | `run_recommendation`(#168) 한 번의 제한 시간. 넘으면 `NO_DATA`이고 답변에 meta가 붙지 않아요 |
 | `answer-sweep-window` | 10m | 시작 시 답이 없는 질문을 찾는 기간. 0이면 끔 |
 
 AI 호출 읽기 타임아웃은 기존 `OPENAI_READ_TIMEOUT`(8s)이에요. 모델이 느려 시간이 넘으면 `AI_UNAVAILABLE`로 처리돼 SYSTEM 안내가 나가요.

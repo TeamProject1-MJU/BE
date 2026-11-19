@@ -169,7 +169,7 @@ public class OpenAiClient implements AiClient {
         String effort = chatReasoningEffort;
         List<Map<String, Object>> specs = tools.specs().stream()
                 .map(spec -> Map.<String, Object>of("type", "function", "name", spec.name(),
-                        "description", spec.description(), "parameters", spec.parameters()))
+                        "description", spec.description(), "parameters", spec.parameters(), "strict", true))
                 .toList();
         var input = new ArrayList<Object>(textInput(question));
         for (int round = 0; ; round++) {

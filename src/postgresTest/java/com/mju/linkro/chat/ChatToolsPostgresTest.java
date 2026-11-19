@@ -235,4 +235,133 @@ class ChatToolsPostgresTest {
                         expected.leaveAt().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).atZone(java.time.ZoneId.of("Asia/Seoul"))));
         assertThat(jdbc.queryForObject("select count(*) from room_messages where room_id = ? and sender_type = 'SYSTEM'", Integer.class, room)).isZero();
     }
+
+    // ---- run_recommendation (#168) ----
+
+    int runs() {
+        return jdbc.queryForObject("select count(*) from recommendation_runs where room_id = ?", Integer.class, room);
+    }
+
+    @Test void runRecommendationSavesTheSameRunAs81AndItShowsInTheLatestAndByRunReads() {
+        JsonNode out = run(asker, "run_recommendation", "{\"maxMinutes\":300,\"maxTransfers\":10}");
+        assertThat(out.get("ok").asBoolean()).as(out.toString()).isTrue();
+        assertThat(out.get("hasResults").asBoolean()).isTrue();
+        assertThat(out.get("bestStation").get("station").asString()).isNotBlank();
+        assertThat(out.get("appliedConstraints").get("maxMinutes").asInt()).isEqualTo(300);
+        assertThat(out.get("appliedConstraints").get("maxTransfers").asInt()).isEqualTo(10);
+        assertThat(runs()).isEqualTo(1);
+
+        var latest = recommendations.latest(asker, room);
+        assertThat(latest.runId()).isEqualTo(out.get("runId").asString());
+        var byRun = recommendations.byRun(friend, room, UUID.fromString(out.get("runId").asString()));
+        assertThat(byRun.appliedConstraints().maxMinutes()).isEqualTo(300);
+        assertThat(byRun.appliedConstraints().maxTransfers()).isEqualTo(10);
+        assertThat(byRun.conditionText()).isNull();
+        assertThat(byRun.results()).isNotEmpty();
+        assertThat(byRun.results().get(0).recommendedStation().name()).isNotBlank();
+        // the tool's best station is the TIME result of the saved run
+        var time = byRun.results().stream().filter(result -> "TIME".equals(result.criterion())).findFirst().orElseThrow();
+        assertThat(out.get("bestStation").get("station").asString()).isEqualTo(time.recommendedStation().name());
+        assertThat(out.get("bestStation").get("maxMinutes").asInt()).isEqualTo(time.metrics().maxMinutes());
+    }
+
+    @Test void theConditionSummaryIsShownAsConditionTextBy83WithoutAnyConditionAiCall() {
+        JsonNode out = run(asker, "run_recommendation", "{\"conditionText\":\" 환승 1번 이하, 40분 안쪽 \",\"maxMinutes\":40,\"maxTransfers\":1}");
+        assertThat(out.get("ok").asBoolean()).as(out.toString()).isTrue();
+        var byRun = recommendations.byRun(friend, room, UUID.fromString(out.get("runId").asString()));
+        assertThat(byRun.conditionText()).isEqualTo("환승 1번 이하, 40분 안쪽");
+        assertThat(byRun.appliedConstraints().maxMinutes()).isEqualTo(40);
+        assertThat(byRun.appliedConstraints().maxTransfers()).isEqualTo(1);
+        assertThat(recommendations.latest(asker, room).conditionText()).isEqualTo("환승 1번 이하, 40분 안쪽");
+        org.mockito.Mockito.verify(ai, org.mockito.Mockito.never()).interpretCondition(any());
+
+        // blank is no text; too long is refused and runs nothing
+        assertThat(recommendations.byRun(asker, room, UUID.fromString(run(asker, "run_recommendation", "{\"conditionText\":\"  \"}")
+                .get("runId").asString())).conditionText()).isNull();
+        JsonNode tooLong = run(asker, "run_recommendation", "{\"conditionText\":\"" + "가".repeat(501) + "\"}");
+        assertThat(tooLong.get("code").asString()).isEqualTo("VALIDATION_ERROR");
+        assertThat(runs()).isEqualTo(2);
+        org.mockito.Mockito.verify(ai, org.mockito.Mockito.never()).interpretCondition(any());
+    }
+
+    @Test void withoutConditionsItRunsAnUnfilteredRunAndAnImpossibleOneSavesAnEmptyRunWithoutARunId() {
+        JsonNode plain = run(asker, "run_recommendation", "{}");
+        assertThat(plain.get("hasResults").asBoolean()).as(plain.toString()).isTrue();
+        assertThat(recommendations.latest(asker, room).appliedConstraints().maxMinutes()).isNull();
+
+        JsonNode none = run(asker, "run_recommendation", "{\"maxMinutes\":1}");
+        assertThat(none.get("ok").asBoolean()).as(none.toString()).isTrue();
+        assertThat(none.get("hasResults").asBoolean()).isFalse();
+        assertThat(none.has("runId")).isFalse();
+        assertThat(runs()).isEqualTo(2);   // 8.1 saves an empty run too; the answer just has no run to open
+    }
+
+    @Test void the81RulesApplyAndRefusedRunsSaveNothing() {
+        depart(friend, null);
+        JsonNode missing = run(asker, "run_recommendation", "{}");
+        assertThat(missing.get("code").asString()).isEqualTo("DEPARTURE_MISSING");
+        assertThat(missing.get("message").asString()).contains("민수");
+
+        depart(friend, nowon);
+        assertThat(run(asker, "run_recommendation", "{\"maxMinutes\":999}").get("code").asString()).isEqualTo("VALIDATION_ERROR");
+        assertThat(run(outsider, "run_recommendation", "{}").get("code").asString()).isEqualTo("NO_DATA");
+        jdbc.update("update meeting_rooms set appointment_at = ? where id = ?", java.sql.Timestamp.from(Instant.parse("2026-01-01T00:00:00Z")), room);
+        assertThat(run(asker, "run_recommendation", "{}").get("code").asString()).isEqualTo("APPOINTMENT_PASSED");
+        jdbc.update("update meeting_rooms set appointment_at = ? where id = ?", java.sql.Timestamp.from(APPOINTMENT), room);
+        jdbc.update("delete from meeting_members where room_id = ? and user_id = ?", room, friend);
+        assertThat(run(asker, "run_recommendation", "{}").get("code").asString()).isEqualTo("TOO_FEW_MEMBERS");
+        assertThat(runs()).isZero();
+    }
+
+    String ask(String question) throws Exception {
+        String token = jwt.createAccessToken(asker);
+        mvc.perform(post("/api/v1/rooms/" + room + "/messages").header("Authorization", "Bearer " + token).contentType("application/json")
+                .content(mapper.writeValueAsString(Map.of("content", question)))).andExpect(status().isCreated());
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+        while (jdbc.queryForObject("select count(*) from room_messages where room_id = ? and sender_type <> 'USER'", Integer.class, room) == 0
+                && System.nanoTime() < deadline) {
+            Thread.sleep(50);
+        }
+        // GET /rooms/{roomId}/messages, newest first
+        String page = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v1/rooms/" + room + "/messages")
+                .header("Authorization", "Bearer " + token)).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        return page;
+    }
+
+    @Test void aChatQuestionThatRunsARecommendationAnswersWithTheRunIdInMetaOfTheMessageList() throws Exception {
+        doAnswer(call -> {
+            ChatReplyRequest request = call.getArgument(0);
+            JsonNode result = mapper.readTree(request.tools().run("run_recommendation", "{\"maxTransfers\":10}"));
+            return new GeneratedText("추천: " + result.get("bestStation").get("station").asString());
+        }).when(ai).replyToChat(any());
+
+        JsonNode newest = mapper.readTree(ask("@링크로 환승 10번 이하로 추천해줘")).get("data").get("items").get(0);
+
+        assertThat(newest.get("senderType").asString()).isEqualTo("AI");
+        assertThat(newest.get("meta").propertyNames()).containsExactlyInAnyOrder("type", "runId");
+        assertThat(newest.get("meta").get("type").asString()).isEqualTo("RECOMMENDATION");
+        String runId = newest.get("meta").get("runId").asString();
+        assertThat(runId).isEqualTo(recommendations.latest(asker, room).runId());
+        var run = recommendations.byRun(asker, room, UUID.fromString(runId));
+        assertThat(run.appliedConstraints().maxTransfers()).isEqualTo(10);
+        assertThat(runs()).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from room_messages where room_id = ? and meta is not null", Integer.class, room)).isEqualTo(1);
+    }
+
+    @Test void anAnswerWithNoResultsAnErrorOrNoRunHasNullMeta() throws Exception {
+        doAnswer(call -> {
+            ChatReplyRequest request = call.getArgument(0);
+            request.tools().run("run_recommendation", "{\"maxMinutes\":1}");
+            return new GeneratedText("조건에 맞는 역이 없어요.");
+        }).when(ai).replyToChat(any());
+        JsonNode newest = mapper.readTree(ask("@링크로 1분 안쪽으로 추천해줘")).get("data").get("items").get(0);
+        assertThat(newest.get("senderType").asString()).isEqualTo("AI");
+        assertThat(newest.get("meta").isNull()).isTrue();
+
+        jdbc.update("delete from room_messages where room_id = ?", room);
+        depart(friend, null);
+        newest = mapper.readTree(ask("@링크로 추천해줘")).get("data").get("items").get(0);
+        assertThat(newest.get("senderType").asString()).isEqualTo("AI");
+        assertThat(newest.get("meta").isNull()).isTrue();
+    }
 }

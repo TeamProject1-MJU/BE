@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.RowMapper;
@@ -31,10 +32,12 @@ public class RoomMessageRepository {
             """;
 
     private final NamedParameterJdbcTemplate jdbc;
+    private final JsonMapper json;
     private final RowMapper<Message> rows;
 
     public RoomMessageRepository(NamedParameterJdbcTemplate jdbc, JsonMapper json) {
         this.jdbc = jdbc;
+        this.json = json;
         this.rows = (rs, n) -> new Message(rs.getObject("id", UUID.class), SenderType.valueOf(rs.getString("sender_type")),
                 rs.getObject("sender_id", UUID.class), rs.getString("nickname"), rs.getString("content"),
                 rs.getTimestamp("created_at").toInstant(), meta(json, rs));
@@ -42,15 +45,21 @@ public class RoomMessageRepository {
 
     /** Inserts and returns the stored row in one statement. A missing room or sender fails on the foreign key. */
     public Message insert(UUID id, UUID roomId, SenderType type, UUID senderId, String content) {
+        return insert(id, roomId, type, senderId, content, null);
+    }
+
+    /** Same, with a meta object (null for none; API 10.3). */
+    public Message insert(UUID id, UUID roomId, SenderType type, UUID senderId, String content, Map<String, ?> meta) {
         return jdbc.queryForObject("""
                 with saved as (
-                    insert into room_messages (id, room_id, sender_id, sender_type, content)
-                    values (:id, :room, :sender, :type, :content)
+                    insert into room_messages (id, room_id, sender_id, sender_type, content, meta)
+                    values (:id, :room, :sender, :type, :content, cast(:meta as jsonb))
                     returning id, sender_type, sender_id, content, created_at, meta)
                 select s.id, s.sender_type, s.sender_id, u.nickname, s.content, s.created_at, cast(s.meta as text) as meta
                 from saved s left join users u on u.id = s.sender_id
                 """, new MapSqlParameterSource().addValue("id", id).addValue("room", roomId)
-                .addValue("sender", senderId).addValue("type", type.name()).addValue("content", content), rows);
+                .addValue("sender", senderId).addValue("type", type.name()).addValue("content", content)
+                .addValue("meta", meta == null ? null : json.writeValueAsString(meta)), rows);
     }
 
     /** The user's current nickname, for the wording of SYSTEM messages. */

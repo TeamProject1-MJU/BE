@@ -113,6 +113,16 @@ public class RecommendationService {
 
     /** API 8.1. */
     public RecommendationResponse create(UUID userId, UUID roomId, RecommendationRequest body) {
+        return create(userId, roomId, body, null);
+    }
+
+    /**
+     * API 8.1 with a conditionText that is only stored and shown (the @링크로 summary of what the user said, #168).
+     * It is never interpreted: the constraints come from {@code body} alone, so no condition AI call is made. Ignored
+     * when {@code body} has its own conditionText.
+     */
+    public RecommendationResponse create(UUID userId, UUID roomId, RecommendationRequest body, String displayText) {
+        String shownText = RecommendationRequest.displayText(displayText);
         long started = System.nanoTime();
         RecommendationRequest request = RecommendationRequest.orEmpty(body);
         MeetingRoom room = rooms.requireMember(roomId, userId);
@@ -181,7 +191,7 @@ public class RecommendationService {
                         explanation.text(), explanation.source()));
             }
 
-            RunCriteria criteria = new RunCriteria(request.text(), request.filter(), resolved.applied(),
+            RunCriteria criteria = new RunCriteria(request.text() != null ? request.text() : shownText, request.filter(), resolved.applied(),
                     resolved.parseFailed(), room.getAppointmentAt() == null ? null : room.getAppointmentAt().toString(),
                     rows.stream().map(row -> new RunCriteria.Participant(row.userId(), row.stationId())).toList(),
                     evaluation.unreachableByTrain(), evaluation.beforeFirstTrain());

@@ -51,6 +51,22 @@ public record RecommendationRequest(
     }
 
     /**
+     * A conditionText that is only shown, never interpreted (@링크로, #168): stripped, null when blank, and at most
+     * {@link #MAX_CONDITION_TEXT_LENGTH} characters like the 8.1 conditionText (else VALIDATION_ERROR).
+     */
+    public static String displayText(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        String stripped = text.strip();
+        if (stripped.length() > MAX_CONDITION_TEXT_LENGTH) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR,
+                    Map.of("conditionText", "conditionText는 " + MAX_CONDITION_TEXT_LENGTH + "자 이하여야 합니다."));
+        }
+        return stripped;
+    }
+
+    /**
      * Range checks of everything the caller wrote by hand. All problems are reported at once as VALIDATION_ERROR
      * (400). A memberLimits userId must belong to the room.
      */

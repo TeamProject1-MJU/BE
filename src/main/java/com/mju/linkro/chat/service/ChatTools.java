@@ -7,6 +7,7 @@ import com.mju.linkro.ai.api.ChatToolbox;
 import com.mju.linkro.chat.ChatProperties;
 import com.mju.linkro.common.exception.BusinessException;
 import com.mju.linkro.common.exception.ErrorCode;
+import com.mju.linkro.recommendation.dto.RecommendationRequest;
 import com.mju.linkro.recommendation.dto.RecommendationResponse;
 import com.mju.linkro.recommendation.repository.RecommendationRepository;
 import com.mju.linkro.recommendation.service.ConstraintResolver;
@@ -28,6 +29,7 @@ import com.mju.linkro.subway.station.dto.StationResponses;
 import com.mju.linkro.subway.station.service.StationQueryService;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -44,6 +46,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -53,9 +56,10 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * The read-only tools of an @링크로 answer (#129), run on the services the app already has: room and member reads,
+ * The tools of an @링크로 answer (#129), run on the services the app already has: room and member reads,
  * {@link RecommendationService#latest}, {@link RouteSearchService#search}, {@link TimetableRouteFinder#latestDepartures},
- * {@link CongestionQueryService} and {@link StationQueryService}. {@link #forAsker} fixes the room and the asking user;
+ * {@link CongestionQueryService} and {@link StationQueryService}. All are read-only except {@code run_recommendation}
+ * (#168), which is {@link RecommendationService#create} itself: the same checks, the same saved run. {@link #forAsker} fixes the room and the asking user;
  * neither is ever a tool argument, and every call checks again that the user is still a member.
  *
  * <p>Every call runs on {@code chatToolExecutor} with a timeout and holds no transaction of its own (each service opens
@@ -68,7 +72,7 @@ public class ChatTools {
     private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
     private static final DateTimeFormatter ISO = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
     private static final Set<String> TOOLS = Set.of(GET_ROOM_INFO, LIST_MEMBERS, GET_LATEST_RECOMMENDATION, GET_DEPARTURE_PLAN,
-            GET_ROUTE, GET_CONGESTION, SEARCH_STATIONS, COMPARE_MEMBERS_TRAVEL);
+            GET_ROUTE, GET_CONGESTION, SEARCH_STATIONS, COMPARE_MEMBERS_TRAVEL, RUN_RECOMMENDATION);
 
     private final RoomAccess access;
     private final RoomReadRepository roomReads;
@@ -129,10 +133,14 @@ public class ChatTools {
         }
     }
 
-    private final class Asker implements ChatToolbox {
+    final class Asker implements ChatToolbox {
         private final UUID roomId;
         private final UUID userId;
         private Map<String, List<Long>> stationIdsByName;
+        /** At most one run_recommendation per question: taken when the run starts, never given back. */
+        private final AtomicBoolean recommendationStarted = new AtomicBoolean();
+        /** The run this question saved with results, known only when its tool call finished in time. */
+        private volatile UUID recommendationRunId;
 
         Asker(UUID roomId, UUID userId) {
             this.roomId = roomId;
@@ -142,6 +150,14 @@ public class ChatTools {
         @Override
         public List<ChatToolSpec> specs() {
             return ChatToolSpecs.all();
+        }
+
+        /**
+         * The run to open from the answer ({@code meta.runId}, #168): saved by this question's run_recommendation, with
+         * results, and reported back before the tool timeout. Null otherwise: no run, no results, an error, a timeout.
+         */
+        UUID recommendationRunId() {
+            return recommendationRunId;
         }
 
         @Override
@@ -154,7 +170,11 @@ public class ChatTools {
                 if (!TOOLS.contains(toolName)) throw new Fail("NO_DATA", "알 수 없는 도구예요.");
                 JsonNode args = arguments(argumentsJson);
                 future = executor.submit(() -> execute(toolName, args));
-                result = future.get(properties.getAiToolTimeout().toMillis(), TimeUnit.MILLISECONDS);
+                Duration timeout = RUN_RECOMMENDATION.equals(toolName) ? properties.getAiRecommendationToolTimeout() : properties.getAiToolTimeout();
+                result = future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+                if (RUN_RECOMMENDATION.equals(toolName) && result.get("runId") instanceof String runId) {
+                    recommendationRunId = UUID.fromString(runId);
+                }
             } catch (TimeoutException timeout) {
                 future.cancel(true);
                 result = failure("NO_DATA", "시간이 너무 오래 걸렸어요.");
@@ -193,6 +213,7 @@ public class ChatTools {
                 case GET_ROUTE -> route(args);
                 case GET_CONGESTION -> congestion(args);
                 case SEARCH_STATIONS -> searchStations(args);
+                case RUN_RECOMMENDATION -> runRecommendation(args);
                 default -> compareMembers(args);
             };
         }
@@ -396,6 +417,91 @@ public class ChatTools {
             return ok("stations", stations);
         }
 
+        // ---- run_recommendation ----
+
+        /** API 8.1 for this room and asker, with the filter the AI built. A run with results is the one the answer opens. */
+        private Map<String, Object> runRecommendation(JsonNode args) {
+            List<MemberRow> members = members();
+            RecommendationRequest request = new RecommendationRequest(null, filter(args, members));
+            String summary;
+            try {
+                request.validate(members.stream().map(MemberRow::userId).collect(java.util.stream.Collectors.toSet()));
+                summary = RecommendationRequest.displayText(conditionSummary(args));
+            } catch (BusinessException invalid) {
+                throw new Fail("VALIDATION_ERROR", "조건 값이 범위를 벗어났어요: " + invalid.getDetails().values());
+            }
+            if (!recommendationStarted.compareAndSet(false, true)) {
+                throw new Fail("ALREADY_RUN", "이번 질문에서는 이미 추천을 실행했어요.");
+            }
+            RecommendationResponse run;
+            try {
+                // The summary is only stored as conditionText; the request has none, so the condition AI is never called.
+                run = recommendations.create(userId, roomId, request, summary);
+            } catch (BusinessException refused) {
+                if (refused.getErrorCode() == ErrorCode.DEPARTURE_MISSING) {
+                    throw new Fail("DEPARTURE_MISSING", "출발역이 없는 멤버: " + members.stream()
+                            .filter(member -> member.stationId() == null).map(MemberRow::nickname).toList());
+                }
+                throw refused;
+            }
+            Map<String, Object> applied = appliedConstraints(run.appliedConstraints(), members);
+            if (run.results().isEmpty()) {
+                return ok("hasResults", false, "appliedConstraints", applied, "message", run.message());
+            }
+            RecommendationResponse.Result best = run.results().stream().filter(result -> "TIME".equals(result.criterion()))
+                    .findFirst().orElse(run.results().get(0));
+            var metrics = best.metrics();
+            return ok("runId", run.runId(), "hasResults", true,
+                    "bestStation", map("station", best.recommendedStation().name(), "criterion", best.criterion(),
+                            "maxMinutes", metrics.maxMinutes(), "averageMinutes", metrics.averageMinutes(),
+                            "averageFare", metrics.averageFare(), "totalTransfers", metrics.totalTransfers()),
+                    "appliedConstraints", applied, "message", run.message());
+        }
+
+        /** The optional conditionText summary: a string, or VALIDATION_ERROR. */
+        private String conditionSummary(JsonNode args) {
+            JsonNode value = args.path("conditionText");
+            if (value.isMissingNode() || value.isNull()) return null;
+            if (!value.isString()) throw new Fail("VALIDATION_ERROR", "conditionText는 문자열이어야 해요.");
+            return value.asString();
+        }
+
+        /** The 8.1 filter from the tool arguments, or null when none is given. A wrong type or range is VALIDATION_ERROR. */
+        private RecommendationRequest.Filter filter(JsonNode args, List<MemberRow> members) {
+            Integer maxMinutes = integer(args, "maxMinutes");
+            Integer maxTransfers = integer(args, "maxTransfers");
+            Integer maxFareWon = integer(args, "maxFareWon");
+            List<Long> excluded = new ArrayList<>();
+            JsonNode excludeStations = args.path("excludeStations");
+            if (!excludeStations.isMissingNode() && !excludeStations.isNull()) {
+                if (!excludeStations.isArray()) throw new Fail("VALIDATION_ERROR", "excludeStations는 역 이름 배열이어야 해요.");
+                for (JsonNode name : excludeStations) {
+                    if (!name.isString() || name.asString().isBlank()) throw new Fail("VALIDATION_ERROR", "excludeStations는 역 이름 배열이어야 해요.");
+                    excluded.add(station(name.asString().strip()));
+                }
+            }
+            List<RecommendationRequest.MemberLimit> limits = new ArrayList<>();
+            JsonNode memberLimits = args.path("memberLimits");
+            if (!memberLimits.isMissingNode() && !memberLimits.isNull()) {
+                if (!memberLimits.isArray()) throw new Fail("VALIDATION_ERROR", "memberLimits는 {nickname, maxMinutes} 배열이어야 해요.");
+                for (JsonNode limit : memberLimits) {
+                    if (!limit.isObject()) throw new Fail("VALIDATION_ERROR", "memberLimits는 {nickname, maxMinutes} 배열이어야 해요.");
+                    limits.add(new RecommendationRequest.MemberLimit(member(members, text(limit, "nickname")).userId(), integer(limit, "maxMinutes")));
+                }
+            }
+            if (maxMinutes == null && maxTransfers == null && maxFareWon == null && excluded.isEmpty() && limits.isEmpty()) return null;
+            return new RecommendationRequest.Filter(maxMinutes, maxTransfers, maxFareWon, excluded, limits);
+        }
+
+        private Map<String, Object> appliedConstraints(RecommendationResponse.AppliedConstraints applied, List<MemberRow> members) {
+            Map<Long, String> names = stationNames(applied.excludeStationIds());
+            Map<UUID, String> nicknames = members.stream().collect(java.util.stream.Collectors.toMap(MemberRow::userId, MemberRow::nickname));
+            return map("maxMinutes", applied.maxMinutes(), "maxTransfers", applied.maxTransfers(), "maxFareWon", applied.maxFareWon(),
+                    "excludedStations", applied.excludeStationIds().isEmpty() ? null : applied.excludeStationIds().stream().map(names::get).toList(),
+                    "memberLimits", applied.memberLimits().isEmpty() ? null : applied.memberLimits().stream()
+                            .map(limit -> map("nickname", nicknames.get(limit.userId()), "maxMinutes", limit.maxMinutes())).toList());
+        }
+
         // ---- shared ----
 
         /** The supported station for a name, by the rule of {@link ConstraintResolver}: a trailing 역 is ignored. */
@@ -454,6 +560,9 @@ public class ChatTools {
             ErrorCode code = business.getErrorCode();
             return failure(switch (code) {
                 case ROUTE_NOT_FOUND -> "NO_ROUTE";
+                case TOO_FEW_MEMBERS -> "TOO_FEW_MEMBERS";
+                case APPOINTMENT_PASSED -> "APPOINTMENT_PASSED";
+                case RECOMMENDATION_IN_PROGRESS -> "RECOMMENDATION_IN_PROGRESS";
                 case NO_SERVICE_TIME, ARRIVAL_UNREACHABLE -> "NO_SERVICE";
                 case STATION_NOT_FOUND -> "STATION_NOT_FOUND";
                 case STATION_UNSUPPORTED -> "STATION_UNSUPPORTED";
@@ -489,6 +598,14 @@ public class ChatTools {
         if (!value.isString()) return null;
         String text = value.asString().strip();
         return text.isEmpty() ? null : text;
+    }
+
+    /** An optional whole number: absent or null is null, anything else that is not an int is VALIDATION_ERROR. */
+    private static Integer integer(JsonNode args, String field) {
+        JsonNode value = args.path(field);
+        if (value.isMissingNode() || value.isNull()) return null;
+        if (!value.isIntegralNumber() || !value.canConvertToInt()) throw new Fail("VALIDATION_ERROR", field + "는 정수여야 해요.");
+        return value.intValue();
     }
 
     private static String iso(Instant instant) {

@@ -1,6 +1,7 @@
 package com.mju.linkro.chat.service;
 
 import com.mju.linkro.ai.api.AiClient;
+import com.mju.linkro.ai.api.ChatToolbox;
 import com.mju.linkro.ai.api.GeneratedText;
 import com.mju.linkro.chat.dto.ChatResponses.Message;
 import com.mju.linkro.common.exception.BusinessException;
@@ -13,8 +14,9 @@ import org.springframework.stereotype.Component;
 /**
  * Answers one @링크로 question (API 10.1): AI reply as an AI message, or a SYSTEM notice when the AI fails. The
  * asker's USER message is already committed when this runs, so no failure here can lose it. Never throws. The AI may
- * call the read-only tools of {@link ChatTools} for this room and asker (#129); too many rounds or an AI failure is the
- * same SYSTEM notice as any other AI failure.
+ * call the tools of {@link ChatTools} for this room and asker (#129); too many rounds or an AI failure is the
+ * same SYSTEM notice as any other AI failure. When its run_recommendation saved a run with results (#168), the answer
+ * message carries it in meta.
  */
 @Slf4j
 @Component
@@ -30,11 +32,18 @@ class ChatAiResponder {
 
     void reply(UUID roomId, Message question) {
         try {
-            GeneratedText answer = ai.replyToChat(context.build(roomId, question).withTools(tools.forAsker(roomId, question.senderId())));
+            ChatToolbox toolbox = tools.forAsker(roomId, question.senderId());
+            GeneratedText answer = ai.replyToChat(context.build(roomId, question).withTools(toolbox));
             if (answer == null || answer.text() == null || answer.text().isBlank()) {
                 throw new BusinessException(ErrorCode.AI_UNAVAILABLE);
             }
-            writer.recordAi(roomId, answer.text().strip());
+            // Only a completed answer opens the run its question saved (#168); a failure above leaves no meta anywhere.
+            UUID runId = toolbox instanceof ChatTools.Asker asker ? asker.recommendationRunId() : null;
+            if (runId == null) {
+                writer.recordAi(roomId, answer.text().strip());
+            } else {
+                writer.recordAiRecommendation(roomId, answer.text().strip(), runId);
+            }
         } catch (BusinessException failure) {
             notifyFailure(roomId, failure.getErrorCode());
         } catch (RuntimeException failure) {

@@ -437,6 +437,48 @@ class RecommendationServiceTest {
     }
 
     @Test
+    void aDisplayTextIsSavedAsConditionTextAndNeverInterpreted() {
+        var filter = new Filter(40, 1, null, null, null);
+        RecommendationResponse response = service.create(USER_A, roomId, new RecommendationRequest(null, filter), "  환승 1번 이하, 22분 안쪽  ");
+
+        assertThat(response.conditionText()).isEqualTo("환승 1번 이하, 22분 안쪽");
+        // only the structured filter applies: the "22분" in the text is not read
+        assertThat(response.appliedConstraints().maxMinutes()).isEqualTo(40);
+        assertThat(response.appliedConstraints().maxTransfers()).isEqualTo(1);
+        assertThat(service.latest(USER_A, roomId).conditionText()).isEqualTo("환승 1번 이하, 22분 안쪽");
+        assertThat(service.byRun(USER_A, roomId, UUID.fromString(response.runId())).conditionText()).isEqualTo("환승 1번 이하, 22분 안쪽");
+        verify(ai, times(0)).interpretCondition(any());
+        verify(ai, times(1)).explainRecommendation(any());
+    }
+
+    @Test
+    void aDisplayTextAloneAppliesNoConstraint() {
+        RecommendationResponse response = service.create(USER_A, roomId, new RecommendationRequest(null, null), "22분 이내로 가자");
+        assertThat(response.conditionText()).isEqualTo("22분 이내로 가자");
+        assertThat(response.appliedConstraints()).isEqualTo(RecommendationResponse.AppliedConstraints.none());
+        verify(ai, times(0)).interpretCondition(any());
+    }
+
+    @Test
+    void aBlankDisplayTextIsNullAndATooLongOneSavesNothing() {
+        assertThat(service.create(USER_A, roomId, null, "   ").conditionText()).isNull();
+        assertThat(service.create(USER_A, roomId, null, null).conditionText()).isNull();
+        int saved = repository.saves;
+        assertThatThrownBy(() -> service.create(USER_A, roomId, null, "가".repeat(501)))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+        assertThat(repository.saves).isEqualTo(saved);
+        verify(ai, times(0)).interpretCondition(any());
+    }
+
+    @Test
+    void theRequestsOwnConditionTextStillWinsOverADisplayText() {
+        RecommendationResponse response = service.create(USER_A, roomId, new RecommendationRequest("22분 이내로 가자", null), "표시용");
+        assertThat(response.conditionText()).isEqualTo("22분 이내로 가자");
+        assertThat(response.appliedConstraints().maxMinutes()).isEqualTo(22);
+        verify(ai, times(1)).interpretCondition(any());
+    }
+
+    @Test
     void aRecommendationMakesExactlyOneExplanationCall() {
         create(null);
         var captor = org.mockito.ArgumentCaptor.forClass(com.mju.linkro.ai.api.ExplanationRequest.class);
