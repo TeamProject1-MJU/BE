@@ -18,8 +18,6 @@ final class DestinationFilter {
     private final Map<Long, LineNode> nodes = new HashMap<>();
     /** Normalized station name -> node; names used by more than one node are left out (ambiguous, kept). */
     private final Map<String, Long> byName = new HashMap<>();
-    /** Nodes touching a LOOP edge (6호선 응암 loop): no destination rule applies there. */
-    private final Set<Long> loopNodes = new HashSet<>();
 
     DestinationFilter(LineGraph graph) {
         Set<String> repeated = new HashSet<>();
@@ -31,10 +29,6 @@ final class DestinationFilter {
         repeated.forEach(byName::remove);
         for (LineEdge edge : graph.edges()) {
             out.computeIfAbsent(edge.fromNodeId(), k -> new ArrayList<>()).add(edge);
-            if (edge.direction() == DirectionCode.LOOP) {
-                loopNodes.add(edge.fromNodeId());
-                loopNodes.add(edge.toNodeId());
-            }
         }
     }
 
@@ -45,14 +39,25 @@ final class DestinationFilter {
 
     /**
      * The rules from {@code board} (riding to {@code next}) to {@code alight}, or empty when they cannot be applied: no
-     * RIDE edge board -> next, a circular direction, a loop station, or an alighting station that is not ahead.
+     * RIDE edge board -> next, a circular direction, boarding into the loop at its entry, or an alighting station that is
+     * not ahead.
+     *
+     * <p>Riding a LOOP edge (6호선 응암 loop, #177) the way ahead is the loop up to the station where trains leave it
+     * (응암, the one with another way out), then that way out (DOWN toward 새절): every train in the loop goes round once
+     * and leaves there. Boarding at that station into the loop gets no rule (its direction filter, #162/#164, stays);
+     * boarding there on the way out (DOWN) is an ordinary linear ride.
      *
      * @param branchRule drop trains bound for the other branch past a junction before {@code alight}
      * @param shortTurn  drop trains ending at the boarding station or before {@code alight}
      */
     Optional<Predicate<SeoulArrivalClient.Arrival>> rules(long board, long next, long alight, boolean branchRule, boolean shortTurn) {
         Optional<DirectionCode> riding = direction(board, next);
-        if (riding.isEmpty() || !linear(riding.get()) || loopNodes.contains(board) || loopNodes.contains(alight)) return Optional.empty();
+        if (riding.isEmpty()) return Optional.empty();
+        if (riding.get() == DirectionCode.LOOP) {
+            if (!shortTurn || hasWayOut(board)) return Optional.empty();
+            return inOrder(board, loopPath(next), alight);
+        }
+        if (!linear(riding.get())) return Optional.empty();
         DirectionCode d = riding.get();
         Set<Long> ahead = ahead(next, d);
         if (!ahead.contains(alight)) return Optional.empty();
@@ -66,6 +71,53 @@ final class DestinationFilter {
             if (shortTurn && (destination == board || (ahead.contains(destination) && reach(destination, d).contains(alight)))) return false;
             return true;
         });
+    }
+
+    /**
+     * Short-turn rule along an ordered way ahead: trains ending at the boarding station or at a station of the way before
+     * {@code alight} are dropped; destinations not on the way are kept. Empty when {@code alight} is not on it.
+     */
+    private Optional<Predicate<SeoulArrivalClient.Arrival>> inOrder(long board, List<Long> path, long alight) {
+        int alightAt = path.indexOf(alight);
+        if (alightAt < 0) return Optional.empty();
+        Map<Long, Integer> position = new HashMap<>();
+        for (int i = 0; i < path.size(); i++) position.putIfAbsent(path.get(i), i);
+        return Optional.of(arrival -> {
+            Long destination = destination(arrival);
+            if (destination == null) return true;
+            if (destination == board) return false;
+            Integer at = position.get(destination);
+            return at == null || at >= alightAt;
+        });
+    }
+
+    /** True when the node has a RIDE edge that is not LOOP: the station where trains leave the loop (응암). */
+    private boolean hasWayOut(long node) {
+        return out.getOrDefault(node, List.of()).stream().anyMatch(edge -> edge.direction() != DirectionCode.LOOP);
+    }
+
+    /**
+     * From {@code next} along the LOOP edges to the station with a way out, then along that way out while it has exactly
+     * one edge in its direction. Stops at a station already on the way.
+     */
+    private List<Long> loopPath(long next) {
+        List<Long> path = new ArrayList<>();
+        Set<Long> seen = new HashSet<>();
+        long current = next;
+        DirectionCode d = DirectionCode.LOOP;
+        while (seen.add(current)) {
+            path.add(current);
+            if (d == DirectionCode.LOOP && hasWayOut(current)) {
+                List<DirectionCode> ways = out.get(current).stream().map(LineEdge::direction).filter(dir -> dir != DirectionCode.LOOP).distinct().toList();
+                if (ways.size() != 1) break;
+                d = ways.get(0);
+            }
+            DirectionCode want = d;
+            List<LineEdge> edges = out.getOrDefault(current, List.of()).stream().filter(edge -> edge.direction() == want).toList();
+            if (edges.size() != 1) break;
+            current = edges.get(0).toNodeId();
+        }
+        return path;
     }
 
     private Long destination(SeoulArrivalClient.Arrival arrival) {

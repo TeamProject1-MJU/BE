@@ -231,10 +231,11 @@ class ArrivalDestinationPostgresTest {
         String body = rows("6", "하행", "신내", "봉화산(서울의료원)");
         // 석계 -> 신내: 봉화산 (with an official suffix) ends before 신내.
         assertThat(kept(body, "6", "석계", "태릉입구", train("신내"))).containsExactly("신내");
-        // Boarding at 응암 or inside the loop: no destination rule.
-        assertThat(kept(body, "6", "응암", "새절", train("신내"))).containsExactly("신내", "봉화산(서울의료원)");
-        assertThat(kept(body, "6", "구산", "응암", train("신내"))).containsExactly("신내", "봉화산(서울의료원)");
-        assertThat(kept(rows("6", "하행", "독바위", "봉화산"), "6", "역촌", "불광", train("연신내"))).containsExactly("독바위", "봉화산");
+        // #177: leaving 응암 toward 새절 is an ordinary ride, and inside the loop the way runs round to 응암 and on toward 새절,
+        // so 봉화산 ends before 신내 in both. 독바위 ends before 연신내.
+        assertThat(kept(body, "6", "응암", "새절", train("신내"))).containsExactly("신내");
+        assertThat(kept(body, "6", "구산", "응암", train("신내"))).containsExactly("신내");
+        assertThat(kept(rows("6", "하행", "독바위", "봉화산"), "6", "역촌", "불광", train("연신내"))).containsExactly("봉화산");
     }
 
     @Test void line3GupabalAndSuseoTrains() throws Exception {
@@ -270,5 +271,31 @@ class ArrivalDestinationPostgresTest {
         JsonNode error = badRequest(get("/api/v1/stations/" + station("서울역") + "/arrivals").param("lineId", String.valueOf(line("4")))
                 .param("nextStationId", String.valueOf(station("숙대입구"))).param("trainAlightStationId", "x"));
         assertThat(error.get("details").get("trainAlightStationId").asString()).isEqualTo("trainAlightStationId는 1 이상의 정수여야 합니다.");
+    }
+
+    // ---- #177: 6호선 응암 loop ----
+
+    @Test void line6LoopShortTurns() throws Exception {
+        // 역촌 -> 연신내 (via 불광, 독바위): the 독바위 train ends before 연신내.
+        assertThat(kept(rows("6", "하행", "독바위", "봉화산", "신내"), "6", "역촌", "불광", train("연신내"))).containsExactly("봉화산", "신내");
+        // 구산 -> 신내: round to 응암, then toward 새절; 봉화산 ends before 신내.
+        assertThat(kept(rows("6", "하행", "봉화산", "신내"), "6", "구산", "응암", train("신내"))).containsExactly("신내");
+        // 응암 leaving toward 새절 (DOWN) -> 신내: the ordinary rule.
+        assertThat(kept(rows("6", "하행", "봉화산", "신내"), "6", "응암", "새절", train("신내"))).containsExactly("신내");
+        // 역촌 -> 구산: the 응암 train goes round to 응암, past 구산, and stays; toward 새절 it ends before.
+        assertThat(kept(rows("6", "하행", "응암", "독바위"), "6", "역촌", "불광", train("구산"))).containsExactly("응암");
+        assertThat(kept(rows("6", "하행", "응암", "봉화산"), "6", "역촌", "불광", train("새절"))).containsExactly("봉화산");
+        // Unknown destinations stay.
+        assertThat(kept(rows("6", "하행", "어딘가", "독바위"), "6", "역촌", "불광", train("구산"))).containsExactly("어딘가");
+    }
+
+    @Test void line6BoardingAt응암IntoTheLoopHasNoRule() throws Exception {
+        // 응암 -> 역촌 is LOOP from the loop entry: only the #164 direction filter (상행) applies, no destination rule.
+        assertThat(kept(rows("6", "상행", "독바위", "응암순환(상선)"), "6", "응암", "역촌", train("구산"))).containsExactly("독바위", "응암순환(상선)");
+    }
+
+    @Test void line6WithoutTrainAlightStationIdKeepsEverything() throws Exception {
+        assertThat(kept(rows("6", "하행", "독바위", "봉화산"), "6", "역촌", "불광", Map.of())).containsExactly("독바위", "봉화산");
+        assertThat(kept(rows("6", "하행", "봉화산", "신내"), "6", "구산", "응암", Map.of())).containsExactly("봉화산", "신내");
     }
 }
