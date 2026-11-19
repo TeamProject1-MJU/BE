@@ -33,6 +33,13 @@
   - 값은 라우터의 열차 구간(`TimedRoute.legs()`)에서 구한다. 라우터는 RIDE 간선을 단계와 열차 구간에 똑같이 세므로, 단계 첫 간선을 담은 열차 구간의 하차역이 그 단계 첫 열차의 하차역이다(`RouteSearchService.withTrainAlights`).
   - 5호선에서 하남 쪽과 마천 쪽을 오가는 경로는 강동에서 방향이 바뀌어 단계가 닫힌다(길동→올림픽공원: 길동→강동, 강동→올림픽공원). 2026-11-18의 네 시각에 두 갈래 사이 560개 경로를 확인했다.
   - 도착 조회(`GET /stations/{id}/arrivals`)의 `trainAlightStationId`에 이 값을 넘긴다(`docs/arrivals-86.md`).
+- **분기점에서 갈래가 다른 열차로 갈아타는 단계 (#179)**: 5호선 강동에서 지금까지 탄 열차가 다른 갈래로 계속 가는데 경로가 다른 열차로 갈아타면, RIDE 단계를 강동에서 나눈다. TRANSFER 단계는 넣지 않는다(6호선 응암 LOOP→DOWN 분할과 같은 방식).
+  - 예: 평일 17:20 천호→올림픽공원은 하남검단산행 5127로 강동까지, 마천행 5647로 올림픽공원까지 간다. 이전에는 SUBWAY 단계 하나("5호선 탑승, 3개 역 이동 후 올림픽공원 하차", 첫 열차 하차역 강동)였고, 이제는 천호→강동(첫 열차 하차역 강동)과 강동→올림픽공원(올림픽공원) 두 단계다.
+  - 이유: `BranchRules`에서 강동의 본선 천호 쪽 ↔ 마천지선은 직통 운행이라(`BranchRules.java`) 갈아타도 환승(`changeSeconds`)이 0이고 단계가 닫히지 않았다. 그래서 안내에 강동에서 갈아타는 지점이 없었다.
+  - 판정: 앞 열차(`TrainKey`)가 그날 같은 요일 구분에서 강동을 지금 탈 간선과 다른 출발 간선으로 10분 안에 떠나면 나눈다(`TimetableRouter.leavesOnAnotherArm`). 열차 번호가 바뀌는 것만으로는 나누지 않는다. 2호선 성수·신도림처럼 시각표 운행이 그 역에서 끝나고 새 번호로 이어지는 경우는 앞 운행이 다른 간선으로 떠나지 않으므로 나뉘지 않는다.
+  - 적용 분기점은 5호선 강동뿐이다(`TimetableRouter.SPLIT_ON_TRAIN_CHANGE`). 6호선 응암 순환(구산→응암→역촌처럼 순환 안에서 열차를 바꾸는 경우)에도 같은 현상이 있으나(평일 전 쌍 10분 간격 160,016개 경로 중 898개) 적용하지 않았다. 2호선은 같은 조사에서 0개였다.
+  - 바뀌는 것은 안내뿐이다: SUBWAY 단계 수, 단계별 하차역, `trainAlightStationId`, guidance 문구. 출발·도착 시각, 총 소요 시간, 환승 횟수(`transferCount`), 경로 유형 표시(`FEWER_TRANSFERS` 등), 열차 구간은 그대로다. 강동에서의 대기 시간은 두 번째 단계의 `durationSec`에 들어간다. 연속 SUBWAY 단계는 6호선 응암 LOOP→DOWN에서 이미 나오던 모양이다. 승강장이 같은지는 확인하지 않아 guidance에 적지 않는다.
+  - 빈도(평일 2026-11-18, 06:00~23:50 10분 간격): 5호선 본선(방화~천호)→마천지선 경로 28,492개 중 1,003개(16~17시 806개), 마천지선→본선 0개. 추천(약속방 모드·arriveAt·추천 계산이 쓰는 거꾸로 찾기)도 같은 경로 조립을 써서 같은 경우에 단계가 나뉜다(같은 쌍 30분 간격 9,310개 중 114개). 추천 응답의 `segments`도 RIDE 단계에서 만들어 해당 이동이 두 구간이 된다.
 - `stations[]`: SUBWAY 단계의 정차역별 슬롯과 혼잡도, `stops`와 같은 순서. WALKING 단계는 빈 배열이다.
 - `summary.departureAt`: 출발 예정 시각, Asia/Seoul 오프셋. 비운행이면 첫차 기준으로 바꾼 시각이다(아래 "비운행 시각과 첫차").
 - `summary.arrivalAt`: `departureAt` + `totalTimeSec`, Asia/Seoul 오프셋
@@ -434,6 +441,8 @@ KAKAO 경로의 `totalTimeSec`을 카카오 `routes[].properties.totalTime` 대�
 - `RouteSearchTrainAlightTest`(#174, 손으로 만든 시각표): 경로 탐색·도착 시각 지정·약속방 모드의 SUBWAY 단계에 첫 열차 하차역(서초), WALKING은 null, 라우터가 없으면(고정 비용) null
 - `RouteSearchTrainAlightPostgresTest`(#174, 번들 시각표): 평일 23:50 응암→잠실 신당 경유 2호선 단계 신당→잠실의 첫 열차 하차역은 성수, 5호선 길동→올림픽공원은 강동에서 단계가 닫힘, 강남→사당 경로 탐색·도착 시각 지정은 사당
 - `RouteSearchKakaoPostgresTest.kakaoStepsHaveNoTrainAlightStation`(#174): 카카오 경로의 단계는 모두 null
+- `TimetableRouterJunctionStepTest`(#179, 손으로 만든 시각표): 하남검단산행→마천행 갈아타기는 RIDE 두 단계(환승 0, 시각·단계 시간 합 그대로), 거꾸로 찾기도 같음, 강동에서 끝나는 열차→마천행은 한 단계, 직통 한 단계, 길동→둔촌동은 TRANSFER 유지
+- `RouteSearchJunctionStepPostgresTest`(#179, 번들 시각표 평일 2026-11-18): 천호→올림픽공원 17:20(두 단계, 출발 17:25·도착 17:33:30·환승 0), 까치산→마천 08:00(두 단계), 천호→마천 14:00 직통(한 단계), 길동→둔촌동(TRANSFER 유지), 2호선 시청→건대입구·6호선 구산→역촌·구산→신내 단계 그대로, 도착 시각 지정 천호→마천 17:30(두 단계)
 - `RouteSearchPlainTimetableTest`(#130, 같은 시각표)
   - 방 없음: `departingAt` 경로와 출발·도착·`totalTimeSec`·역 순서·환승이 같고 카카오 호출 0회, `waitSec`·`totalWithWaitSec`, 혼잡도 기준 = 첫 열차 출발, `departAt` 생략 = 지금
   - 03:00 → 첫차 05:36 `noService`, 첫차 정각 05:36 → `false`
