@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import static com.mju.linkro.subway.graph.TimetableRouterTest.THURSDAY;
 import static com.mju.linkro.subway.graph.TimetableRouterTest.at;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * 응암 loop -> loop changes (#104) on a hand-made 6호선: 구산 -> 응암 -> 역촌 (loop), 응암 <-> 새절 (main). No train of
@@ -136,5 +137,41 @@ class TimetableRouterEungamTest {
         TimedRoute route = router(List.of(fromSaejeol, LOOP.get(0))).departingAt(2, at(THURSDAY, 29800)).routeTo(3).orElseThrow();
         assertThat(route.legs()).extracting(TimedLeg::trainCode).containsExactly("6046", "6059");
         assertThat(route.legs().get(1).waitSec()).isZero();
+    }
+
+    @Test
+    void aChangeFromATrainGoingOnTowardSaejeolIsItsOwnStep() {
+        // #181: 6053 reaches 응암 from the loop and goes on toward 새절, so 구산 -> 역촌 leaves it at 응암 for 6063, going
+        // round again. That change is its own RIDE step: no TRANSFER step, times and transfers as before.
+        TimedRoute route = router(trains()).departingAt(4, at(THURSDAY, 29800)).routeTo(3).orElseThrow();
+        assertThat(route.legs()).extracting(TimedLeg::trainCode).containsExactly("6053", "6063");
+        assertThat(route.path().steps()).extracting(PathStep::type, PathStep::fromStationName, PathStep::toStationName)
+                .containsExactly(tuple(StepType.RIDE, "구산", "응암"), tuple(StepType.RIDE, "응암", "역촌"));
+        assertThat(route.path().transferCount()).isZero();
+        assertThat(route.arriveAt()).isEqualTo(at(THURSDAY, 30190));
+        assertThat(route.path().steps().stream().mapToInt(PathStep::durationSec).sum()).isEqualTo(route.path().totalSeconds());
+        // The backward search splits the same way.
+        TimedRoute latest = router(trains()).latestDepartures(3, at(THURSDAY, 30190), Set.of(4L), 0).get(4L);
+        assertThat(latest.path().steps()).extracting(PathStep::type, PathStep::fromStationName, PathStep::toStationName)
+                .containsExactly(tuple(StepType.RIDE, "구산", "응암"), tuple(StepType.RIDE, "응암", "역촌"));
+    }
+
+    @Test
+    void theSameTrainGoingRoundKeepsOneStep() {
+        // One train 구산 -> 응암 -> 역촌: no change of train, so no split.
+        List<String> roundAgain = train("6099", "응암", "응암", "구산:29870:29880", "응암:30000:30010", "역촌:30110:30140");
+        TimedRoute route = router(List.of(roundAgain)).departingAt(4, at(THURSDAY, 29800)).routeTo(3).orElseThrow();
+        assertThat(route.path().steps()).extracting(PathStep::type, PathStep::fromStationName, PathStep::toStationName)
+                .containsExactly(tuple(StepType.RIDE, "구산", "역촌"));
+    }
+
+    @Test
+    void aTrainEndingAtEungamKeepsOneStep() {
+        // 6077 ends at 응암 (does not go on toward 새절): changing to 6063 there is not leaving a train that goes on, as
+        // 2호선 runs ending at 성수.
+        List<String> ending = train("6077", "응암", "응암", "구산:29870:29880", "응암:30000:30000");
+        TimedRoute route = router(List.of(ending, LOOP.get(2))).departingAt(4, at(THURSDAY, 29800)).routeTo(3).orElseThrow();
+        assertThat(route.legs()).extracting(TimedLeg::trainCode).containsExactly("6077", "6063");
+        assertThat(route.path().steps()).extracting(PathStep::type).containsExactly(StepType.RIDE);
     }
 }

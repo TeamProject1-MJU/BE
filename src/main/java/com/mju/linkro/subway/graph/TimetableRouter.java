@@ -298,12 +298,24 @@ public class TimetableRouter implements TimetableRouteFinder {
     /**
      * Junctions where a change of train that the step rules would hide gets a RIDE step of its own (#179): the train
      * ridden so far goes on from the junction on another arm, so the rider has to leave it there (5호선 천호 -> 올림픽공원:
-     * a 하남검단산 train to 강동, then a 마천 train). Only 5호선 강동; other junctions keep their steps until checked.
+     * a 하남검단산 train to 강동, then a 마천 train). 5호선 강동, and 6호선 응암 (#181): a train coming round the loop goes on
+     * toward 새절, so 구산 -> 역촌 changes there to a train going round again. Only the step is split; no TRANSFER step and
+     * no riding through ({@link #THROUGH_FIRST}) there. 2호선 keeps its steps.
      */
-    private static final Set<BranchRules.Junction> SPLIT_ON_TRAIN_CHANGE = Set.of(new BranchRules.Junction("강동", "5"));
+    private static final Set<BranchRules.Junction> SPLIT_ON_TRAIN_CHANGE =
+            Set.of(new BranchRules.Junction("강동", "5"), new BranchRules.Junction("응암", "6"));
 
     /** Longest dwell looked at when asking whether the train ridden so far leaves a junction on another arm. */
     private static final int SPLIT_LOOKAHEAD_SECONDS = 600;
+
+    /**
+     * Junctions and the two arms between which a route rides one train through when such a train exists, as 카카오맵 does
+     * (#181): 5호선 강동 between the main line toward 천호 and the 마천 branch. Both searches only compare times, so they
+     * may take a 하남검단산 train to 강동 and a 강동-origin 마천 train from there even when a 마천 train runs through
+     * (천호 17:20 -> 올림픽공원: 5127 and 5647 at 17:33:30 instead of 5649 at 17:38:20). Not 2호선 or 6호선.
+     */
+    private static final Map<BranchRules.Junction, Set<String>> THROUGH_FIRST =
+            Map.of(new BranchRules.Junction("강동", "5"), Set.of(BranchRules.MAIN_LOWER, "MACHEON"));
 
     private int changeMeters(long node) {
         var transfer = branchTransfers.get(graph.junction(node));
@@ -319,12 +331,23 @@ public class TimetableRouter implements TimetableRouteFinder {
     @Override
     public Map<Long, TimedRoute> latestDepartures(long destinationStationId, Instant arriveBy, Set<Long> originStationIds,
                                                   int maxTravelSeconds) {
-        return latestDepartures(destinationStationId, arriveBy, originStationIds, maxTravelSeconds, null);
+        Through through = new Through(true);
+        Map<Long, TimedRoute> routes = latestDepartures(destinationStationId, arriveBy, originStationIds, maxTravelSeconds, null, through);
+        if (!through.used) return routes;
+        // The guard of #181: per origin, the route without riding through when it needs fewer transfers.
+        Map<Long, TimedRoute> plain = latestDepartures(destinationStationId, arriveBy, originStationIds, maxTravelSeconds, null,
+                new Through(false));
+        Map<Long, TimedRoute> guarded = new HashMap<>(routes);
+        plain.forEach((origin, route) -> guarded.merge(origin, route, Through::fewerTransfers));
+        return guarded;
     }
 
-    /** @param blocked nodes whose TRANSFER edges are not walked (#153), or null for none */
+    /**
+     * @param blocked nodes whose TRANSFER edges are not walked (#153), or null for none
+     * @param through whether to ride through {@link #THROUGH_FIRST} junctions (#181), noting when it did
+     */
     private Map<Long, TimedRoute> latestDepartures(long destinationStationId, Instant arriveBy, Set<Long> originStationIds,
-                                                   int maxTravelSeconds, boolean[] blocked) {
+                                                   int maxTravelSeconds, boolean[] blocked, Through through) {
         requireStation(destinationStationId);
         ServiceTime service = serviceTime(arriveBy);
         DayType day = service.dayType();
@@ -403,11 +426,12 @@ public class TimetableRouter implements TimetableRouteFinder {
         resolved.forEach((origin, state) -> {
             List<Label> moves = new ArrayList<>();
             for (Label cursor = state; cursor.edge() != null; cursor = cursor.link()) moves.add(cursor);
-            TimedRoute latest = build(stayOnBoard(moves, day), day, service.serviceDate(), origin, destinationStationId);
+            List<Label> kept = preferThrough(stayOnBoard(moves, day), day, floor, false, through);
+            TimedRoute latest = build(kept, day, service.serviceDate(), origin, destinationStationId);
             // The backward search fixes when to leave; from then on the member takes the earliest way there
             // (장암 -> 모란: an earlier 5호선 and 8호선 connection). Only when it needs no more transfers: one minute is not
             // worth two extra changes (강남 -> 홍대입구 at 22:00 stays on 2호선).
-            TimedRoute replayed = forward(origin, latest.leaveAt(), destinationStationId, blocked).routeTo(destinationStationId)
+            TimedRoute replayed = forward(origin, latest.leaveAt(), destinationStationId, blocked).routeTo(destinationStationId, through)
                     .orElse(latest);
             boolean better = replayed.arriveAt().isBefore(latest.arriveAt()) && noWorse(replayed, latest);
             routes.put(origin, better ? replayed : latest);
@@ -458,7 +482,7 @@ public class TimetableRouter implements TimetableRouteFinder {
     }
 
     private TimedTree departing(long originStationId, Instant leaveAt, boolean[] blocked) {
-        TimedTree earliest = forward(originStationId, leaveAt, null, blocked);
+        Tree earliest = forward(originStationId, leaveAt, null, blocked);
         return new TimedTree() {
             @Override
             public Set<Long> reachableStationIds() {
@@ -467,7 +491,16 @@ public class TimetableRouter implements TimetableRouteFinder {
 
             @Override
             public Optional<TimedRoute> routeTo(long stationId) {
-                return earliest.routeTo(stationId).map(route -> withFewerTransfers(route, originStationId, stationId, leaveAt, blocked));
+                Through through = new Through(true);
+                Optional<TimedRoute> route = earliest.routeTo(stationId, through)
+                        .map(found -> withFewerTransfers(found, originStationId, stationId, leaveAt, blocked, through));
+                if (!through.used || route.isEmpty()) return route;
+                // The guard of #181: riding through must not cost a transfer (영등포구청 16:10 -> 오금: the 마천 train
+                // through from 왕십리 led to 2호선 and 3호선 instead of the 5호선 trains changed at 강동).
+                Through plain = new Through(false);
+                Optional<TimedRoute> without = earliest.routeTo(stationId, plain)
+                        .map(found -> withFewerTransfers(found, originStationId, stationId, leaveAt, blocked, plain));
+                return without.map(other -> Through.fewerTransfers(route.get(), other));
             }
         };
     }
@@ -482,10 +515,10 @@ public class TimetableRouter implements TimetableRouteFinder {
      * latestDepartures.
      */
     private TimedRoute withFewerTransfers(TimedRoute earliest, long originStationId, long stationId, Instant leaveAt,
-                                          boolean[] blocked) {
+                                          boolean[] blocked, Through through) {
         int maxTravel = (int) Duration.between(leaveAt, earliest.arriveAt()).toSeconds();
         TimedRoute backward = latestDepartures(stationId, earliest.arriveAt(), Set.of(originStationId), Math.max(maxTravel, 1),
-                blocked).get(originStationId);
+                blocked, through).get(originStationId);
         if (backward == null || !noWorse(backward, earliest) || backward.leaveAt().isBefore(leaveAt)) return earliest;
         boolean fewerTransfers = backward.path().transferCount() < earliest.path().transferCount();
         return fewerTransfers || backward.leaveAt().isAfter(earliest.leaveAt()) ? backward : earliest;
@@ -513,7 +546,7 @@ public class TimetableRouter implements TimetableRouteFinder {
      * Earliest arrivals; with a {@code target} station it stops once that station is reached. {@code blocked} nodes do not
      * walk their TRANSFER edges (null for none).
      */
-    private TimedTree forward(long originStationId, Instant leaveAt, Long target, boolean[] blocked) {
+    private Tree forward(long originStationId, Instant leaveAt, Long target, boolean[] blocked) {
         ServiceTime service = serviceTime(leaveAt);
         LocalDate date = service.serviceDate();
         DayType day = service.dayType();
@@ -525,11 +558,12 @@ public class TimetableRouter implements TimetableRouteFinder {
             day = clock.dayTypeOf(date);
             start -= 86_400;
         }
-        return tree(search(originStationId, date, day, start, target, blocked), originStationId);
+        return new Tree(search(originStationId, date, day, start, target, blocked), originStationId);
     }
 
     /** Earliest state at each station reached on a ride, from {@code start} (second of the service day) on. */
-    private record Forward(LocalDate serviceDate, DayType day, Map<Long, Label> arrivals) {}
+    /** @param start the second of the service day the search starts boarding at (leaving time plus station access) */
+    private record Forward(LocalDate serviceDate, DayType day, int start, Map<Long, Label> arrivals) {}
 
     private Forward search(long originStationId, LocalDate date, DayType day, int start, Long target, boolean[] blocked) {
         TrainTimetable.Rides[] dayRides = rides[day.ordinal()];
@@ -595,26 +629,55 @@ public class TimetableRouter implements TimetableRouteFinder {
                 }
             }
         }
-        return new Forward(date, day, arrivals);
+        return new Forward(date, day, start, arrivals);
     }
 
-    private TimedTree tree(Forward search, long originStationId) {
-        Map<Long, Label> arrivals = search.arrivals();
-        return new TimedTree() {
-            @Override
-            public Set<Long> reachableStationIds() {
-                return Collections.unmodifiableSet(new TreeSet<>(arrivals.keySet()));
-            }
+    /** The routes of one forward search; {@link #routeTo(long)} rides through {@link #THROUGH_FIRST} junctions (#181). */
+    private final class Tree implements TimedTree {
+        private final Forward search;
+        private final long originStationId;
 
-            @Override
-            public Optional<TimedRoute> routeTo(long stationId) {
-                Label end = arrivals.get(stationId);
-                if (end == null) return Optional.empty();
-                List<Label> moves = new ArrayList<>();
-                for (Label cursor = end; cursor.edge() != null; cursor = cursor.link()) moves.add(0, cursor);
-                return Optional.of(build(stayOnBoard(moves, search.day()), search.day(), search.serviceDate(), originStationId, stationId));
-            }
-        };
+        Tree(Forward search, long originStationId) {
+            this.search = search;
+            this.originStationId = originStationId;
+        }
+
+        @Override
+        public Set<Long> reachableStationIds() {
+            return Collections.unmodifiableSet(new TreeSet<>(search.arrivals().keySet()));
+        }
+
+        @Override
+        public Optional<TimedRoute> routeTo(long stationId) {
+            return routeTo(stationId, new Through(true));
+        }
+
+        Optional<TimedRoute> routeTo(long stationId, Through through) {
+            Label end = search.arrivals().get(stationId);
+            if (end == null) return Optional.empty();
+            List<Label> moves = new ArrayList<>();
+            for (Label cursor = end; cursor.edge() != null; cursor = cursor.link()) moves.add(0, cursor);
+            List<Label> kept = preferThrough(stayOnBoard(moves, search.day()), search.day(), search.start(), true, through);
+            return Optional.of(build(kept, search.day(), search.serviceDate(), originStationId, stationId));
+        }
+    }
+
+    /**
+     * Whether {@link #preferThrough} applies (#181), and whether it changed a route. Only then is the route without it
+     * worked out too, and that one is kept when it needs fewer transfers: riding through never costs a transfer.
+     */
+    private static final class Through {
+        final boolean on;
+        boolean used;
+
+        Through(boolean on) {
+            this.on = on;
+        }
+
+        /** {@code plain} when it needs fewer transfers than {@code through}, else {@code through}. */
+        static TimedRoute fewerTransfers(TimedRoute through, TimedRoute plain) {
+            return plain.path().transferCount() < through.path().transferCount() ? plain : through;
+        }
     }
 
     // ---- route assembly ----
@@ -637,6 +700,149 @@ public class TimetableRouter implements TimetableRouteFinder {
             }
         }
         return kept;
+    }
+
+    /**
+     * Prefers riding one train through a {@link #THROUGH_FIRST} junction (#181). When the moves change trains there
+     * between the two arms, the rides from the boarding of the first train to the alighting from the second are replaced
+     * by one train running all of those edges (the same stations):
+     *
+     * <ul>
+     *   <li>forward ({@code forward}): the first such train leaving the boarding station once the rider is there; when it
+     *       arrives later, the following moves keep their edges and take the next rides from then on;</li>
+     *   <li>backward: the latest such train arriving no later than the second train did, so nothing after it changes.</li>
+     * </ul>
+     *
+     * Without such a train, or when the following moves cannot be ridden any more, the moves are kept: the change of train
+     * stays, shown as its own RIDE step (#179), and so does it when riding through needs more transfers ({@link Through}).
+     * No limit on how much later the through train may arrive (#181: decided after measuring).
+     *
+     * @param readyAtStart the earliest second the first train may leave the origin: forward, when the search starts
+     *                     boarding; backward, the floor of the travel limit (a through train leaving earlier is over it)
+     * @param through      off: the moves as they are; on: marked used when a train is replaced
+     */
+    private List<Label> preferThrough(List<Label> moves, DayType day, int readyAtStart, boolean forward, Through through) {
+        if (!through.on) return moves;
+        for (int i = 1; i < moves.size(); i++) {
+            Label before = moves.get(i - 1);
+            Label after = moves.get(i);
+            if (before.ride() == null || after.ride() == null || before.ride().train().equals(after.ride().train())) continue;
+            if (!throughFirst(before.edge(), after.edge())) continue;
+            int first = i - 1;
+            while (first > 0 && moves.get(first - 1).ride() != null && moves.get(first - 1).ride().train().equals(before.ride().train())) first--;
+            int last = i;
+            while (last + 1 < moves.size() && moves.get(last + 1).ride() != null
+                    && moves.get(last + 1).ride().train().equals(after.ride().train())) last++;
+            List<Label> replaced = throughTrain(moves, first, last, day, readyBefore(moves, first, readyAtStart), forward);
+            if (replaced == null) return moves;
+            through.used = true;
+            return replaced;
+        }
+        return moves;
+    }
+
+    /** At a {@link #THROUGH_FIRST} junction, between its two arms (either way). */
+    private boolean throughFirst(Edge into, Edge outOf) {
+        long node = outOf.fromNodeId();
+        BranchRules.Junction junction = graph.junction(node);
+        Set<String> arms = junction == null ? null : THROUGH_FIRST.get(junction);
+        if (arms == null || into.toNodeId() != node) return false;
+        String from = graph.armAt(node, into.fromNodeId());
+        String to = graph.armAt(node, outOf.toNodeId());
+        return from != null && to != null && !from.equals(to) && arms.contains(from) && arms.contains(to);
+    }
+
+    /** When the rider is at the boarding station of move {@code first}: the ride before it plus walks, else the start. */
+    private static int readyBefore(List<Label> moves, int first, int readyAtStart) {
+        int walk = 0;
+        for (int k = first - 1; k >= 0; k--) {
+            Label move = moves.get(k);
+            if (move.ride() != null) return move.ride().arriveSec() + walk;
+            walk += move.edge().seconds();
+        }
+        return readyAtStart;
+    }
+
+    /** The moves with rides {@code first}..{@code last} on one train, or null when there is none (see preferThrough). */
+    private List<Label> throughTrain(List<Label> moves, int first, int last, DayType day, int ready, boolean forward) {
+        TrainTimetable.Rides boarding = rides[day.ordinal()][moves.get(first).key()];
+        if (boarding == null) return null;
+        int secondArrives = moves.get(last).ride().arriveSec();
+        List<Departure> chosen = null;
+        for (int i = Math.max(boarding.next(ready), 0); i >= 0 && i < boarding.size(); i++) {
+            Departure start = boarding.departure(i);
+            if (start.departSec() < ready) continue;
+            if (!forward && start.departSec() > secondArrives) break;
+            List<Departure> chain = sameTrain(moves, first, last, day, start);
+            if (chain == null) continue;
+            if (forward) {
+                chosen = chain;
+                break;
+            }
+            if (chain.get(chain.size() - 1).arriveSec() <= secondArrives) chosen = chain;
+        }
+        if (chosen == null) return null;
+        List<Label> result = new ArrayList<>(moves.subList(0, first));
+        for (int k = first; k <= last; k++) {
+            Label move = moves.get(k);
+            Departure ride = chosen.get(k - first);
+            result.add(new Label(ride.arriveSec(), move.transfers(), move.node(), move.key(), move.edge(), ride, move.link()));
+        }
+        int arrives = chosen.get(chosen.size() - 1).arriveSec();
+        List<Label> rest = arrives <= secondArrives ? moves.subList(last + 1, moves.size()) : retime(moves, last + 1, arrives, day);
+        if (rest == null) return null;
+        result.addAll(rest);
+        return result;
+    }
+
+    /** One train's rides on the edges of moves {@code first}..{@code last}, starting with {@code start}, or null. */
+    private List<Departure> sameTrain(List<Label> moves, int first, int last, DayType day, Departure start) {
+        List<Departure> chain = new ArrayList<>(List.of(start));
+        int at = start.arriveSec();
+        for (int k = first + 1; k <= last; k++) {
+            Optional<Departure> ride = timetable.rideOf(moves.get(k).edge().id(), day, start.train(), at);
+            if (ride.isEmpty() || ride.get().departSec() - at > SPLIT_LOOKAHEAD_SECONDS) return null;
+            chain.add(ride.get());
+            at = ride.get().arriveSec();
+        }
+        return chain;
+    }
+
+    /**
+     * Moves {@code from}.. again from second {@code at} on: walks as they are, each ride the next one leaving its edge (the
+     * same train while the original stayed on one), until a move can be ridden as found; null when a ride is gone.
+     */
+    private List<Label> retime(List<Label> moves, int from, int at, DayType day) {
+        List<Label> result = new ArrayList<>();
+        int now = at;
+        Departure previous = null;
+        for (int k = from; k < moves.size(); k++) {
+            Label move = moves.get(k);
+            if (move.ride() == null) {
+                now += move.edge().seconds();
+                result.add(move);
+                previous = null;
+                continue;
+            }
+            if (move.ride().departSec() >= now) {
+                result.addAll(moves.subList(k, moves.size()));
+                return result;
+            }
+            boolean sameTrain = previous != null && moves.get(k - 1).ride() != null && moves.get(k - 1).ride().train().equals(move.ride().train());
+            Optional<Departure> ride;
+            if (sameTrain) {
+                ride = timetable.rideOf(move.edge().id(), day, previous.train(), now);
+            } else {
+                TrainTimetable.Rides edgeRides = rides[day.ordinal()][move.key()];
+                int index = edgeRides == null ? -1 : edgeRides.next(now);
+                ride = index < 0 ? Optional.empty() : Optional.of(edgeRides.departure(index));
+            }
+            if (ride.isEmpty()) return null;
+            result.add(new Label(ride.get().arriveSec(), move.transfers(), move.node(), move.key(), move.edge(), ride.get(), move.link()));
+            previous = ride.get();
+            now = ride.get().arriveSec();
+        }
+        return result;
     }
 
     /**
