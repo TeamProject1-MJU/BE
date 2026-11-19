@@ -298,9 +298,12 @@ public class TimetableRouter implements TimetableRouteFinder {
     /**
      * Junctions where a change of train that the step rules would hide gets a RIDE step of its own (#179): the train
      * ridden so far goes on from the junction on another arm, so the rider has to leave it there (5호선 천호 -> 올림픽공원:
-     * a 하남검단산 train to 강동, then a 마천 train). Only 5호선 강동; other junctions keep their steps until checked.
+     * a 하남검단산 train to 강동, then a 마천 train). 5호선 강동, and 6호선 응암 (#181): a train coming round the loop goes on
+     * toward 새절, so 구산 -> 역촌 changes there to a train going round again. Only the step is split; no TRANSFER step and
+     * no riding through ({@link #THROUGH_FIRST}) there. 2호선 keeps its steps.
      */
-    private static final Set<BranchRules.Junction> SPLIT_ON_TRAIN_CHANGE = Set.of(new BranchRules.Junction("강동", "5"));
+    private static final Set<BranchRules.Junction> SPLIT_ON_TRAIN_CHANGE =
+            Set.of(new BranchRules.Junction("강동", "5"), new BranchRules.Junction("응암", "6"));
 
     /** Longest dwell looked at when asking whether the train ridden so far leaves a junction on another arm. */
     private static final int SPLIT_LOOKAHEAD_SECONDS = 600;

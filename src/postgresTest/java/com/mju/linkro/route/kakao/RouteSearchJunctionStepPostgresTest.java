@@ -100,11 +100,12 @@ class RouteSearchJunctionStepPostgresTest extends RouteSearchPostgresSupport {
         assertThat(steps(first("길동", "둔촌동", "2026-11-18T08:00:00+09:00"))).containsExactly("S 길동->강동/강동", "W", "S 강동->둔촌동/둔촌동");
     }
 
-    @Test void otherJunctionsKeepTheirSteps() throws Exception {
+    @Test void 성수KeepsItsStepAnd응암Splits() throws Exception {
         // 2호선 through 성수: the timetable run ends at 성수 and a new one starts; no new step.
         assertThat(steps(first("시청", "건대입구", "2026-11-18T14:00:00+09:00"))).containsExactly("S 시청->건대입구/성수");
-        // 6호선 응암 loop: unchanged (구산 -> 역촌 changes trains at 응암 within the loop; 구산 -> 신내 turns DOWN there).
-        assertThat(steps(first("구산", "역촌", "2026-11-18T14:00:00+09:00"))).containsExactly("S 구산->역촌/응암");
+        // 6호선 응암 loop (#181): 구산 -> 역촌 leaves a train going on toward 새절 at 응암 for one going round again, its
+        // own step (no TRANSFER); 구산 -> 신내 turns DOWN there, unchanged.
+        assertThat(steps(first("구산", "역촌", "2026-11-18T14:00:00+09:00"))).containsExactly("S 구산->응암/응암", "S 응암->역촌/역촌");
         assertThat(steps(first("구산", "신내", "2026-11-18T14:00:00+09:00"))).containsExactly("S 구산->응암/신내", "S 응암->신내/신내");
     }
 
