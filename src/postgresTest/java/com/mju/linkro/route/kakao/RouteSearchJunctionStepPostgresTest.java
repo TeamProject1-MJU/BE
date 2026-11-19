@@ -22,6 +22,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 /**
  * #179 on the migrated database and the bundled timetable (Wednesday 2026-11-18): a change at 5호선 강동 from a train that
  * goes on toward 하남 to a 마천 train is its own SUBWAY step; times and transfers stay; other junctions keep their steps.
+ * #181: a 마천 train running through 강동 is taken instead of such a change, as 카카오맵 does; the change (and its step)
+ * stays only when no such train exists or riding through would cost a transfer.
  */
 @Testcontainers
 @SpringBootTest(properties = {
@@ -62,22 +64,32 @@ class RouteSearchJunctionStepPostgresTest extends RouteSearchPostgresSupport {
         return data.get("routes").get(0);
     }
 
-    @Test void aHanamTrainThenAMacheonTrainAre2Steps() throws Exception {
-        // 5127 (하남검단산행) 천호 17:26 -> 강동, 5647 (마천행) 강동 -> 올림픽공원 17:33:30.
+    @Test void aMacheonTrainThroughIsTakenOverAHanamTrainAndAChange() throws Exception {
+        // #181: 5649 (방화 -> 마천) 천호 17:32:30 -> 올림픽공원 17:38:20, one step, as 카카오맵 (17:32 -> 17:38). Before,
+        // 5127 (하남검단산행) to 강동 and 5647 (강동-origin 마천행) on arrived at 17:33:30 in two steps (#179).
         JsonNode route = first("천호", "올림픽공원", "2026-11-18T17:20:00+09:00");
-        assertThat(steps(route)).containsExactly("S 천호->강동/강동", "S 강동->올림픽공원/올림픽공원");
+        assertThat(steps(route)).containsExactly("S 천호->올림픽공원/올림픽공원");
         JsonNode summary = route.get("summary");
         assertThat(summary.get("transferCount").asInt()).isZero();
-        assertThat(summary.get("departureAt").asString()).isEqualTo("2026-11-18T17:25:00+09:00");
-        assertThat(summary.get("arrivalAt").asString()).isEqualTo("2026-11-18T17:33:30+09:00");
-        assertThat(summary.get("totalTimeSec").asInt()).isEqualTo(510);
+        assertThat(summary.get("departureAt").asString()).isEqualTo("2026-11-18T17:31:30+09:00");
+        assertThat(summary.get("arrivalAt").asString()).isEqualTo("2026-11-18T17:38:20+09:00");
+        assertThat(summary.get("totalTimeSec").asInt()).isEqualTo(410);
     }
 
-    @Test void aSangildongTrainThenAMacheonTrainAre2Steps() throws Exception {
-        // 5037 (상일동행) 까치산 -> 강동, 5553 (마천행) 강동 -> 마천.
+    @Test void aMacheonTrainThroughIsTakenOverASangildongTrainAndAChange() throws Exception {
+        // #181: a 마천 train from 까치산 instead of 5037 (상일동행) to 강동 and 5553 (마천행) on (#179).
         JsonNode route = first("까치산", "마천", "2026-11-18T08:00:00+09:00");
-        assertThat(steps(route)).containsExactly("S 까치산->강동/강동", "S 강동->마천/마천");
+        assertThat(steps(route)).containsExactly("S 까치산->마천/마천");
         assertThat(route.get("summary").get("transferCount").asInt()).isZero();
+    }
+
+    @Test void ridingThroughThatCostsATransferKeepsTheChangeAt강동() throws Exception {
+        // #181 guard: riding a 마천 train through made the route 2호선 and 3호선 (one transfer, 17:16:00); the 5호선 trains
+        // 5123 (하남검단산행) and 5639 (강동-origin 마천행) need none and arrive at 17:10:40, in two steps.
+        JsonNode route = first("영등포구청", "오금", "2026-11-18T16:10:00+09:00");
+        assertThat(steps(route)).containsExactly("S 영등포구청->강동/강동", "S 강동->오금/오금");
+        assertThat(route.get("summary").get("transferCount").asInt()).isZero();
+        assertThat(route.get("summary").get("arrivalAt").asString()).isEqualTo("2026-11-18T17:10:40+09:00");
     }
 
     @Test void aThroughMacheonTrainIs1Step() throws Exception {
@@ -96,19 +108,43 @@ class RouteSearchJunctionStepPostgresTest extends RouteSearchPostgresSupport {
         assertThat(steps(first("구산", "신내", "2026-11-18T14:00:00+09:00"))).containsExactly("S 구산->응암/신내", "S 응암->신내/신내");
     }
 
-    @Test void arrivalModeSplitsTheSameWay() throws Exception {
-        // The latest departure arriving at 마천 by 17:30 on a Wednesday: 5125 (하남검단산행) to 강동, 5643 (마천행) on.
-        // arriveAt must be after now, so a coming Wednesday that the timetable treats as a weekday (holidays run the
-        // Sunday timetable, e.g. 2027-05-05) is used.
+    /** The first route arriving at {@code to} by {@code time} on a coming weekday Wednesday. */
+    JsonNode arrivingBy(String from, String to, java.time.LocalDate wednesday, String time) throws Exception {
+        String body = "{\"originStationId\":" + id(from) + ",\"destinationStationId\":" + id(to) + ",\"arriveAt\":\"" + wednesday + "T"
+                + time + "+09:00\"}";
+        JsonNode data = ok(post("/api/v1/routes/search").contentType(MediaType.APPLICATION_JSON).content(body), member);
+        server.verify();
+        return data.get("routes").get(0);
+    }
+
+    /**
+     * arriveAt must be after now, so a coming Wednesday that the timetable treats as a weekday (holidays run the Sunday
+     * timetable, e.g. 2027-05-05) is used.
+     */
+    java.time.LocalDate comingWeekdayWednesday() {
         java.time.LocalDate wednesday = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul")).plusDays(1)
                 .with(java.time.temporal.TemporalAdjusters.nextOrSame(java.time.DayOfWeek.WEDNESDAY));
         while (timetableClock.dayTypeOf(wednesday) != DayType.WEEKDAY) wednesday = wednesday.plusWeeks(1);
-        String body = "{\"originStationId\":" + id("천호") + ",\"destinationStationId\":" + id("마천") + ",\"arriveAt\":\"" + wednesday + "T17:30:00+09:00\"}";
-        JsonNode data = ok(post("/api/v1/routes/search").contentType(MediaType.APPLICATION_JSON).content(body), member);
-        server.verify();
-        JsonNode route = data.get("routes").get(0);
-        assertThat(steps(route)).containsExactly("S 천호->강동/강동", "S 강동->마천/마천");
+        return wednesday;
+    }
+
+    @Test void arrivalModeRidesTheThroughTrain() throws Exception {
+        // #181: the latest 마천 train through 강동 arriving at 마천 by 17:30 is 5641 (천호 17:06:30 -> 마천 17:21:30), taken
+        // over 5125 (하남검단산행) to 강동 and 5643 (마천행) on, arriving at 17:29:40 (#179).
+        java.time.LocalDate wednesday = comingWeekdayWednesday();
+        JsonNode route = arrivingBy("천호", "마천", wednesday, "17:30:00");
+        assertThat(steps(route)).containsExactly("S 천호->마천/마천");
         assertThat(route.get("summary").get("transferCount").asInt()).isZero();
-        assertThat(route.get("summary").get("arrivalAt").asString()).isEqualTo(wednesday + "T17:29:40+09:00");
+        assertThat(route.get("summary").get("arrivalAt").asString()).isEqualTo(wednesday + "T17:21:30+09:00");
+    }
+
+    @Test void arrivalModeSplitsWhenNoThroughTrainArrivesInTime() throws Exception {
+        // By 06:00 at 올림픽공원 no 마천 train runs through 강동 yet (the first from 천호 leaves at 06:13:30): 5001 (하남검단산행)
+        // to 강동 and 5505 (강동-origin 마천행) on, arriving at 05:52:00 in two steps (#179).
+        java.time.LocalDate wednesday = comingWeekdayWednesday();
+        JsonNode route = arrivingBy("천호", "올림픽공원", wednesday, "06:00:00");
+        assertThat(steps(route)).containsExactly("S 천호->강동/강동", "S 강동->올림픽공원/올림픽공원");
+        assertThat(route.get("summary").get("transferCount").asInt()).isZero();
+        assertThat(route.get("summary").get("arrivalAt").asString()).isEqualTo(wednesday + "T05:52:00+09:00");
     }
 }
