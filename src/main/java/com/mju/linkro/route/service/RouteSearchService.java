@@ -57,6 +57,8 @@ public class RouteSearchService {
     private final KakaoRouteMapper mapper;
     private final InternalRouteBuilder internal;
     private final CongestionLookup congestion;
+    /** Default of {@code linkro.route.arrival-max-slack-minutes} (#170). */
+    static final int DEFAULT_ARRIVAL_MAX_SLACK_MINUTES = 30;
     private final Clock clock;
     /** Null without the train timetable: departures are never moved. */
     private final FirstTrainTimer firstTrains;
@@ -76,6 +78,11 @@ public class RouteSearchService {
     private final Duration candidateCut;
     /** {@code linkro.route.timetable-candidate-grace-minutes} (default 6, not negative, #155): see {@link TimetableCandidates}. */
     private final Duration candidateGrace;
+    /**
+     * {@code linkro.route.arrival-max-slack-minutes} (default 30, at least 1, #170): arrival mode answers NO_SERVICE_TIME
+     * when the latest route arriving by arriveAt arrives more than this before it (the trains of that time have ended).
+     */
+    private final int arrivalMaxSlackSeconds;
 
     @Autowired
     public RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
@@ -85,10 +92,12 @@ public class RouteSearchService {
                               @Value("${linkro.route.arrive-at-max-days:365}") int arriveAtMaxDays,
                               @Value("${linkro.route.max-timetable-candidates:10}") int maxTimetableCandidates,
                               @Value("${linkro.route.timetable-candidate-cut-minutes:15}") int candidateCutMinutes,
-                              @Value("${linkro.route.timetable-candidate-grace-minutes:6}") int candidateGraceMinutes) {
+                              @Value("${linkro.route.timetable-candidate-grace-minutes:6}") int candidateGraceMinutes,
+                              @Value("${linkro.route.arrival-max-slack-minutes:30}") int arrivalMaxSlackMinutes) {
         this(rooms, stations, kakao, mapper, internal, new DbCongestionLookup(stats, resolver), Clock.systemUTC(),
                 timetable.isPresent() && timetableClock.isPresent() ? new FirstTrainTimer(timetable.get(), timetableClock.get()) : null,
-                timetableRoutes.orElse(null), arriveAtMaxDays, maxTimetableCandidates, candidateCutMinutes, candidateGraceMinutes);
+                timetableRoutes.orElse(null), arriveAtMaxDays, maxTimetableCandidates, candidateCutMinutes, candidateGraceMinutes,
+                arrivalMaxSlackMinutes);
     }
 
     RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
@@ -124,6 +133,14 @@ public class RouteSearchService {
                        InternalRouteBuilder internal, CongestionLookup congestion, Clock clock, FirstTrainTimer firstTrains,
                        TimetableRouteFinder timetableRoutes, int arriveAtMaxDays, int maxTimetableCandidates,
                        int candidateCutMinutes, int candidateGraceMinutes) {
+        this(rooms, stations, kakao, mapper, internal, congestion, clock, firstTrains, timetableRoutes, arriveAtMaxDays,
+                maxTimetableCandidates, candidateCutMinutes, candidateGraceMinutes, DEFAULT_ARRIVAL_MAX_SLACK_MINUTES);
+    }
+
+    RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
+                       InternalRouteBuilder internal, CongestionLookup congestion, Clock clock, FirstTrainTimer firstTrains,
+                       TimetableRouteFinder timetableRoutes, int arriveAtMaxDays, int maxTimetableCandidates,
+                       int candidateCutMinutes, int candidateGraceMinutes, int arrivalMaxSlackMinutes) {
         if (arriveAtMaxDays <= 0) {
             throw new IllegalArgumentException("linkro.route.arrive-at-max-days must be positive");
         }
@@ -135,6 +152,9 @@ public class RouteSearchService {
         }
         if (candidateGraceMinutes < 0) {
             throw new IllegalArgumentException("linkro.route.timetable-candidate-grace-minutes must not be negative: " + candidateGraceMinutes);
+        }
+        if (arrivalMaxSlackMinutes < 1) {
+            throw new IllegalArgumentException("linkro.route.arrival-max-slack-minutes must be at least 1: " + arrivalMaxSlackMinutes);
         }
         this.rooms = rooms;
         this.stations = stations;
@@ -149,6 +169,7 @@ public class RouteSearchService {
         this.maxTimetableCandidates = maxTimetableCandidates;
         this.candidateCut = Duration.ofMinutes(candidateCutMinutes);
         this.candidateGrace = Duration.ofMinutes(candidateGraceMinutes);
+        this.arrivalMaxSlackSeconds = arrivalMaxSlackMinutes * 60;
     }
 
     public RouteSearchResponse search(UUID userId, RouteSearchRequest request) {
@@ -280,7 +301,9 @@ public class RouteSearchService {
      * slackSeconds = arriveAt − arrival. Kakao is not called.
      *
      * @throws BusinessException NO_SERVICE_TIME when no train of any line arrives in the window before {@code arriveAt}
-     *         (the recommendation check, {@link TimetableRouteFinder#noTrainArrivesBefore}); ARRIVAL_UNREACHABLE when
+     *         (the recommendation check, {@link TimetableRouteFinder#noTrainArrivesBefore}), or when the route arriving in
+     *         time arrives more than {@code linkro.route.arrival-max-slack-minutes} before {@code arriveAt} (#170: the trains
+     *         of that time have ended; checked before the departure has left); ARRIVAL_UNREACHABLE when
      *         trains run but none from this origin arrives in time, or the latest departure arriving in time has already
      *         left at {@code now} (#140): then no route leaving now arrives in time either
      */
@@ -288,12 +311,17 @@ public class RouteSearchService {
         if (timetableRoutes.noTrainArrivesBefore(arriveAt)) throw new BusinessException(ErrorCode.NO_SERVICE_TIME);
         TimedRoute timed = arriveByRoute(originId, destinationId, arriveAt)
                 .orElseThrow(() -> new BusinessException(ErrorCode.ARRIVAL_UNREACHABLE));
+        int slack = (int) Duration.between(timed.arriveAt(), arriveAt).toSeconds();
+        if (slack > arrivalMaxSlackSeconds) {
+            log.info("Route search {} -> {}: the route arriving by the requested time arrives {} min early (limit {} min): NO_SERVICE_TIME",
+                    originId, destinationId, slack / 60, arrivalMaxSlackSeconds / 60);
+            throw new BusinessException(ErrorCode.NO_SERVICE_TIME);
+        }
         if (leftBefore(timed, now)) {
             log.info("Route search {} -> {}: the latest departure arriving by the requested time has left", originId, destinationId);
             throw new BusinessException(ErrorCode.ARRIVAL_UNREACHABLE);
         }
         log.info("Route search {} -> {} uses INTERNAL: timetable route arriving by the requested time", originId, destinationId);
-        int slack = (int) Duration.between(timed.arriveAt(), arriveAt).toSeconds();
         return new RouteSearchResponse(RouteSource.INTERNAL,
                 List.of(timedRoute("r1", timed, originId, destinationId, null, false, slack, false)), false, null);
     }

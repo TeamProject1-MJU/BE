@@ -13,6 +13,7 @@ import java.util.Set;
  *   <li>Station id "100{line}000{3-digit code}": seen for 2호선 211~213 and matches our 3-digit 2호선 station_code. Our
  *       5~8호선 codes have 4 digits (2611, 2729, ...) and do not match the ids seen (610~619, 726~728); 1·3·4호선
  *       are unconfirmed. Only {@link #ID_LINES} build an id.</li>
+ *   <li>2호선 성수지선·신정지선 stations do not follow that pattern: {@link #LINE2_BRANCH_STATION_IDS} (#172).</li>
  * </ul>
  */
 public final class SeoulSubwayIds {
@@ -21,6 +22,19 @@ public final class SeoulSubwayIds {
             "5", "1005", "6", "1006", "7", "1007", "8", "1008");
     /** Lines whose station_code gives the external station id (confirmed by observation). */
     static final Set<String> ID_LINES = Set.of("2");
+    /**
+     * 2호선 성수지선·신정지선: our station_code -> Seoul station id, measured on the Seoul realtime API on 2026-11-19
+     * (#172). The main line follows "1002000{code}".
+     */
+    static final Map<String, String> LINE2_BRANCH_STATION_IDS = Map.of(
+            "244", "1002002111", // 용답
+            "245", "1002002112", // 신답
+            "250", "1002002113", // 용두
+            "246", "1002002114", // 신설동
+            "247", "1002002341", // 도림천
+            "248", "1002002342", // 양천구청
+            "249", "1002002343", // 신정네거리
+            "200", "1002002344"); // 까치산
     /**
      * Lines whose seed UP/DOWN is the opposite of Seoul's 상행/하행; arrival filtering flips them. Empty: line 1 was the
      * only one (#86) and V14 corrected its seed (#89). ArrivalApiPostgresTest.seedDirectionsMatchSeoulUpDown checks
@@ -42,9 +56,12 @@ public final class SeoulSubwayIds {
         return Optional.ofNullable(SUBWAY_IDS.get(lineCode));
     }
 
-    /** External station id, only for {@link #ID_LINES} and a 3-digit code. */
+    /** External station id, only for {@link #ID_LINES} and a 3-digit code; 2호선 branch stations by their own ids. */
     static Optional<String> stationId(String lineCode, String stationCode) {
         if (!ID_LINES.contains(lineCode) || stationCode == null || !stationCode.matches("\\d{3}")) return Optional.empty();
+        if ("2".equals(lineCode) && LINE2_BRANCH_STATION_IDS.containsKey(stationCode)) {
+            return Optional.of(LINE2_BRANCH_STATION_IDS.get(stationCode));
+        }
         return Optional.of("100" + lineCode + "000" + stationCode);
     }
 
