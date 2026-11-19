@@ -55,9 +55,16 @@ public final class SeoulSubwayIds {
     /**
      * Lines whose short-turn rule is on (#174): with the first train's alighting station, trains ending before it are
      * dropped. Lines with regular short turns in the bundled timetable: 3호선 구파발·수서, 4호선 사당, 5호선 강동·상일동,
-     * 6호선 봉화산, 7호선 도봉산. Not 1호선 (destinations against the direction seen), 2호선 (circular), 8호선.
+     * 6호선 봉화산·독바위·응암 (응암 loop, #177), 7호선 도봉산, 2호선 신도림·삼성 등 (circle, #177; 성수 always stays, see
+     * {@link #RING_CIRCUIT_STATIONS}). Not 1호선 (destinations against the direction seen) or 8호선.
      */
-    static final Set<String> SHORT_TURN_LINES = Set.of("3", "4", "5", "6", "7");
+    static final Set<String> SHORT_TURN_LINES = Set.of("2", "3", "4", "5", "6", "7");
+    /**
+     * Circular lines: the station where the circle trains' trips begin and end, never a short turn (#177). 2호선 trains
+     * going round show "성수" as their destination (2026-11-19 observation; timetable 성수→성수 430 trains a weekday), so a
+     * 성수 destination always stays.
+     */
+    static final Map<String, String> RING_CIRCUIT_STATIONS = Map.of("2", "성수");
 
     private static final Map<String, DirectionCode> UPDN = Map.of("상행", DirectionCode.UP, "하행", DirectionCode.DOWN,
             "내선", DirectionCode.INNER, "외선", DirectionCode.OUTER);

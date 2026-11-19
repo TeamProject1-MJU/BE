@@ -249,8 +249,8 @@ class ArrivalDestinationPostgresTest {
 
     @Test void lines128NeverDropATrain() throws Exception {
         assertThat(kept(rows("1", "상행", "동묘앞", "광운대"), "1", "종각", "종로3가", train("청량리"))).containsExactly("동묘앞", "광운대");
-        // 2호선 compares statnTid with the next station (신도림 234).
-        assertThat(kept(rowsTo("2", "외선", "1002000234", "신도림", "성수"), "2", "대림", "신도림", train("문래"))).containsExactly("신도림", "성수");
+        // 2호선 compares statnTid with the next station (신도림 234). #177: the 신도림 train ends before 문래; 성수 stays.
+        assertThat(kept(rowsTo("2", "외선", "1002000234", "신도림", "성수"), "2", "대림", "신도림", train("문래"))).containsExactly("성수");
         assertThat(kept(rows("8", "하행", "모란", "가락시장"), "8", "잠실", "석촌", train("모란"))).containsExactly("모란", "가락시장");
     }
 
@@ -297,5 +297,50 @@ class ArrivalDestinationPostgresTest {
     @Test void line6WithoutTrainAlightStationIdKeepsEverything() throws Exception {
         assertThat(kept(rows("6", "하행", "독바위", "봉화산"), "6", "역촌", "불광", Map.of())).containsExactly("독바위", "봉화산");
         assertThat(kept(rows("6", "하행", "봉화산", "신내"), "6", "구산", "응암", Map.of())).containsExactly("봉화산", "신내");
+    }
+
+    // ---- #177: 2호선 circle (INNER 대림 -> 신도림 -> 문래, OUTER 시청 -> 충정로 in the seed) ----
+
+    @Test void line2SindorimTrainsEndBeforeMullaeAnd성수Stays() throws Exception {
+        // INNER 대림 -> 문래 (via 신도림).
+        assertThat(kept(rowsTo("2", "내선", "1002000234", "신도림", "성수"), "2", "대림", "신도림", train("문래"))).containsExactly("성수");
+        // OUTER 시청 -> 대림 (via 충정로 … 문래, 신도림).
+        assertThat(kept(rowsTo("2", "외선", "1002000243", "신도림", "성수"), "2", "시청", "충정로", train("대림"))).containsExactly("성수");
+        // Alighting at 신도림 itself: both stay.
+        assertThat(kept(rowsTo("2", "외선", "1002000243", "신도림", "성수"), "2", "시청", "충정로", train("신도림"))).containsExactly("신도림", "성수");
+    }
+
+    @Test void line2BoardingAtTheTerminal() throws Exception {
+        // At 성수 the 성수 train is a circle train and stays.
+        assertThat(kept(rowsTo("2", "내선", "1002000212", "성수", "신도림"), "2", "성수", "건대입구", train("잠실"))).containsExactly("성수", "신도림");
+        // At 신도림 a 신도림 train ends here.
+        assertThat(kept(rowsTo("2", "내선", "1002000235", "신도림", "성수"), "2", "신도림", "문래", train("영등포구청"))).containsExactly("성수");
+    }
+
+    @Test void line2AlightingPast성수KeepsThe성수Train() throws Exception {
+        // INNER 한양대 -> 건대입구 (via 뚝섬, 성수).
+        assertThat(kept(rowsTo("2", "내선", "1002000210", "성수", "신도림"), "2", "한양대", "뚝섬", train("건대입구"))).containsExactly("성수", "신도림");
+    }
+
+    @Test void line2BranchDestinationsAndUnknownNamesStay() throws Exception {
+        assertThat(kept(rowsTo("2", "내선", "1002000234", "까치산", "어딘가", "신도림"), "2", "대림", "신도림", train("문래"))).containsExactly("까치산", "어딘가");
+    }
+
+    @Test void line2LateShortTurns() throws Exception {
+        // INNER 건대입구 -> 선릉 (구의 … 삼성, 선릉): the 삼성 train ends before 선릉; toward 삼성 it stays.
+        assertThat(kept(rowsTo("2", "내선", "1002000213", "삼성", "성수"), "2", "건대입구", "구의", train("선릉"))).containsExactly("성수");
+        assertThat(kept(rowsTo("2", "내선", "1002000213", "삼성", "성수"), "2", "건대입구", "구의", train("삼성"))).containsExactly("삼성", "성수");
+        // OUTER 신림 -> 낙성대 (봉천, 서울대입구, 낙성대): the 서울대입구 train ends before 낙성대.
+        assertThat(kept(rowsTo("2", "외선", "1002000229", "서울대입구", "성수"), "2", "신림", "봉천", train("낙성대"))).containsExactly("성수");
+    }
+
+    @Test void line2BranchRidesUseTheOrdinaryRule() throws Exception {
+        // 성수지선 용답 -> 신설동 (DOWN, next 신답 = 1002002112): a 용두 train ends before 신설동; 성수 is behind and stays.
+        assertThat(kept(rowsTo("2", "하행", "1002002112", "용두", "신설동", "성수"), "2", "용답", "신답", train("신설동"))).containsExactly("신설동", "성수");
+    }
+
+    @Test void line2WithoutTrainAlightStationIdKeepsEverything() throws Exception {
+        assertThat(kept(rowsTo("2", "내선", "1002000234", "신도림", "성수"), "2", "대림", "신도림", Map.of())).containsExactly("신도림", "성수");
+        assertThat(kept(rowsTo("2", "내선", "1002000234", "신도림", "성수"), "2", "대림", "신도림", alight("문래"))).containsExactly("신도림", "성수");
     }
 }

@@ -53,9 +53,9 @@ public class ArrivalController {
             @Parameter(description = "기본 3, 최대 10", example = "3") @RequestParam(required = false) String limit,
             @Parameter(description = "선택. 첫 승차 구간의 하차역 id(#174). nextStationId와 함께 보내면 5호선 강동 분기에서 하차역과 다른 갈래로 가는 열차를 뺍니다. "
                     + "그 노선에 없거나 진행 방향 앞이 아닌 역은 무시합니다", example = "2556") @RequestParam(required = false) String alightStationId,
-            @Parameter(description = "선택. 첫 열차의 하차역 id(#174, 경로 응답 steps[].trainAlightStationId). nextStationId와 함께 보내면 3·4·5·6·7호선에서 "
+            @Parameter(description = "선택. 첫 열차의 하차역 id(#174, 경로 응답 steps[].trainAlightStationId). nextStationId와 함께 보내면 2·3·4·5·6·7호선에서 "
                     + "그 역 전에 끝나는 열차와 여기서 끝나는 열차를 빼고, 5호선은 갈래 규칙도 적용합니다. 함께 보낸 alightStationId보다 우선합니다. "
-                    + "그 노선에 없거나 진행 방향 앞이 아닌 역, 응암 순환 구간은 무시합니다", example = "2554") @RequestParam(required = false) String trainAlightStationId) {
+                    + "그 노선에 없거나 진행 방향 앞이 아닌 역, 응암에서 순환으로 들어가는 승차는 무시합니다. 2호선 성수행은 항상 남깁니다", example = "2554") @RequestParam(required = false) String trainAlightStationId) {
         return ApiResponse.success(arrivals.arrivals(stationId,
                 ArrivalQuery.of(lineId, nextStationId, directionCode, limit, alightStationId, trainAlightStationId)));
     }

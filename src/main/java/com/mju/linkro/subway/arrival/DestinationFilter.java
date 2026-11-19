@@ -18,6 +18,8 @@ final class DestinationFilter {
     private final Map<Long, LineNode> nodes = new HashMap<>();
     /** Normalized station name -> node; names used by more than one node are left out (ambiguous, kept). */
     private final Map<String, Long> byName = new HashMap<>();
+    /** On a circular line, the node whose destination always stays ({@link SeoulSubwayIds#RING_CIRCUIT_STATIONS}), or null. */
+    private final Long circuit;
 
     DestinationFilter(LineGraph graph) {
         Set<String> repeated = new HashSet<>();
@@ -27,6 +29,8 @@ final class DestinationFilter {
             if (byName.put(name, node.id()) != null) repeated.add(name);
         }
         repeated.forEach(byName::remove);
+        String circuitName = SeoulSubwayIds.RING_CIRCUIT_STATIONS.get(graph.lineCode());
+        circuit = circuitName == null ? null : byName.get(StationNames.normalize(circuitName));
         for (LineEdge edge : graph.edges()) {
             out.computeIfAbsent(edge.fromNodeId(), k -> new ArrayList<>()).add(edge);
         }
@@ -55,7 +59,13 @@ final class DestinationFilter {
         if (riding.isEmpty()) return Optional.empty();
         if (riding.get() == DirectionCode.LOOP) {
             if (!shortTurn || hasWayOut(board)) return Optional.empty();
-            return inOrder(board, loopPath(next), alight);
+            return inOrder(board, loopPath(next), alight, null);
+        }
+        if (isRing(riding.get())) {
+            // 2호선 (#177): once round in the riding direction only (INNER or OUTER, not the branch edges); the circuit
+            // station's destination always stays. Without a circuit station the line is not handled as a ring.
+            if (!shortTurn || circuit == null) return Optional.empty();
+            return inOrder(board, ringPath(board, next, riding.get()), alight, circuit);
         }
         if (!linear(riding.get())) return Optional.empty();
         DirectionCode d = riding.get();
@@ -77,18 +87,36 @@ final class DestinationFilter {
      * Short-turn rule along an ordered way ahead: trains ending at the boarding station or at a station of the way before
      * {@code alight} are dropped; destinations not on the way are kept. Empty when {@code alight} is not on it.
      */
-    private Optional<Predicate<SeoulArrivalClient.Arrival>> inOrder(long board, List<Long> path, long alight) {
+    private Optional<Predicate<SeoulArrivalClient.Arrival>> inOrder(long board, List<Long> path, long alight, Long alwaysKept) {
         int alightAt = path.indexOf(alight);
         if (alightAt < 0) return Optional.empty();
         Map<Long, Integer> position = new HashMap<>();
         for (int i = 0; i < path.size(); i++) position.putIfAbsent(path.get(i), i);
         return Optional.of(arrival -> {
             Long destination = destination(arrival);
-            if (destination == null) return true;
+            if (destination == null || destination.equals(alwaysKept)) return true;
             if (destination == board) return false;
             Integer at = position.get(destination);
             return at == null || at >= alightAt;
         });
+    }
+
+    private static boolean isRing(DirectionCode d) {
+        return d == DirectionCode.INNER || d == DirectionCode.OUTER;
+    }
+
+    /** From {@code next} once round in direction d, following the single edge of that direction, until back at board. */
+    private List<Long> ringPath(long board, long next, DirectionCode d) {
+        List<Long> path = new ArrayList<>();
+        Set<Long> seen = new HashSet<>();
+        long current = next;
+        while (current != board && seen.add(current)) {
+            path.add(current);
+            List<LineEdge> edges = out.getOrDefault(current, List.of()).stream().filter(edge -> edge.direction() == d).toList();
+            if (edges.size() != 1) break;
+            current = edges.get(0).toNodeId();
+        }
+        return path;
     }
 
     /** True when the node has a RIDE edge that is not LOOP: the station where trains leave the loop (응암). */
