@@ -79,7 +79,7 @@ class ChatRecommendationMetaTest extends ChatToolsTestBase {
 
     @Test
     void aSavedRunWithResultsAndACompletedAnswerCarriesTheRunId() {
-        when(recommendations.create(eq(asker), eq(roomId), any())).thenReturn(response(List.of(timeResult())));
+        when(recommendations.create(eq(asker), eq(roomId), any(), any())).thenReturn(response(List.of(timeResult())));
 
         ask("{\"maxMinutes\":40}", 1);
 
@@ -89,24 +89,24 @@ class ChatRecommendationMetaTest extends ChatToolsTestBase {
 
     @Test
     void aDuplicateCallInTheSameQuestionStillOpensTheOneRunThatWasSaved() {
-        when(recommendations.create(eq(asker), eq(roomId), any())).thenReturn(response(List.of(timeResult())));
+        when(recommendations.create(eq(asker), eq(roomId), any(), any())).thenReturn(response(List.of(timeResult())));
 
         ask("{}", 2);
 
-        verify(recommendations).create(any(), any(), any());
+        verify(recommendations).create(any(), any(), any(), any());
         verify(writer).recordAiRecommendation(roomId, "답변", RUN);
     }
 
     @Test
     void noResultsLeavesMetaNull() {
-        when(recommendations.create(eq(asker), eq(roomId), any())).thenReturn(response(List.of()));
+        when(recommendations.create(eq(asker), eq(roomId), any(), any())).thenReturn(response(List.of()));
         ask("{\"maxMinutes\":1}", 1);
         assertMetaNull();
     }
 
     @Test
     void anErrorOf81LeavesMetaNull() {
-        when(recommendations.create(eq(asker), eq(roomId), any())).thenThrow(new BusinessException(ErrorCode.APPOINTMENT_PASSED));
+        when(recommendations.create(eq(asker), eq(roomId), any(), any())).thenThrow(new BusinessException(ErrorCode.APPOINTMENT_PASSED));
         ask("{}", 1);
         assertMetaNull();
     }
@@ -115,13 +115,13 @@ class ChatRecommendationMetaTest extends ChatToolsTestBase {
     void invalidInputLeavesMetaNullAndRunsNothing() {
         ask("{\"maxMinutes\":999}", 1);
         assertMetaNull();
-        verify(recommendations, never()).create(any(), any(), any());
+        verify(recommendations, never()).create(any(), any(), any(), any());
     }
 
     @Test
     void aToolTimeoutLeavesMetaNullEvenIfTheRunIsSavedLater() {
         properties.setAiRecommendationToolTimeout(Duration.ofMillis(100));
-        when(recommendations.create(eq(asker), eq(roomId), any())).thenAnswer(call -> {
+        when(recommendations.create(eq(asker), eq(roomId), any(), any())).thenAnswer(call -> {
             Thread.sleep(1000);
             return response(List.of(timeResult()));
         });
@@ -131,14 +131,14 @@ class ChatRecommendationMetaTest extends ChatToolsTestBase {
 
     @Test
     void aToolErrorLeavesMetaNull() {
-        when(recommendations.create(eq(asker), eq(roomId), any())).thenThrow(new IllegalStateException("db down"));
+        when(recommendations.create(eq(asker), eq(roomId), any(), any())).thenThrow(new IllegalStateException("db down"));
         ask("{}", 1);
         assertMetaNull();
     }
 
     @Test
     void aFailedAnswerAfterASavedRunSavesTheSystemNoticeWithoutMeta() {
-        when(recommendations.create(eq(asker), eq(roomId), any())).thenReturn(response(List.of(timeResult())));
+        when(recommendations.create(eq(asker), eq(roomId), any(), any())).thenReturn(response(List.of(timeResult())));
         org.mockito.Mockito.doAnswer(call -> {
             ((ChatReplyRequest) call.getArgument(0)).tools().run("run_recommendation", "{}");
             throw new BusinessException(ErrorCode.AI_UNAVAILABLE);

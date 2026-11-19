@@ -70,7 +70,7 @@ final class ChatToolSpecs {
                         + " get_departure_plan을 쓴다. 출발역이 없는 멤버는 따로 알려준다. totalMinutes는 타고 가는 시간(출발 전 대기 제외)이다." + FAILURES,
                         Map.of("destinationStation", string("도착역 이름. " + STATION_NAME)), List.of("destinationStation")),
                 tool(RUN_RECOMMENDATION, "사용자가 조건을 말하며 중간역 추천을 해 달라고 할 때 추천을 새로 실행하고 이 방의 추천 기록에 저장한다(앱의 추천받기와 같다)."
-                        + " '환승 1번 이하로 40분 안쪽인 역 추천해줘', '그냥 추천해줘'에 쓴다. 조건이 없으면 인자 없이 부른다."
+                        + " '환승 1번 이하로 40분 안쪽인 역 추천해줘', '그냥 추천해줘'에 쓴다. 조건이 없으면 인자 없이 부른다. 사용자가 조건을 말했으면 그 요약을 conditionText에도 적는다."
                         + " 한 질문에 한 번만 실행되고, 두 번째 호출은 code가 ALREADY_RUN이다. 이미 받은 추천 결과를 알려 달라는 질문에는 쓰지 않고 get_latest_recommendation을 쓴다."
                         + " 인자가 범위를 벗어나면(code VALIDATION_ERROR) 실행하지 않으니 사용자에게 값을 다시 묻는다."
                         + " hasResults가 false면 조건에 맞는 역이 없다는 뜻이니 조건을 풀어 보자고 말로 안내한다."
@@ -78,7 +78,9 @@ final class ChatToolSpecs {
                         + " 실패하면 ok가 false이고 code에 이유가 온다(TOO_FEW_MEMBERS 멤버 2명 미만, DEPARTURE_MISSING 출발역 없는 멤버가 있음,"
                         + " APPOINTMENT_PASSED 약속 시각이 지남, NO_SERVICE 약속 시각 전에 도착하는 열차가 없음, RECOMMENDATION_IN_PROGRESS 이미 계산 중)."
                         + " 이유를 말로 알리고 추측하지 않는다.",
-                        Map.of("maxMinutes", integer("모든 참여자의 이동 시간 상한(분), 1~300."),
+                        Map.of("conditionText", string("사용자가 말한 조건을 한국어로 짧게 요약한 문구(예: '환승 1번 이하, 40분 안쪽')."
+                                        + " 앱의 추천 결과 화면에 표시만 되고 계산에는 쓰이지 않는다. 조건은 아래 인자로만 적용된다. 조건을 말하지 않았으면 생략한다. 500자 이하."),
+                                "maxMinutes", integer("모든 참여자의 이동 시간 상한(분), 1~300."),
                                 "maxTransfers", integer("환승 횟수 상한, 0~10."),
                                 "maxFareWon", integer("요금 상한(원), 1~100000."),
                                 "excludeStations", Map.of("type", "array", "description", "추천에서 뺄 역 이름 목록. " + STATION_NAME, "items", Map.of("type", "string")),

@@ -39,6 +39,7 @@ API 명세 v1.12 8장(8.1~8.3), 상세설계서 3.5 기준. `POST /api/v1/rooms/
   - parse = 조건 해석(AI), evaluate = 후보 계산, explain = 설명(AI), save = 저장이다. total은 요청 시작부터 응답 조립까지다.
   - 조건 문구, 닉네임, 키는 넣지 않는다.
   - 실패한 요청은 이 줄을 남기지 않는다.
+- **표시용 conditionText (#168)**: `create(userId, roomId, body, displayText)`의 `displayText`(@링크로 `run_recommendation`이 넘기는 조건 요약)는 `RecommendationRequest.displayText`로 공백 제거·공백뿐이면 null·500자 초과는 `VALIDATION_ERROR`를 거쳐 `criteria.conditionText`로만 저장된다. `body.conditionText`가 없으면 `ConstraintResolver`는 `interpretCondition`을 부르지 않으므로 AI 호출 수는 그대로다. POST 엔드포인트는 이 값을 쓰지 않는다.
 - **조건 해석 호출 조건**: `conditionText`가 없거나 공백이면 `RecommendationRequest.text()`가 null이고, `ConstraintResolver`는 `interpretCondition`을 부르지 않는다(parse≈0ms).
 - **설명 AI 읽기 타임아웃**: `OPENAI_EXPLAIN_READ_TIMEOUT`(`linkro.ai.openai.explain-read-timeout`, 기본 6s)은 `explainRecommendation`에만 적용한다. 실제 응답 시간은 타이밍 로그의 explain 값을 보고 조정한다.
   - 넘으면 `AI_UNAVAILABLE` → 기준마다 템플릿 문장(`explanationSource: TEMPLATE`)이고, 응답은 정상(200)이다.

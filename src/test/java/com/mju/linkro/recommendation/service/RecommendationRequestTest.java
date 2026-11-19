@@ -40,4 +40,17 @@ class RecommendationRequestTest {
         assertThat(new RecommendationRequest("   ", null).text()).isNull();
         assertThat(new RecommendationRequest(" 40분 이내 ", null).text()).isEqualTo("40분 이내");
     }
+
+    @Test
+    void displayTextIsStrippedBlankIsNullAndTooLongIsRefused() {
+        assertThat(RecommendationRequest.displayText(null)).isNull();
+        assertThat(RecommendationRequest.displayText("   ")).isNull();
+        assertThat(RecommendationRequest.displayText(" 환승 1번 이하 ")).isEqualTo("환승 1번 이하");
+        assertThat(RecommendationRequest.displayText("가".repeat(RecommendationRequest.MAX_CONDITION_TEXT_LENGTH))).hasSize(500);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> RecommendationRequest.displayText("가".repeat(501)))
+                .isInstanceOfSatisfying(com.mju.linkro.common.exception.BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo(com.mju.linkro.common.exception.ErrorCode.VALIDATION_ERROR);
+                    assertThat(e.getDetails()).containsKey("conditionText");
+                });
+    }
 }

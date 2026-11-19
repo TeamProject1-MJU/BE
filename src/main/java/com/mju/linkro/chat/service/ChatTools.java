@@ -423,8 +423,10 @@ public class ChatTools {
         private Map<String, Object> runRecommendation(JsonNode args) {
             List<MemberRow> members = members();
             RecommendationRequest request = new RecommendationRequest(null, filter(args, members));
+            String summary;
             try {
                 request.validate(members.stream().map(MemberRow::userId).collect(java.util.stream.Collectors.toSet()));
+                summary = RecommendationRequest.displayText(conditionSummary(args));
             } catch (BusinessException invalid) {
                 throw new Fail("VALIDATION_ERROR", "조건 값이 범위를 벗어났어요: " + invalid.getDetails().values());
             }
@@ -433,7 +435,8 @@ public class ChatTools {
             }
             RecommendationResponse run;
             try {
-                run = recommendations.create(userId, roomId, request);
+                // The summary is only stored as conditionText; the request has none, so the condition AI is never called.
+                run = recommendations.create(userId, roomId, request, summary);
             } catch (BusinessException refused) {
                 if (refused.getErrorCode() == ErrorCode.DEPARTURE_MISSING) {
                     throw new Fail("DEPARTURE_MISSING", "출발역이 없는 멤버: " + members.stream()
@@ -453,6 +456,14 @@ public class ChatTools {
                             "maxMinutes", metrics.maxMinutes(), "averageMinutes", metrics.averageMinutes(),
                             "averageFare", metrics.averageFare(), "totalTransfers", metrics.totalTransfers()),
                     "appliedConstraints", applied, "message", run.message());
+        }
+
+        /** The optional conditionText summary: a string, or VALIDATION_ERROR. */
+        private String conditionSummary(JsonNode args) {
+            JsonNode value = args.path("conditionText");
+            if (value.isMissingNode() || value.isNull()) return null;
+            if (!value.isString()) throw new Fail("VALIDATION_ERROR", "conditionText는 문자열이어야 해요.");
+            return value.asString();
         }
 
         /** The 8.1 filter from the tool arguments, or null when none is given. A wrong type or range is VALIDATION_ERROR. */

@@ -34,12 +34,18 @@ class ChatRunRecommendationToolTest extends ChatToolsTestBase {
     }
 
     void created(RecommendationResponse response) {
-        when(recommendations.create(eq(asker), eq(roomId), any())).thenReturn(response);
+        when(recommendations.create(eq(asker), eq(roomId), any(), any())).thenReturn(response);
     }
 
     RecommendationRequest sent() {
         var captor = ArgumentCaptor.forClass(RecommendationRequest.class);
-        verify(recommendations).create(eq(asker), eq(roomId), captor.capture());
+        verify(recommendations).create(eq(asker), eq(roomId), captor.capture(), any());
+        return captor.getValue();
+    }
+
+    String sentSummary() {
+        var captor = ArgumentCaptor.forClass(String.class);
+        verify(recommendations).create(eq(asker), eq(roomId), any(), captor.capture());
         return captor.getValue();
     }
 
@@ -93,6 +99,44 @@ class ChatRunRecommendationToolTest extends ChatToolsTestBase {
     }
 
     @Test
+    void theConditionSummaryIsPassedAsDisplayTextOnlyNeverAsTheRequestsConditionText() {
+        created(response(AppliedConstraints.none(), List.of(result("TIME", 3, "종로3가")), null));
+
+        run("run_recommendation", "{\"conditionText\":\"  환승 1번 이하, 40분 안쪽  \",\"maxMinutes\":40,\"maxTransfers\":1}");
+
+        assertThat(sentSummary()).isEqualTo("환승 1번 이하, 40분 안쪽");
+        // the request the condition AI would read has no conditionText: the constraints come from the structured inputs
+        assertThat(sent().conditionText()).isNull();
+        assertThat(sent().filter().maxMinutes()).isEqualTo(40);
+    }
+
+    @Test
+    void aBlankOrMissingSummaryIsNull() {
+        created(response(AppliedConstraints.none(), List.of(result("TIME", 3, "종로3가")), null));
+        run("run_recommendation", "{\"conditionText\":\"   \"}");
+        assertThat(sentSummary()).isNull();
+        assertThat(((ChatTools.Asker) toolbox).recommendationRunId()).isNotNull();
+
+        var other = tools.forAsker(roomId, asker);
+        JSON.readTree(other.run("run_recommendation", "{\"conditionText\":null}"));
+        JSON.readTree(tools.forAsker(roomId, asker).run("run_recommendation", "{}"));
+        var captor = ArgumentCaptor.forClass(String.class);
+        verify(recommendations, times(3)).create(eq(asker), eq(roomId), any(), captor.capture());
+        assertThat(captor.getAllValues()).containsOnlyNulls();
+    }
+
+    @Test
+    void aTooLongOrNonStringSummaryIsRefusedBeforeAnyRunAndKeepsTheQuestionsRun() {
+        assertFails(run("run_recommendation", "{\"conditionText\":\"" + "가".repeat(501) + "\"}"), "VALIDATION_ERROR");
+        assertFails(run("run_recommendation", "{\"conditionText\":40}"), "VALIDATION_ERROR");
+        verify(recommendations, never()).create(any(), any(), any(), any());
+
+        created(response(AppliedConstraints.none(), List.of(result("TIME", 3, "종로3가")), null));
+        // exactly 500 characters is fine
+        assertThat(run("run_recommendation", "{\"conditionText\":\"" + "가".repeat(500) + "\"}").get("ok").asBoolean()).isTrue();
+    }
+
+    @Test
     void invalidInputIsRefusedBeforeAnyRunAndDoesNotUseUpTheQuestionsOneRun() {
         for (String bad : List.of("{\"maxMinutes\":0}", "{\"maxMinutes\":301}", "{\"maxMinutes\":\"40\"}", "{\"maxMinutes\":40.5}",
                 "{\"maxTransfers\":11}", "{\"maxTransfers\":-1}", "{\"maxFareWon\":0}", "{\"maxFareWon\":100001}",
@@ -103,7 +147,7 @@ class ChatRunRecommendationToolTest extends ChatToolsTestBase {
         assertFails(run("run_recommendation", "{\"memberLimits\":[{\"nickname\":\"없는사람\",\"maxMinutes\":30}]}"), "MEMBER_NOT_FOUND");
         assertFails(run("run_recommendation", "{\"excludeStations\":[\"없는역\"]}"), "STATION_NOT_FOUND");
         assertFails(run("run_recommendation", "{\"excludeStations\":[\"서울\"]}"), "STATION_AMBIGUOUS");
-        verify(recommendations, never()).create(any(), any(), any());
+        verify(recommendations, never()).create(any(), any(), any(), any());
         assertThat(runId()).isNull();
 
         created(response(AppliedConstraints.none(), List.of(result("TIME", 3, "종로3가")), null));
@@ -115,21 +159,21 @@ class ChatRunRecommendationToolTest extends ChatToolsTestBase {
         created(response(AppliedConstraints.none(), List.of(result("TIME", 3, "종로3가")), null));
         assertThat(run("run_recommendation", "{}").get("ok").asBoolean()).isTrue();
         assertFails(run("run_recommendation", "{\"maxMinutes\":30}"), "ALREADY_RUN");
-        verify(recommendations, times(1)).create(any(), any(), any());
+        verify(recommendations, times(1)).create(any(), any(), any(), any());
         assertThat(runId()).isEqualTo(UUID.fromString(RUN_ID));
 
         // another question has its own toolbox
         var other = tools.forAsker(roomId, asker);
         assertThat(JSON.readTree(other.run("run_recommendation", "{}")).get("ok").asBoolean()).isTrue();
-        verify(recommendations, times(2)).create(any(), any(), any());
+        verify(recommendations, times(2)).create(any(), any(), any(), any());
     }
 
     @Test
     void aRefusedRunUsesUpTheQuestionsRunAndLeavesNoRunId() {
-        when(recommendations.create(eq(asker), eq(roomId), any())).thenThrow(new BusinessException(ErrorCode.TOO_FEW_MEMBERS));
+        when(recommendations.create(eq(asker), eq(roomId), any(), any())).thenThrow(new BusinessException(ErrorCode.TOO_FEW_MEMBERS));
         assertFails(run("run_recommendation", "{}"), "TOO_FEW_MEMBERS");
         assertFails(run("run_recommendation", "{}"), "ALREADY_RUN");
-        verify(recommendations, times(1)).create(any(), any(), any());
+        verify(recommendations, times(1)).create(any(), any(), any(), any());
         assertThat(runId()).isNull();
     }
 
@@ -142,7 +186,7 @@ class ChatRunRecommendationToolTest extends ChatToolsTestBase {
                 new Case(new BusinessException(ErrorCode.RECOMMENDATION_IN_PROGRESS), "RECOMMENDATION_IN_PROGRESS"),
                 new Case(new BusinessException(ErrorCode.INTERNAL_ERROR), "NO_DATA"))) {
             var fresh = tools.forAsker(roomId, asker);
-            when(recommendations.create(eq(asker), eq(roomId), any())).thenThrow(failing.error());
+            when(recommendations.create(eq(asker), eq(roomId), any(), any())).thenThrow(failing.error());
             assertFails(JSON.readTree(fresh.run("run_recommendation", "{}")), failing.code());
             assertThat(((ChatTools.Asker) fresh).recommendationRunId()).isNull();
         }
@@ -150,7 +194,7 @@ class ChatRunRecommendationToolTest extends ChatToolsTestBase {
 
     @Test
     void aMemberWithoutADepartureStationIsNamedInTheReason() {
-        when(recommendations.create(eq(asker), eq(roomId), any())).thenThrow(new BusinessException(ErrorCode.DEPARTURE_MISSING));
+        when(recommendations.create(eq(asker), eq(roomId), any(), any())).thenThrow(new BusinessException(ErrorCode.DEPARTURE_MISSING));
         JsonNode out = run("run_recommendation", "{}");
         assertFails(out, "DEPARTURE_MISSING");
         assertThat(out.get("message").asString()).contains("지아").doesNotContain("민수");
@@ -174,7 +218,7 @@ class ChatRunRecommendationToolTest extends ChatToolsTestBase {
     @Test
     void aRunThatOutlastsTheToolTimeoutIsNoDataAndKeepsNoRunId() {
         properties.setAiRecommendationToolTimeout(Duration.ofMillis(100));
-        when(recommendations.create(eq(asker), eq(roomId), any())).thenAnswer(call -> {
+        when(recommendations.create(eq(asker), eq(roomId), any(), any())).thenAnswer(call -> {
             Thread.sleep(1000);
             return response(AppliedConstraints.none(), List.of(result("TIME", 3, "종로3가")), null);
         });
@@ -201,7 +245,7 @@ class ChatRunRecommendationToolTest extends ChatToolsTestBase {
     void aNonMemberRunsNothing() {
         when(access.requireMember(roomId, asker)).thenThrow(new BusinessException(ErrorCode.NOT_ROOM_MEMBER));
         assertFails(run("run_recommendation", "{}"), "NO_DATA");
-        verify(recommendations, never()).create(any(), any(), any());
+        verify(recommendations, never()).create(any(), any(), any(), any());
         assertThat(runId()).isNull();
     }
 }

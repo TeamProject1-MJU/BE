@@ -265,6 +265,25 @@ class ChatToolsPostgresTest {
         assertThat(out.get("bestStation").get("maxMinutes").asInt()).isEqualTo(time.metrics().maxMinutes());
     }
 
+    @Test void theConditionSummaryIsShownAsConditionTextBy83WithoutAnyConditionAiCall() {
+        JsonNode out = run(asker, "run_recommendation", "{\"conditionText\":\" 환승 1번 이하, 40분 안쪽 \",\"maxMinutes\":40,\"maxTransfers\":1}");
+        assertThat(out.get("ok").asBoolean()).as(out.toString()).isTrue();
+        var byRun = recommendations.byRun(friend, room, UUID.fromString(out.get("runId").asString()));
+        assertThat(byRun.conditionText()).isEqualTo("환승 1번 이하, 40분 안쪽");
+        assertThat(byRun.appliedConstraints().maxMinutes()).isEqualTo(40);
+        assertThat(byRun.appliedConstraints().maxTransfers()).isEqualTo(1);
+        assertThat(recommendations.latest(asker, room).conditionText()).isEqualTo("환승 1번 이하, 40분 안쪽");
+        org.mockito.Mockito.verify(ai, org.mockito.Mockito.never()).interpretCondition(any());
+
+        // blank is no text; too long is refused and runs nothing
+        assertThat(recommendations.byRun(asker, room, UUID.fromString(run(asker, "run_recommendation", "{\"conditionText\":\"  \"}")
+                .get("runId").asString())).conditionText()).isNull();
+        JsonNode tooLong = run(asker, "run_recommendation", "{\"conditionText\":\"" + "가".repeat(501) + "\"}");
+        assertThat(tooLong.get("code").asString()).isEqualTo("VALIDATION_ERROR");
+        assertThat(runs()).isEqualTo(2);
+        org.mockito.Mockito.verify(ai, org.mockito.Mockito.never()).interpretCondition(any());
+    }
+
     @Test void withoutConditionsItRunsAnUnfilteredRunAndAnImpossibleOneSavesAnEmptyRunWithoutARunId() {
         JsonNode plain = run(asker, "run_recommendation", "{}");
         assertThat(plain.get("hasResults").asBoolean()).as(plain.toString()).isTrue();
