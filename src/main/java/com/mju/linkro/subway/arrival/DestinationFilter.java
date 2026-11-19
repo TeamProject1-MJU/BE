@@ -38,23 +38,33 @@ final class DestinationFilter {
         }
     }
 
-    /**
-     * The branch rule from {@code board} (riding to {@code next}) to {@code alight}, or empty when it cannot be applied:
-     * no RIDE edge board -> next, a circular direction, a loop station, or an alighting station that is not ahead.
-     */
+    /** The branch rule alone: see {@link #rules}. */
     Optional<Predicate<SeoulArrivalClient.Arrival>> branch(long board, long next, long alight) {
+        return rules(board, next, alight, true, false);
+    }
+
+    /**
+     * The rules from {@code board} (riding to {@code next}) to {@code alight}, or empty when they cannot be applied: no
+     * RIDE edge board -> next, a circular direction, a loop station, or an alighting station that is not ahead.
+     *
+     * @param branchRule drop trains bound for the other branch past a junction before {@code alight}
+     * @param shortTurn  drop trains ending at the boarding station or before {@code alight}
+     */
+    Optional<Predicate<SeoulArrivalClient.Arrival>> rules(long board, long next, long alight, boolean branchRule, boolean shortTurn) {
         Optional<DirectionCode> riding = direction(board, next);
         if (riding.isEmpty() || !linear(riding.get()) || loopNodes.contains(board) || loopNodes.contains(alight)) return Optional.empty();
         DirectionCode d = riding.get();
         Set<Long> ahead = ahead(next, d);
         if (!ahead.contains(alight)) return Optional.empty();
-        Long junction = junction(board, ahead, alight, d);
-        if (junction == null) return Optional.of(arrival -> true);
-        Set<Long> pastJunction = reach(junction, d);
+        Long junction = branchRule ? junction(board, ahead, alight, d) : null;
+        Set<Long> pastJunction = junction == null ? Set.of() : reach(junction, d);
         String branch = nodes.get(alight).branchCode();
         return Optional.of(arrival -> {
             Long destination = destination(arrival);
-            return destination == null || !pastJunction.contains(destination) || branch.equals(nodes.get(destination).branchCode());
+            if (destination == null) return true;
+            if (pastJunction.contains(destination) && !branch.equals(nodes.get(destination).branchCode())) return false;
+            if (shortTurn && (destination == board || (ahead.contains(destination) && reach(destination, d).contains(alight)))) return false;
+            return true;
         });
     }
 

@@ -8,7 +8,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /** Validated query of GET /stations/{id}/arrivals. Invalid fields are reported at once as VALIDATION_ERROR (400). */
-public record ArrivalQuery(long lineId, Long nextStationId, DirectionCode directionCode, int limit, Long alightStationId) {
+public record ArrivalQuery(long lineId, Long nextStationId, DirectionCode directionCode, int limit, Long alightStationId,
+                           Long trainAlightStationId) {
     public static final int DEFAULT_LIMIT = 3;
     public static final int MAX_LIMIT = 10;
 
@@ -19,6 +20,15 @@ public record ArrivalQuery(long lineId, Long nextStationId, DirectionCode direct
 
     /** @param alightStationId the station the first ride ends at (#174, optional): drops trains of the other branch */
     public static ArrivalQuery of(String lineId, String nextStationId, String directionCode, String limit, String alightStationId) {
+        return of(lineId, nextStationId, directionCode, limit, alightStationId, null);
+    }
+
+    /**
+     * @param trainAlightStationId the station the first train is left at (#174, optional, steps[].trainAlightStationId of
+     *                             the route): also drops trains ending before it
+     */
+    public static ArrivalQuery of(String lineId, String nextStationId, String directionCode, String limit, String alightStationId,
+                                  String trainAlightStationId) {
         Map<String, String> errors = new LinkedHashMap<>();
         Long line = null;
         if (lineId == null || lineId.isBlank()) {
@@ -28,6 +38,8 @@ public record ArrivalQuery(long lineId, Long nextStationId, DirectionCode direct
         }
         Long next = nextStationId == null || nextStationId.isBlank() ? null : positive(nextStationId, "nextStationId", errors);
         Long alight = alightStationId == null || alightStationId.isBlank() ? null : positive(alightStationId, "alightStationId", errors);
+        Long trainAlight = trainAlightStationId == null || trainAlightStationId.isBlank() ? null
+                : positive(trainAlightStationId, "trainAlightStationId", errors);
         DirectionCode direction = null;
         if (directionCode != null && !directionCode.isBlank()) {
             try {
@@ -46,7 +58,7 @@ public record ArrivalQuery(long lineId, Long nextStationId, DirectionCode direct
             if (size < 1 || size > MAX_LIMIT) errors.put("limit", "limit는 1~" + MAX_LIMIT + "이어야 합니다.");
         }
         if (!errors.isEmpty()) throw new BusinessException(ErrorCode.VALIDATION_ERROR, errors);
-        return new ArrivalQuery(line, next, direction, size, alight);
+        return new ArrivalQuery(line, next, direction, size, alight, trainAlight);
     }
 
     private static Long positive(String raw, String field, Map<String, String> errors) {

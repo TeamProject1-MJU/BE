@@ -52,6 +52,12 @@ public final class SeoulSubwayIds {
      * such junction in the seed.
      */
     static final Set<String> BRANCH_FILTER_LINES = Set.of("5");
+    /**
+     * Lines whose short-turn rule is on (#174): with the first train's alighting station, trains ending before it are
+     * dropped. Lines with regular short turns in the bundled timetable: 3호선 구파발·수서, 4호선 사당, 5호선 강동·상일동,
+     * 6호선 봉화산, 7호선 도봉산. Not 1호선 (destinations against the direction seen), 2호선 (circular), 8호선.
+     */
+    static final Set<String> SHORT_TURN_LINES = Set.of("3", "4", "5", "6", "7");
 
     private static final Map<String, DirectionCode> UPDN = Map.of("상행", DirectionCode.UP, "하행", DirectionCode.DOWN,
             "내선", DirectionCode.INNER, "외선", DirectionCode.OUTER);

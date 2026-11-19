@@ -151,19 +151,32 @@ public class ArrivalService {
     }
 
     /**
-     * Destination rules (#174): with alightStationId on a {@link SeoulSubwayIds#BRANCH_FILTER_LINES} line, trains bound
-     * for the other branch past the junction are dropped. Needs nextStationId for the riding direction; anything that
-     * cannot be told (no such node on the line, not ahead, loop, circular) keeps every train.
+     * Destination rules (#174). With trainAlightStationId on a {@link SeoulSubwayIds#SHORT_TURN_LINES} line: trains ending
+     * at the boarding station or before it are dropped, and on a {@link SeoulSubwayIds#BRANCH_FILTER_LINES} line also
+     * trains bound for the other branch. Otherwise, with alightStationId on a branch line, the branch rule alone. Needs
+     * nextStationId for the riding direction; anything that cannot be told (no such node on the line, not ahead, loop,
+     * circular) keeps every train.
      */
     private Predicate<Arrival> destination(ArrivalStationRepository.Node node, ArrivalQuery query) {
         Predicate<Arrival> keepAll = arrival -> true;
-        if (query.nextStationId() == null || query.alightStationId() == null) return keepAll;
-        if (!SeoulSubwayIds.BRANCH_FILTER_LINES.contains(node.lineCode())) return keepAll;
+        if (query.nextStationId() == null || (query.alightStationId() == null && query.trainAlightStationId() == null)) return keepAll;
+        String line = node.lineCode();
+        boolean branchLine = SeoulSubwayIds.BRANCH_FILTER_LINES.contains(line);
+        boolean shortTurnLine = SeoulSubwayIds.SHORT_TURN_LINES.contains(line);
+        if (!branchLine && !shortTurnLine) return keepAll;
         Optional<ArrivalStationRepository.Node> next = stations.node(query.nextStationId(), query.lineId());
-        Optional<ArrivalStationRepository.Node> alight = stations.node(query.alightStationId(), query.lineId());
         Optional<DestinationFilter> filter = lineFilters.computeIfAbsent(query.lineId(), id -> stations.lineGraph(id).map(DestinationFilter::new));
-        if (next.isEmpty() || alight.isEmpty() || filter == null || filter.isEmpty()) return keepAll;
-        return filter.get().branch(node.id(), next.get().id(), alight.get().id()).orElse(keepAll);
+        if (next.isEmpty() || filter == null || filter.isEmpty()) return keepAll;
+        if (shortTurnLine && query.trainAlightStationId() != null) {
+            Optional<Predicate<Arrival>> rules = stations.node(query.trainAlightStationId(), query.lineId())
+                    .flatMap(alight -> filter.get().rules(node.id(), next.get().id(), alight.id(), branchLine, true));
+            if (rules.isPresent()) return rules.get();
+        }
+        if (branchLine && query.alightStationId() != null) {
+            return stations.node(query.alightStationId(), query.lineId())
+                    .flatMap(alight -> filter.get().branch(node.id(), next.get().id(), alight.id())).orElse(keepAll);
+        }
+        return keepAll;
     }
 
     /**
