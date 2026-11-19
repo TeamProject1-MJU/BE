@@ -111,6 +111,41 @@ class ChatRunRecommendationToolTest extends ChatToolsTestBase {
     }
 
     @Test
+    void aSummaryWithoutStructuredArgumentsRunsUnfilteredAndTheResultShowsNoAppliedConstraints() {
+        created(response(AppliedConstraints.none(), List.of(result("TIME", 3, "종로3가")), null));
+
+        JsonNode out = run("run_recommendation", "{\"conditionText\":\"환승 1번 이하, 40분 안쪽\"}");
+
+        assertThat(sent().filter()).isNull();
+        assertThat(out.get("ok").asBoolean()).isTrue();
+        // the model gets an explicit empty appliedConstraints, not a missing field, so it can tell that nothing was applied
+        JsonNode applied = out.get("appliedConstraints");
+        assertThat(applied.isObject()).isTrue();
+        assertThat(applied.size()).isZero();
+    }
+
+    @Test
+    void theAppliedConstraintsOfTheResultAreOnlyTheOnesTheRunReportsNotTheSummary() {
+        created(response(new AppliedConstraints(40, null, null, List.of(), List.of()), List.of(result("TIME", 3, "종로3가")), null));
+
+        JsonNode out = run("run_recommendation", "{\"conditionText\":\"환승 1번 이하, 40분 안쪽\",\"maxMinutes\":40}");
+
+        JsonNode applied = out.get("appliedConstraints");
+        assertThat(applied.get("maxMinutes").asInt()).isEqualTo(40);
+        assertThat(applied.has("maxTransfers")).isFalse();
+        assertThat(out.toString()).doesNotContain("환승 1번 이하");
+    }
+
+    @Test
+    void thePromptTellsTheModelToStateOnlyAppliedConstraintsAndToSayWhenNoneWereApplied() throws Exception {
+        String prompt;
+        try (var in = getClass().getClassLoader().getResourceAsStream("ai/prompt/chat.txt")) {
+            prompt = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        assertThat(prompt).contains("appliedConstraints에 있는 것만", "적용됐다고 말하지 않는다", "조건 없이 추천했다고 알리고");
+    }
+
+    @Test
     void aBlankOrMissingSummaryIsNull() {
         created(response(AppliedConstraints.none(), List.of(result("TIME", 3, "종로3가")), null));
         run("run_recommendation", "{\"conditionText\":\"   \"}");
