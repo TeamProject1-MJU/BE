@@ -72,6 +72,9 @@ public final class TrainTimetable {
             return k >= 0 ? series.latestDepartureUpTo[k] : -1;
         }
 
+        /** Number of rides on the edge that day. */
+        public int size() { return series.depart.length; }
+
         public int departSec(int index) { return series.depart[index]; }
         public int arriveSec(int index) { return series.arrive[index]; }
         public Departure departure(int index) { return series.at(index); }
