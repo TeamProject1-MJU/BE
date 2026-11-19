@@ -61,7 +61,7 @@ public record RouteSearchResponse(
             @Schema(example = "보통", types = {"string", "null"}) String levelLabel) {}
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
-    @Schema(name = "RouteStepData", requiredProperties = {"type", "guidance", "durationSec", "distanceM", "line", "direction", "directionCode", "stops", "path", "stations"})
+    @Schema(name = "RouteStepData", requiredProperties = {"type", "guidance", "durationSec", "distanceM", "line", "direction", "directionCode", "stops", "path", "stations", "trainAlightStationId"})
     public record Step(
             @Schema(description = "WALKING 또는 SUBWAY", example = "SUBWAY") String type,
             @Schema(example = "2호선 탑승, 4개 역 이동 후 사당 하차") String guidance,
@@ -72,7 +72,15 @@ public record RouteSearchResponse(
             @Schema(description = "SUBWAY 승차 방향(간선으로 계산). WALKING은 null", example = "INNER", types = {"string", "null"}) DirectionCode directionCode,
             @Schema(description = "SUBWAY: 승차역부터 하차역까지. WALKING: 빈 배열") List<Stop> stops,
             @Schema(description = "[경도, 위도] 배열. 없으면 null", types = {"array", "null"}) List<List<Double>> path,
-            @Schema(description = "SUBWAY 정차역별 혼잡도(stops와 같은 순서). WALKING: 빈 배열") List<Station> stations) {}
+            @Schema(description = "SUBWAY 정차역별 혼잡도(stops와 같은 순서). WALKING: 빈 배열") List<Station> stations,
+            @Schema(description = "SUBWAY 구간에서 처음 타는 열차의 하차역 id(#174). 같은 노선에서 열차를 갈아타면 stops의 마지막 역보다 앞일 수 있다. "
+                    + "열차 시각표 경로만 주고, 카카오·고정 비용 경로와 WALKING은 null", example = "211", types = {"integer", "null"}) Long trainAlightStationId) {
+        /** Without the first train's alighting station (Kakao and fixed-cost steps). */
+        public Step(String type, String guidance, int durationSec, int distanceM, Line line, String direction, DirectionCode directionCode,
+                    List<Stop> stops, List<List<Double>> path, List<Station> stations) {
+            this(type, guidance, durationSec, distanceM, line, direction, directionCode, stops, path, stations, null);
+        }
+    }
 
     @Schema(name = "RouteLineData", requiredProperties = {"id", "name", "color"})
     public record Line(@Schema(example = "2") long id, @Schema(example = "2호선") String name, @Schema(example = "#00A84D") String color) {}
