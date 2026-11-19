@@ -295,6 +295,16 @@ public class TimetableRouter implements TimetableRouteFinder {
         return transfer == null ? costs.getDefaultBranchTransferSeconds() : transfer.getSeconds();
     }
 
+    /**
+     * Junctions where a change of train that the step rules would hide gets a RIDE step of its own (#179): the train
+     * ridden so far goes on from the junction on another arm, so the rider has to leave it there (5호선 천호 -> 올림픽공원:
+     * a 하남검단산 train to 강동, then a 마천 train). Only 5호선 강동; other junctions keep their steps until checked.
+     */
+    private static final Set<BranchRules.Junction> SPLIT_ON_TRAIN_CHANGE = Set.of(new BranchRules.Junction("강동", "5"));
+
+    /** Longest dwell looked at when asking whether the train ridden so far leaves a junction on another arm. */
+    private static final int SPLIT_LOOKAHEAD_SECONDS = 600;
+
     private int changeMeters(long node) {
         var transfer = branchTransfers.get(graph.junction(node));
         return transfer == null ? 0 : transfer.getMeters();
@@ -393,7 +403,7 @@ public class TimetableRouter implements TimetableRouteFinder {
         resolved.forEach((origin, state) -> {
             List<Label> moves = new ArrayList<>();
             for (Label cursor = state; cursor.edge() != null; cursor = cursor.link()) moves.add(cursor);
-            TimedRoute latest = build(stayOnBoard(moves, day), service.serviceDate(), origin, destinationStationId);
+            TimedRoute latest = build(stayOnBoard(moves, day), day, service.serviceDate(), origin, destinationStationId);
             // The backward search fixes when to leave; from then on the member takes the earliest way there
             // (장암 -> 모란: an earlier 5호선 and 8호선 connection). Only when it needs no more transfers: one minute is not
             // worth two extra changes (강남 -> 홍대입구 at 22:00 stays on 2호선).
@@ -602,7 +612,7 @@ public class TimetableRouter implements TimetableRouteFinder {
                 if (end == null) return Optional.empty();
                 List<Label> moves = new ArrayList<>();
                 for (Label cursor = end; cursor.edge() != null; cursor = cursor.link()) moves.add(0, cursor);
-                return Optional.of(build(stayOnBoard(moves, search.day()), search.serviceDate(), originStationId, stationId));
+                return Optional.of(build(stayOnBoard(moves, search.day()), search.day(), search.serviceDate(), originStationId, stationId));
             }
         };
     }
@@ -633,7 +643,7 @@ public class TimetableRouter implements TimetableRouteFinder {
      * Builds the route from its moves in travel order. Each move is one edge with its train (RIDE) or walk (TRANSFER);
      * the label's own node is not used here, only its edge and ride.
      */
-    private TimedRoute build(List<Label> moves, LocalDate serviceDate, long fromStationId, long toStationId) {
+    private TimedRoute build(List<Label> moves, DayType day, LocalDate serviceDate, long fromStationId, long toStationId) {
         Instant midnight = serviceDate.atStartOfDay(ZONE).toInstant();
         List<TimedLeg> legs = new ArrayList<>();
         List<PathStep> steps = new ArrayList<>();
@@ -705,6 +715,12 @@ public class TimetableRouter implements TimetableRouteFinder {
                 PathStop last = stops.remove(stops.size() - 1);
                 stops.add(new PathStop(last.stationId(), last.stationName(), last.latitude(), last.longitude(), last.stationLineId(),
                         last.lineId(), edge.direction(), last.offsetSec()));
+            } else if (newTrain && stepFirst != null && previousEdge.type() == StepType.RIDE
+                    && leavesOnAnotherArm(previousRide, move.key(), edge.fromNodeId(), day)) {
+                // Another train at a junction where the one ridden so far goes on along another arm (#179): a new RIDE
+                // step without a transfer, as for the change of direction above. Times and transfer counts do not change.
+                cursor = closeRide(steps, stepFirst, stepLast, stepEdges, stepMeters, previousRide.arriveSec(), cursor);
+                stepFirst = null;
             }
             if (newTrain) {
                 if (legFirst != null) legs.add(leg(legFirst, legLast, legFirstEdge, legLastEdge, legEdges, legWalk, legWait, midnight));
@@ -738,6 +754,26 @@ public class TimetableRouter implements TimetableRouteFinder {
         RoutePath path = new RoutePath(steps, stops, arriveSec - boardSec, transfers, rideDistance, fromStationId, toStationId);
         Instant boardAt = midnight.plusSeconds(boardSec);
         return new TimedRoute(path, legs, boardAt.minusSeconds(accessSeconds), boardAt, midnight.plusSeconds(arriveSec));
+    }
+
+    /**
+     * True when {@code previous} (the train ridden into {@code junctionNode}) leaves that junction, within
+     * {@link #SPLIT_LOOKAHEAD_SECONDS}, on a RIDE edge other than {@code takenEdge}, at a {@link #SPLIT_ON_TRAIN_CHANGE}
+     * junction. A train whose run ends there (2호선 성수 and 신도림, where the timetable starts a new run) does not.
+     */
+    private boolean leavesOnAnotherArm(Departure previous, int takenEdge, long junctionNode, DayType day) {
+        BranchRules.Junction junction = graph.junction(junctionNode);
+        if (junction == null || !SPLIT_ON_TRAIN_CHANGE.contains(junction)) return false;
+        TrainTimetable.Rides[] dayRides = rides[day.ordinal()];
+        for (int e : outgoing[nodeIndex.get(junctionNode)]) {
+            TrainTimetable.Rides edgeRides = dayRides[e];
+            if (e == takenEdge || edges[e].type() != StepType.RIDE || edgeRides == null) continue;
+            for (int i = edgeRides.next(previous.arriveSec()); i >= 0 && i < edgeRides.size()
+                    && edgeRides.departSec(i) <= previous.arriveSec() + SPLIT_LOOKAHEAD_SECONDS; i++) {
+                if (edgeRides.departure(i).train().equals(previous.train())) return true;
+            }
+        }
+        return false;
     }
 
     private static Departure nextRide(List<Label> moves, int after) {
