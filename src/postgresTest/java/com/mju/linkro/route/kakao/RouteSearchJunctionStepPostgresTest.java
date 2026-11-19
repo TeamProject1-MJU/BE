@@ -1,9 +1,12 @@
 package com.mju.linkro.route.kakao;
 
+import com.mju.linkro.subway.api.DayType;
+import com.mju.linkro.subway.timetable.TimetableClock;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -34,6 +37,8 @@ class RouteSearchJunctionStepPostgresTest extends RouteSearchPostgresSupport {
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
     }
+
+    @Autowired TimetableClock timetableClock;
 
     /** Steps as "S first->last/first train left at" (SUBWAY) or "W" (WALKING). */
     List<String> steps(JsonNode route) {
@@ -93,8 +98,11 @@ class RouteSearchJunctionStepPostgresTest extends RouteSearchPostgresSupport {
 
     @Test void arrivalModeSplitsTheSameWay() throws Exception {
         // The latest departure arriving at 마천 by 17:30 on a Wednesday: 5125 (하남검단산행) to 강동, 5643 (마천행) on.
+        // arriveAt must be after now, so a coming Wednesday that the timetable treats as a weekday (holidays run the
+        // Sunday timetable, e.g. 2027-05-05) is used.
         java.time.LocalDate wednesday = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul")).plusDays(1)
                 .with(java.time.temporal.TemporalAdjusters.nextOrSame(java.time.DayOfWeek.WEDNESDAY));
+        while (timetableClock.dayTypeOf(wednesday) != DayType.WEEKDAY) wednesday = wednesday.plusWeeks(1);
         String body = "{\"originStationId\":" + id("천호") + ",\"destinationStationId\":" + id("마천") + ",\"arriveAt\":\"" + wednesday + "T17:30:00+09:00\"}";
         JsonNode data = ok(post("/api/v1/routes/search").contentType(MediaType.APPLICATION_JSON).content(body), member);
         server.verify();
