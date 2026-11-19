@@ -46,6 +46,12 @@ public final class SeoulSubwayIds {
      * leave toward 새절 (operating answer of 2026-11-18, docs/arrivals-86.md). A LOOP request there keeps 상행 only (#164).
      */
     static final String LOOP_ENTRY_QUERY_NAME = "응암순환(상선)";
+    /**
+     * Lines whose branch rule is on (#174): a train whose destination lies on the other branch than the alighting station,
+     * past a junction where the line splits in one direction, is dropped. 5호선 강동 (마천 / 하남검단산) is the only
+     * such junction in the seed.
+     */
+    static final Set<String> BRANCH_FILTER_LINES = Set.of("5");
 
     private static final Map<String, DirectionCode> UPDN = Map.of("상행", DirectionCode.UP, "하행", DirectionCode.DOWN,
             "내선", DirectionCode.INNER, "외선", DirectionCode.OUTER);

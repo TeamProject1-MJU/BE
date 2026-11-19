@@ -53,6 +53,8 @@ public class ArrivalService {
     private final int maxStopsAway;
     private final Clock clock;
     private final ConcurrentHashMap<String, Entry> cache = new ConcurrentHashMap<>();
+    /** Seed graph of each line for the destination rules (#174); the seed does not change while running. */
+    private final ConcurrentHashMap<Long, Optional<DestinationFilter>> lineFilters = new ConcurrentHashMap<>();
 
     @Autowired
     public ArrivalService(ArrivalStationRepository stations, ArrivalStationNames names, SeoulArrivalClient client,
@@ -102,7 +104,7 @@ public class ArrivalService {
         if (answer instanceof Empty empty) return ArrivalResponse.unavailable(Reason.NO_DATA, format(empty.receivedAt()));
         Found found = (Found) answer;
 
-        Predicate<Arrival> direction = direction(queryName, node.get(), query);
+        Predicate<Arrival> direction = direction(queryName, node.get(), query).and(destination(node.get(), query));
         Instant now = clock.instant();
         List<Train> trains = new ArrayList<>();
         for (Arrival arrival : found.arrivals()) {
@@ -146,6 +148,22 @@ public class ArrivalService {
         if (direction == null || direction == DirectionCode.LOOP) return arrival -> true;
         DirectionCode wanted = SeoulSubwayIds.seoulDirection(node.lineCode(), direction);
         return arrival -> wanted == SeoulSubwayIds.direction(arrival.updnLine());
+    }
+
+    /**
+     * Destination rules (#174): with alightStationId on a {@link SeoulSubwayIds#BRANCH_FILTER_LINES} line, trains bound
+     * for the other branch past the junction are dropped. Needs nextStationId for the riding direction; anything that
+     * cannot be told (no such node on the line, not ahead, loop, circular) keeps every train.
+     */
+    private Predicate<Arrival> destination(ArrivalStationRepository.Node node, ArrivalQuery query) {
+        Predicate<Arrival> keepAll = arrival -> true;
+        if (query.nextStationId() == null || query.alightStationId() == null) return keepAll;
+        if (!SeoulSubwayIds.BRANCH_FILTER_LINES.contains(node.lineCode())) return keepAll;
+        Optional<ArrivalStationRepository.Node> next = stations.node(query.nextStationId(), query.lineId());
+        Optional<ArrivalStationRepository.Node> alight = stations.node(query.alightStationId(), query.lineId());
+        Optional<DestinationFilter> filter = lineFilters.computeIfAbsent(query.lineId(), id -> stations.lineGraph(id).map(DestinationFilter::new));
+        if (next.isEmpty() || alight.isEmpty() || filter == null || filter.isEmpty()) return keepAll;
+        return filter.get().branch(node.id(), next.get().id(), alight.get().id()).orElse(keepAll);
     }
 
     /**

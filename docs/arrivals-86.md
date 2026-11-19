@@ -17,10 +17,13 @@
 | `nextStationId` | X(권장) | 같은 노선의 다음 역 id. 그 방향 열차만 |
 | `directionCode` | X | UP/DOWN/INNER/OUTER/LOOP. `nextStationId`로 방향을 정하지 못할 때 쓴다 |
 | `limit` | X | 기본 3, 1~10 |
+| `alightStationId` | X | 첫 승차 구간의 하차역 id(#174). `nextStationId`와 함께 보내면 갈래 규칙(아래 "행선지 규칙")을 적용한다 |
 
 | 상황 | 응답 |
 | --- | --- |
 | `lineId` 없음, id·limit·directionCode 형식 오류 | 400 `VALIDATION_ERROR` |
+| `alightStationId`가 숫자가 아니거나 0 이하 | 400 `VALIDATION_ERROR`, `details.alightStationId` |
+| `alightStationId`가 없는 역, 그 노선에 없는 역, 진행 방향 앞이 아닌 역, 승차역 | 오류 없이 무시(행선지 규칙 없이 지금과 같은 응답) |
 | 없는 `stationId` | 404 `STATION_NOT_FOUND` |
 | 1~8호선이 아닌 노선, 그 역에 없는 노선, 미지원 역 | 200 `available=false`, `reason=UNSUPPORTED_STATION` |
 | 키 없음 | 200 `available=false`, `reason=DISABLED` |
@@ -84,6 +87,11 @@
    - **LOOP**(파라미터든 간선이든)이면 `updnLine`으로 거르지 않는다. 순환 구간은 모두 "하행"이기 때문이다.
    - **둘 다 없으면**: 그 노선의 모든 열차를 돌려준다.
    - **응암(조회 이름 `응암순환(상선)`)**: 응암→새절(DOWN)은 다른 역과 같이 하행만 남긴다(#162). 응암→역촌(LOOP, 간선이든 `directionCode`든)은 **상행만** 남긴다(#164, `SeoulSubwayIds.LOOP_ENTRY_QUERY_NAME`). 다른 역의 LOOP는 그대로 거르지 않는다.
+   - **행선지 규칙 (#174)**: 방향 필터 뒤에 열차 행선지(`bstatnNm`)로 한 번 더 거른다. `nextStationId`가 있어야 진행 방향을 안다.
+     - **갈래 규칙** (`alightStationId`, `SeoulSubwayIds.BRANCH_FILTER_LINES` = 5호선): 승차역에서 하차역까지 가는 길에 같은 방향으로 갈라지는 분기점(같은 방향 RIDE 간선이 둘 이상인 노드, 시드에서는 5호선 강동뿐)이 있고 하차역이 그 뒤에 있으면, 행선지가 분기점 뒤의 다른 갈래(`branch_code`)인 열차를 뺀다. 예: 천호→올림픽공원(마천지선)이면 하남검단산행·상일동행을 빼고, 천호→굽은다리면 마천행을 뺀다. 하차역이 분기점 앞이거나 분기점 자체면 빼지 않는다.
+     - 위치는 `seq` 숫자가 아니라 진행 방향 RIDE 간선을 따라가며 판정한다. 행선지 이름은 `StationNames.normalize`(별칭, 괄호 부기, 끝의 "역" 제거)로 양쪽을 맞춘 뒤 그 노선의 역과 비교한다.
+     - **fail-open**: 행선지를 그 노선의 역으로 못 바꾸면, 하차역이 그 노선에 없거나 진행 방향 앞이 아니면, 승차역 → 다음 역 간선이 없으면, 순환 방향(INNER/OUTER/LOOP)이거나 응암 순환 구간이면 빼지 않는다.
+     - 근거: 5호선 강동 하행에서 마천행과 하남검단산행은 `statnTid`(1005000549)와 `trainLineNm`("길동방면")이 같아 행선지로만 갈래를 구분할 수 있다(2026-11-19 서버 실측).
 3. **남은 시간**: 기준은 현재 KST − `recptnDt`(행의 나이)다. 모든 건에 아래를 적용한다.
    - 나이가 300초를 넘으면 제외한다. `recptnDt`를 읽을 수 없어도 제외한다.
    - `arvlCd` 0·1이면 0이다(`barvlDt`는 보지 않는다).
@@ -198,6 +206,7 @@
   - NO_DATA·UPSTREAM_ERROR·키 없음·미지원 노선·없는 역
   - 캐시 히트·만료·실패 5초, 같은 역 두 노선 1회 호출, 캐시 중 남은 시간 감소, 동시 요청 1회 호출
   - 로그에 키·URL 없음
+- `ArrivalDestinationPostgresTest`(#174, 마이그레이션 시드, 캐시 0초): 5호선 갈래 규칙(천호→강동·올림픽공원·굽은다리·미사, 강동→둔촌동·길동), 미매핑 행선지 유지와 괄호 부기 정규화, 파라미터 없음, 무시되는 하차역(다른 노선·뒤쪽·승차역·없는 id), 다른 노선(4호선)은 빼지 않음, 형식 오류 400
 - `ArrivalApiPostgresTest`(V1~V13 시드)
   - 시드 사실(이름, 2호선 3자리·5~8호선 4자리 코드, 7호선 건대입구→어린이대공원 = UP)
   - 시드 방향과 서울시 상행/하행 비교(1·3~8호선 모두 같음)

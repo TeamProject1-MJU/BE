@@ -39,7 +39,7 @@ public class ArrivalController {
                     @ExampleObject(name = "데이터 없음", value = "{\"success\":true,\"data\":{\"available\":false,\"reason\":\"NO_DATA\",\"receivedAt\":\"2026-11-10T08:00:05+09:00\",\"trains\":[]}}"),
                     @ExampleObject(name = "외부 오류", value = "{\"success\":true,\"data\":{\"available\":false,\"reason\":\"UPSTREAM_ERROR\",\"receivedAt\":null,\"trains\":[]}}"),
                     @ExampleObject(name = "미지원 노선", value = "{\"success\":true,\"data\":{\"available\":false,\"reason\":\"UNSUPPORTED_STATION\",\"receivedAt\":null,\"trains\":[]}}")}))
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR: lineId 없음, id가 1 이상의 정수가 아님, directionCode 값 오류, limit 1~10 밖",
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "VALIDATION_ERROR: lineId 없음, id(nextStationId·alightStationId 포함)가 1 이상의 정수가 아님, directionCode 값 오류, limit 1~10 밖",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class),
                     examples = @ExampleObject(value = "{\"success\":false,\"error\":{\"code\":\"VALIDATION_ERROR\",\"message\":\"요청 값이 올바르지 않습니다.\",\"details\":{\"lineId\":\"lineId가 필요합니다.\"}}}")))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "STATION_NOT_FOUND",
@@ -50,7 +50,9 @@ public class ArrivalController {
             @Parameter(description = "선택(권장). 같은 노선의 다음 역 id. 그 방향 열차만", example = "204") @RequestParam(required = false) String nextStationId,
             @Parameter(description = "선택. nextStationId가 없을 때 방향(경로 응답과 같은 기준, 서울시 상행 UP·하행 DOWN). LOOP는 방향을 거르지 않음",
                     schema = @Schema(allowableValues = {"UP", "DOWN", "INNER", "OUTER", "LOOP"})) @RequestParam(required = false) String directionCode,
-            @Parameter(description = "기본 3, 최대 10", example = "3") @RequestParam(required = false) String limit) {
-        return ApiResponse.success(arrivals.arrivals(stationId, ArrivalQuery.of(lineId, nextStationId, directionCode, limit)));
+            @Parameter(description = "기본 3, 최대 10", example = "3") @RequestParam(required = false) String limit,
+            @Parameter(description = "선택. 첫 승차 구간의 하차역 id(#174). nextStationId와 함께 보내면 5호선 강동 분기에서 하차역과 다른 갈래로 가는 열차를 뺍니다. "
+                    + "그 노선에 없거나 진행 방향 앞이 아닌 역은 무시합니다", example = "2556") @RequestParam(required = false) String alightStationId) {
+        return ApiResponse.success(arrivals.arrivals(stationId, ArrivalQuery.of(lineId, nextStationId, directionCode, limit, alightStationId)));
     }
 }
