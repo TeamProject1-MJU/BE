@@ -76,6 +76,60 @@ class ChatRunRecommendationToolTest extends ChatToolsTestBase {
     }
 
     @Test
+    void strictModeNullsForEveryUnsetArgumentRunTheSameUnfilteredRun() {
+        created(response(AppliedConstraints.none(), List.of(result("TIME", 3, "종로3가")), null));
+
+        JsonNode out = run("run_recommendation", "{\"conditionText\":null,\"maxMinutes\":null,\"maxTransfers\":null,"
+                + "\"maxFareWon\":null,\"excludeStations\":null,\"memberLimits\":null}");
+
+        assertThat(out.get("ok").asBoolean()).isTrue();
+        assertThat(sent().filter()).isNull();
+        assertThat(sentSummary()).isNull();
+    }
+
+    @Test
+    void zeroTransfersWithTheOtherArgumentsNullIsTheRealConditionNoTransfers() {
+        created(response(new AppliedConstraints(null, 0, null, List.of(), List.of()), List.of(result("TIME", 3, "종로3가")), null));
+
+        JsonNode out = run("run_recommendation", "{\"conditionText\":\"환승 없이\",\"maxMinutes\":null,\"maxTransfers\":0,"
+                + "\"maxFareWon\":null,\"excludeStations\":null,\"memberLimits\":null}");
+
+        assertThat(sent().filter().maxTransfers()).isZero();
+        assertThat(sent().filter().maxMinutes()).isNull();
+        assertThat(out.get("appliedConstraints").get("maxTransfers").asInt()).isZero();
+        assertThat(sentSummary()).isEqualTo("환승 없이");
+    }
+
+    /** The sentinel the model used to send for "not given" is a real value, not "unset": it stays rejected. */
+    @Test
+    void zeroForMaxMinutesOrMaxFareWonIsStillOutOfRangeNotUnset() {
+        for (String args : List.of("{\"maxMinutes\":0}", "{\"maxFareWon\":0}")) {
+            assertThat(run("run_recommendation", args).get("code").asString()).as(args).isEqualTo("VALIDATION_ERROR");
+        }
+    }
+
+    @Test
+    void everyToolSchemaIsStrictCompatibleAndOptionalArgumentsAreNullable() {
+        for (var spec : toolbox.specs()) {
+            @SuppressWarnings("unchecked")
+            var properties = (java.util.Map<String, Object>) spec.parameters().get("properties");
+            assertThat(new java.util.HashSet<Object>((List<?>) spec.parameters().get("required"))).as(spec.name()).isEqualTo(new java.util.HashSet<Object>(properties.keySet()));
+            assertThat(spec.parameters().get("additionalProperties")).as(spec.name()).isEqualTo(false);
+        }
+        var run = toolbox.specs().stream().filter(spec -> spec.name().equals("run_recommendation")).findFirst().orElseThrow();
+        @SuppressWarnings("unchecked")
+        var properties = (java.util.Map<String, java.util.Map<String, Object>>) run.parameters().get("properties");
+        assertThat(properties.keySet()).containsExactlyInAnyOrder("conditionText", "maxMinutes", "maxTransfers", "maxFareWon",
+                "excludeStations", "memberLimits");
+        assertThat(properties.get("maxTransfers").get("type")).isEqualTo(List.of("integer", "null"));
+        assertThat(properties.get("maxMinutes").get("type")).isEqualTo(List.of("integer", "null"));
+        assertThat(properties.get("conditionText").get("type")).isEqualTo(List.of("string", "null"));
+        assertThat(properties.get("excludeStations").get("type")).isEqualTo(List.of("array", "null"));
+        assertThat(properties.get("memberLimits").get("type")).isEqualTo(List.of("array", "null"));
+        assertThat(properties.get("maxTransfers").get("description").toString()).contains("0은 환승 없이");
+    }
+
+    @Test
     void theFilterIsBuiltFromTheArgumentsWithStationNamesAndNicknamesResolvedOnTheServer() {
         created(response(new AppliedConstraints(40, 1, 2000, List.of(2L), List.of(new MemberLimit(minsu, 30))),
                 List.of(result("TIME", 3, "종로3가")), null));

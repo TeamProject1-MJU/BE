@@ -42,7 +42,7 @@ final class ChatToolSpecs {
                         + " 약속이 없거나 지났으면 get_route를 쓴다. 여러 멤버를 비교하려면 compare_members_travel을 쓴다."
                         + " 결과의 leaveAtPassed가 true면 leaveAt은 이미 지난 시각이니 그 시각에 나서라고 하지 말고, get_route로 지금 출발 기준을 안내한다." + FAILURES,
                         Map.of("destinationStation", string("약속 장소 역 이름. " + STATION_NAME),
-                                "member", string("나서는 시각을 알고 싶은 멤버 닉네임. 생략하면 질문한 사람.")),
+                                "member", string("나서는 시각을 알고 싶은 멤버 닉네임. 말하지 않았으면 null(질문한 사람).")),
                         List.of("destinationStation")),
                 tool(GET_ROUTE, "출발역에서 도착역까지 가는 경로(소요 시간, 요금, 환승, 단계 요약)를 알려준다."
                         + " '어떻게 가?', '얼마나 걸려?', '요금이 얼마야?'에 쓴다. 약속이 있는 방은 약속에 맞춘 시각표 경로다."
@@ -52,7 +52,7 @@ final class ChatToolSpecs {
                         + " 시간은 셋으로 나뉜다. travelMinutes는 타고 가는 시간, waitMinutes는 출발 전 첫 열차를 기다리는 시간(없으면 필드가 오지 않음),"
                         + " totalWithWaitMinutes는 지금부터 도착까지 걸리는 시간(없으면 필드가 오지 않음)이다. '지금부터 얼마나 걸려?'는 totalWithWaitMinutes,"
                         + " '타고 가는 데 얼마나?'는 travelMinutes로 답한다." + FAILURES,
-                        Map.of("originStation", string("출발역 이름. 생략하면 질문한 사람의 출발역. " + STATION_NAME),
+                        Map.of("originStation", string("출발역 이름. 말하지 않았으면 null(질문한 사람의 출발역). " + STATION_NAME),
                                 "destinationStation", string("도착역 이름. " + STATION_NAME)),
                         List.of("destinationStation")),
                 tool(GET_CONGESTION, "특정 역·노선·방향·시각의 혼잡도를 알려준다(통계 기반 예측값). '그 시간에 2호선 강남역 사람 많아?'에 쓴다."
@@ -60,7 +60,7 @@ final class ChatToolSpecs {
                         Map.of("station", string(STATION_NAME), "line", string("노선 이름(예: 2호선)."),
                                 "direction", enumeration("열차 방향.", "UP", "DOWN", "INNER", "OUTER", "LOOP"),
                                 "time", string("통과 시각 HH:mm (한국 시간)."),
-                                "date", string("통과 날짜 yyyy-MM-dd. 생략하면 오늘.")),
+                                "date", string("통과 날짜 yyyy-MM-dd. 말하지 않았으면 null(오늘).")),
                         List.of("station", "line", "direction", "time")),
                 tool(SEARCH_STATIONS, "역 이름 일부로 일치하는 역을 최대 5개 찾는다. 이름이 불확실하거나 같은 이름의 역이 여럿(code STATION_AMBIGUOUS)일 때"
                         + " 어떤 역인지 확인하려고 쓴다. 경로·혼잡도는 알려주지 않는다.",
@@ -70,7 +70,7 @@ final class ChatToolSpecs {
                         + " get_departure_plan을 쓴다. 출발역이 없는 멤버는 따로 알려준다. totalMinutes는 타고 가는 시간(출발 전 대기 제외)이다." + FAILURES,
                         Map.of("destinationStation", string("도착역 이름. " + STATION_NAME)), List.of("destinationStation")),
                 tool(RUN_RECOMMENDATION, "사용자가 조건을 말하며 중간역 추천을 해 달라고 할 때 추천을 새로 실행하고 이 방의 추천 기록에 저장한다(앱의 추천받기와 같다)."
-                        + " '환승 1번 이하로 40분 안쪽인 역 추천해줘', '그냥 추천해줘'에 쓴다. 조건이 없으면 인자 없이 부른다. 사용자가 조건을 말했으면 그 요약을 conditionText에도 적는다."
+                        + " '환승 1번 이하로 40분 안쪽인 역 추천해줘', '그냥 추천해줘'에 쓴다. 조건을 말하지 않은 인자는 null로 보낸다(0, 빈 문자열, 빈 배열을 넣지 않는다). 조건이 하나도 없으면 인자를 모두 null로 부른다. 사용자가 조건을 말했으면 그 요약을 conditionText에도 적는다."
                         + " 한 질문에 한 번만 실행되고, 두 번째 호출은 code가 ALREADY_RUN이다. 이미 받은 추천 결과를 알려 달라는 질문에는 쓰지 않고 get_latest_recommendation을 쓴다."
                         + " 인자가 범위를 벗어나면(code VALIDATION_ERROR) 실행하지 않으니 사용자에게 값을 다시 묻는다."
                         + " hasResults가 false면 조건에 맞는 역이 없다는 뜻이니 조건을 풀어 보자고 말로 안내한다."
@@ -79,25 +79,44 @@ final class ChatToolSpecs {
                         + " APPOINTMENT_PASSED 약속 시각이 지남, NO_SERVICE 약속 시각 전에 도착하는 열차가 없음, RECOMMENDATION_IN_PROGRESS 이미 계산 중)."
                         + " 이유를 말로 알리고 추측하지 않는다.",
                         Map.of("conditionText", string("사용자가 말한 조건을 한국어로 짧게 요약한 문구(예: '환승 1번 이하, 40분 안쪽')."
-                                        + " 앱의 추천 결과 화면에 표시만 되고 계산에는 쓰이지 않는다. 조건은 아래 인자로만 적용된다. 조건을 말하지 않았으면 생략한다. 500자 이하."),
-                                "maxMinutes", integer("모든 참여자의 이동 시간 상한(분), 1~300."),
-                                "maxTransfers", integer("환승 횟수 상한, 0~10."),
-                                "maxFareWon", integer("요금 상한(원), 1~100000."),
-                                "excludeStations", Map.of("type", "array", "description", "추천에서 뺄 역 이름 목록. " + STATION_NAME, "items", Map.of("type", "string")),
-                                "memberLimits", Map.of("type", "array", "description", "특정 멤버만의 이동 시간 상한 목록.",
+                                        + " 앱의 추천 결과 화면에 표시만 되고 계산에는 쓰이지 않는다. 조건은 아래 인자로만 적용된다. 조건을 말하지 않았으면 null. 500자 이하."),
+                                "maxMinutes", integer("모든 참여자의 이동 시간 상한(분), 1~300. 말하지 않았으면 null."),
+                                "maxTransfers", integer("환승 횟수 상한, 0~10. 0은 환승 없이라는 뜻이다. 말하지 않았으면 null."),
+                                "maxFareWon", integer("요금 상한(원), 1~100000. 말하지 않았으면 null."),
+                                "excludeStations", Map.of("type", "array", "description", "추천에서 뺄 역 이름 목록. 말하지 않았으면 null. " + STATION_NAME, "items", Map.of("type", "string")),
+                                "memberLimits", Map.of("type", "array", "description", "특정 멤버만의 이동 시간 상한 목록. 말하지 않았으면 null.",
                                         "items", Map.of("type", "object",
                                                 "properties", Map.of("nickname", string("멤버 닉네임."), "maxMinutes", integer("그 멤버의 이동 시간 상한(분), 1~300.")),
                                                 "required", List.of("nickname", "maxMinutes"), "additionalProperties", false))),
                         List.of()));
     }
 
+    /**
+     * Strict-mode schema: every property is listed in {@code required}, and an optional one (not in {@code required}
+     * here) is nullable. The model then says "not given" with null instead of inventing 0, "" or [] (#168), which
+     * would be read as a real value (maxTransfers 0 is the real condition "환승 없이").
+     */
     private static ChatToolSpec tool(String name, String description, Map<String, Object> properties, List<String> required) {
+        var allProperties = new LinkedHashMap<String, Object>();
+        properties.forEach((key, schema) -> allProperties.put(key, required.contains(key) ? schema : nullable(schema)));
         var parameters = new LinkedHashMap<String, Object>();
         parameters.put("type", "object");
-        parameters.put("properties", properties);
-        parameters.put("required", required);
+        parameters.put("properties", allProperties);
+        parameters.put("required", List.copyOf(allProperties.keySet()));
         parameters.put("additionalProperties", false);
         return new ChatToolSpec(name, description, parameters);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> nullable(Object schema) {
+        var copy = new LinkedHashMap<String, Object>((Map<String, Object>) schema);
+        copy.put("type", List.of((String) copy.get("type"), "null"));
+        if (copy.get("enum") instanceof List<?> values) {
+            var withNull = new java.util.ArrayList<Object>(values);
+            withNull.add(null);
+            copy.put("enum", withNull);
+        }
+        return copy;
     }
 
     private static Map<String, Object> string(String description) {

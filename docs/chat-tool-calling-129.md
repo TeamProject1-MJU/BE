@@ -36,7 +36,7 @@
 
 ## 추천 실행 도구 `run_recommendation` (#168)
 
-- **용도**: 사용자가 조건을 말하며 추천을 해 달라고 할 때. 이미 받은 추천을 묻는 질문은 `get_latest_recommendation`이다. 조건이 없으면 인자 없이 부른다(filter 없는 실행).
+- **용도**: 사용자가 조건을 말하며 추천을 해 달라고 할 때. 이미 받은 추천을 묻는 질문은 `get_latest_recommendation`이다. 조건을 말하지 않은 인자는 `null`로 보낸다(조건이 없으면 모두 `null`이고 filter 없는 실행). 스키마는 strict라 모든 인자가 `required`이고 선택 인자는 `null` 허용이다. 모델이 "없음"을 0·빈 문자열·빈 배열로 채우면 실제 값으로 읽혀(`maxFareWon:0`은 범위 밖) 실행이 거절되므로 null을 쓰게 한다. `maxTransfers:0`은 "환승 없이"라는 실제 조건이다.
 - **`conditionText`는 표시용 요약**이다. 모델이 사용자가 말한 조건을 짧게 요약해(예: "환승 1번 이하, 40분 안쪽") 넣으면 그 실행의 `conditionText`로 저장돼 8.3(·8.2)에 그대로 보인다(8.1의 `conditionText`와 같은 길이 규칙: 앞뒤 공백 제거, 공백뿐이면 null, 500자 초과는 `VALIDATION_ERROR`로 실행 안 함, 문자열이 아니어도 `VALIDATION_ERROR`). **해석하지 않는다.** `RecommendationService.create(userId, roomId, body, displayText)`의 `displayText`로만 들어가고 `body.conditionText`는 항상 비어 있어서 `ConstraintResolver`가 조건 해석 AI(`interpretCondition`)를 부르지 않는다. 조건은 아래 구조화 인자로만 적용되므로 모델은 조건을 `maxMinutes` 같은 인자로도 넣어야 하고, 요약만 쓰면 `appliedConstraints`는 비어 있다. 요약이 없으면 `conditionText`는 null이다. OpenAI 호출 수는 그대로다(모델 호출 + 설명 1번).
 - **입력은 8.1 `filter`와 같은 항목·범위**다: `maxMinutes` 1~300, `maxTransfers` 0~10, `maxFareWon` 1~100000, 제외할 역, 멤버별 시간 상한. 다만 AI는 역·사용자 id를 모르므로 `excludeStations`는 **역 이름**(다른 도구와 같은 이름 규칙, 끝의 '역' 무시), `memberLimits`는 **닉네임**으로 받고 서버가 id로 바꾼다. 범위·형식은 `RecommendationRequest.validate`로 검사하고, 틀리면 실행하지 않고 `VALIDATION_ERROR`(AI가 사용자에게 다시 묻는다). 정수가 아닌 값(`"40"`, `40.5`)도 `VALIDATION_ERROR`다.
 - **한 질문에 최대 1회**: 검증을 통과해 8.1을 부르는 순간부터 그 질문의 도구 묶음에서 다시 부르면 `ALREADY_RUN`이다(8.1이 거절한 뒤에도). 입력 검증에 걸린 호출은 횟수를 쓰지 않는다.

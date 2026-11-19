@@ -266,6 +266,7 @@ class OpenAiClientTest {
                 .andExpect(jsonPath("$.tools.length()").value(1))
                 .andExpect(jsonPath("$.tools[0].type").value("function"))
                 .andExpect(jsonPath("$.tools[0].name").value("get_room_info"))
+                .andExpect(jsonPath("$.tools[0].strict").value(true))
                 .andExpect(jsonPath("$.store").value(false))
                 .andExpect(jsonPath("$.include[0]").value("reasoning.encrypted_content"))
                 .andExpect(jsonPath("$.previous_response_id").doesNotExist())
