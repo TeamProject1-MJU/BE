@@ -207,9 +207,17 @@ class RouteSearchArrivalTimetableTest {
     }
 
     @Test
-    void aroundMidnightTheLatestDepartureHasLeftIsArrivalUnreachable() {
+    void aroundMidnightTheLeftLastTrainWithSlackOverThirtyMinutesIsNoServiceTime() {
         // (c-1) 23:50, arriveAt 00:10 (the same service day, 24:10): W3 (23:33 -> 23:37) has left, W4 arrives at 00:50.
-        assertThat(errorAt(seoul("2026-11-12T23:50:00"), "2026-11-13T00:10:00+09:00")).isEqualTo(ErrorCode.ARRIVAL_UNREACHABLE);
+        // W3 arrives 33 minutes before arriveAt, over the 30-minute slack limit (#170): the trains of that time have ended,
+        // which is checked before "the latest departure has left", so NO_SERVICE_TIME rather than ARRIVAL_UNREACHABLE.
+        assertThat(errorAt(seoul("2026-11-12T23:50:00"), "2026-11-13T00:10:00+09:00")).isEqualTo(ErrorCode.NO_SERVICE_TIME);
+    }
+
+    @Test
+    void aroundMidnightTheLeftLatestDepartureWithinTheSlackLimitIsArrivalUnreachable() {
+        // 23:50, arriveAt 00:05: W3 (23:33 -> 23:37) has left and arrives 28 minutes before arriveAt, within the limit.
+        assertThat(errorAt(seoul("2026-11-12T23:50:00"), "2026-11-13T00:05:00+09:00")).isEqualTo(ErrorCode.ARRIVAL_UNREACHABLE);
     }
 
     @Test
@@ -221,5 +229,36 @@ class RouteSearchArrivalTimetableTest {
         assertThat(summary.slackSeconds()).isEqualTo(180);
         // One second later W2 has left.
         assertThat(errorAt(seoul("2026-11-12T14:03:01"), "2026-11-12T14:10:00+09:00")).isEqualTo(ErrorCode.ARRIVAL_UNREACHABLE);
+    }
+
+    // ---- #170: slack over linkro.route.arrival-max-slack-minutes (default 30) is NO_SERVICE_TIME ----
+
+    @Test
+    void aSlackOfExactlyThirtyMinutesStillAnswers() {
+        // W2 arrives at 14:07; arriveAt 14:37 is exactly 1800 s later.
+        var summary = search(fixture(NOW, null, ROUTER), null, false, "2026-11-12T14:37:00+09:00").routes().get(0).summary();
+        assertThat(summary.arrivalAt()).isEqualTo("2026-11-12T14:07:00+09:00");
+        assertThat(summary.slackSeconds()).isEqualTo(30 * 60);
+    }
+
+    @Test
+    void oneSecondOverThirtyMinutesIsNoServiceTime(CapturedOutput output) {
+        // Trains still arrive in the 60 minutes before 14:37:01 (W2 at 14:07), so only the slack rule refuses it.
+        assertThat(ROUTER.noTrainArrivesBefore(seoul("2026-11-12T14:37:01"))).isFalse();
+        assertThat(errorAt(NOW, "2026-11-12T14:37:01+09:00")).isEqualTo(ErrorCode.NO_SERVICE_TIME);
+        assertThat(output.getAll()).contains("Route search 31 -> 33: the route arriving by the requested time arrives 30 min early (limit 30 min): NO_SERVICE_TIME");
+    }
+
+    @Test
+    void roomAppointmentModeKeepsAnswersWithALargeSlack() {
+        // The room's appointment is 15:00; its latest route (W2) arrives at 14:07, 53 minutes before. Room appointment mode
+        // (arriveByRoute, as recommendations) is not limited by the arrival-mode slack rule.
+        var f = fixture(NOW, seoul("2026-11-12T15:00:00"), ROUTER);
+        var summary = search(f, null, true, null).routes().get(0).summary();
+        assertThat(summary.arrivalAt()).isEqualTo("2026-11-12T14:07:00+09:00");
+        assertThat(summary.slackSeconds()).isNull();
+        // The same time as arriveAt is refused by the slack rule.
+        assertThat(catchThrowableOfType(BusinessException.class, () -> search(f, null, true, "2026-11-12T15:00:00+09:00")).getErrorCode())
+                .isEqualTo(ErrorCode.NO_SERVICE_TIME);
     }
 }

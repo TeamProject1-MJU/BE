@@ -43,7 +43,7 @@ public class RouteController {
             + "경로·요금·소요시간은 바꾸지 않습니다. "
             + "도착 시각 지정: arriveAt을 보내면(열차 시각표가 있을 때) 방의 약속 시각보다 우선해, 그 시각까지 도착하는 가장 늦은 출발 경로 1개를 "
             + "약속방 모드와 같은 계산·모양(routeSource=INTERNAL, fareSource=ESTIMATED, noService=false)으로 돌려주고 카카오를 호출하지 않습니다. "
-            + "summary.slackSeconds = arriveAt − arrivalAt. arriveAt 직전 60분(설정값) 안에 도착하는 열차가 전 노선에 없으면 NO_SERVICE_TIME, "
+            + "summary.slackSeconds = arriveAt − arrivalAt. arriveAt 직전 60분(설정값) 안에 도착하는 열차가 전 노선에 없거나, 제때 도착하는 경로가 arriveAt보다 30분(설정값)을 넘게 일찍 도착하면(그 시각대 운행 종료) NO_SERVICE_TIME, "
             + "열차는 있지만 그 시각까지 도착할 수 없거나, 제때 도착하는 가장 늦은 출발이 이미 지났으면(지금 출발해서는 늦음) ARRIVAL_UNREACHABLE입니다. 열차 시각표가 없으면 arriveAt은 무시됩니다. "
             + "약속방 모드에서 약속까지 도착하는 가장 늦은 출발이 이미 지났으면, 지금 출발하는 시각표 경로(waitSec·waitKind·totalWithWaitSec 포함)를 arrivesAfterAppointment=true로 돌려줍니다.",
             requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(required = true,
@@ -58,7 +58,7 @@ public class RouteController {
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "ROOM_NOT_FOUND(roomId의 방 없음) / STATION_NOT_FOUND / ROUTE_NOT_FOUND(내부 그래프로도 경로 없음)",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "STATION_UNSUPPORTED: 출발·도착역이 isSupported=false / NO_SERVICE_TIME: arriveAt 직전 60분(설정값) 안에 도착하는 열차가 전 노선에 없음 / ARRIVAL_UNREACHABLE: 열차는 있지만 arriveAt까지 도착할 수 있는 열차가 없음(가장 늦은 출발이 이미 지난 경우 포함)",
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "STATION_UNSUPPORTED: 출발·도착역이 isSupported=false / NO_SERVICE_TIME: arriveAt 직전 60분(설정값) 안에 도착하는 열차가 전 노선에 없음, 또는 도착 시각 기준 경로의 slack이 30분(설정값) 초과 / ARRIVAL_UNREACHABLE: 열차는 있지만 arriveAt까지 도착할 수 있는 열차가 없음(가장 늦은 출발이 이미 지난 경우 포함)",
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiDocumentation.Failure.class)))
     public ApiResponse<RouteSearchResponse> search(@CurrentUser UUID userId, @RequestBody RouteSearchRequest request) {
         return ApiResponse.success(routes.search(userId, request));
