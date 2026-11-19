@@ -19,7 +19,7 @@
 
 응답은 명세 6.1 형식이다: `routeSource`, `routes[]`. #120에서 `appointmentPassed`, `notice`와 `summary.departureAt`, `summary.noService`, `summary.serviceNotice`, `summary.arrivesAfterAppointment`를 추가했다(필드 추가만, 기존 필드·구조·에러 코드는 그대로).
 - `routes[]`의 각 경로: `routeId`, `routeType`, `summary`, `steps[]`
-- `steps[]`의 각 단계: `type`, `guidance`, `durationSec`, `distanceM`, `line`, `direction`, `directionCode`, `stops`, `path`, `stations`
+- `steps[]`의 각 단계: `type`, `guidance`, `durationSec`, `distanceM`, `line`, `direction`, `directionCode`, `stops`, `path`, `stations`, `trainAlightStationId`
 
 - `routeSource`: `KAKAO` 또는 `INTERNAL`
 - `summary.fareSource`: 카카오 `fare.value`면 `KAKAO`, 우리가 정했으면 `ESTIMATED`(화면에 "예상 요금"). 우리가 정하는 요금은 운임표의 출발역→도착역 요금이고, 없으면 우리 RIDE 거리로 계산한다(#109)
@@ -28,6 +28,11 @@
   - 그 경로가 이미 라벨을 가졌으면 그 라벨은 주지 않는다.
   - INTERNAL은 대부분 경로 1개이고 `FASTEST`다. 경로 탐색(#130)의 시각표 경로는 #153부터 여러 개일 수 있고, 라벨은 도착 시각 기준이다(아래 "경로 탐색: 시각표 후보 여러 개").
 - `direction`(방면 문자열): 카카오가 방면을 주지 않아 항상 null이다. `directionCode`는 간선으로 계산한다.
+- `trainAlightStationId`(#174): SUBWAY 단계에서 처음 타는 열차의 하차역 id. 열차 시각표 경로(경로 탐색, 약속방 모드, 도착 시각 지정)만 주고, 카카오·고정 비용 경로와 WALKING 단계는 null이다.
+  - 시각표 경로는 같은 노선에서 열차를 갈아타도 RIDE 단계를 나누지 않는다(지선 환승·방향·노선이 바뀔 때만 나눈다). 그래서 이 값은 `stops`의 마지막 역보다 앞일 수 있다. 예: 평일 23:50 응암→잠실(신당 경유)의 2호선 단계는 신당→잠실이지만 첫 열차 2502가 성수에서 끝나 `trainAlightStationId`는 성수다.
+  - 값은 라우터의 열차 구간(`TimedRoute.legs()`)에서 구한다. 라우터는 RIDE 간선을 단계와 열차 구간에 똑같이 세므로, 단계 첫 간선을 담은 열차 구간의 하차역이 그 단계 첫 열차의 하차역이다(`RouteSearchService.withTrainAlights`).
+  - 5호선에서 하남 쪽과 마천 쪽을 오가는 경로는 강동에서 방향이 바뀌어 단계가 닫힌다(길동→올림픽공원: 길동→강동, 강동→올림픽공원). 2026-11-18의 네 시각에 두 갈래 사이 560개 경로를 확인했다.
+  - 도착 조회(`GET /stations/{id}/arrivals`)의 `trainAlightStationId`에 이 값을 넘긴다(`docs/arrivals-86.md`).
 - `stations[]`: SUBWAY 단계의 정차역별 슬롯과 혼잡도, `stops`와 같은 순서. WALKING 단계는 빈 배열이다.
 - `summary.departureAt`: 출발 예정 시각, Asia/Seoul 오프셋. 비운행이면 첫차 기준으로 바꾼 시각이다(아래 "비운행 시각과 첫차").
 - `summary.arrivalAt`: `departureAt` + `totalTimeSec`, Asia/Seoul 오프셋
@@ -426,6 +431,9 @@ KAKAO 경로의 `totalTimeSec`을 카카오 `routes[].properties.totalTime` 대�
   - #170 slack 상한: `arriveAt` 14:37(slack 정확히 30분) → 경로, 14:37:01 → `NO_SERVICE_TIME`(로그 확인). 지금 23:50 `arriveAt` 00:10(이미 떠난 막차, slack 33분) → `NO_SERVICE_TIME`. 약속 15:00인 방의 약속방 모드(slack 53분)는 그대로 경로
   - 라우터 없음 → `arriveAt` 무시, `arriveAt` 없는 응답과 같음, WARN(좌표 없음). 같은 역 → 이전과 같음
 - `RouteSearchArrivalSlackSettingsTest`(#170): 기본 30, 1이면 기동, 0·−1이면 기동 실패
+- `RouteSearchTrainAlightTest`(#174, 손으로 만든 시각표): 경로 탐색·도착 시각 지정·약속방 모드의 SUBWAY 단계에 첫 열차 하차역(서초), WALKING은 null, 라우터가 없으면(고정 비용) null
+- `RouteSearchTrainAlightPostgresTest`(#174, 번들 시각표): 평일 23:50 응암→잠실 신당 경유 2호선 단계 신당→잠실의 첫 열차 하차역은 성수, 5호선 길동→올림픽공원은 강동에서 단계가 닫힘, 강남→사당 경로 탐색·도착 시각 지정은 사당
+- `RouteSearchKakaoPostgresTest.kakaoStepsHaveNoTrainAlightStation`(#174): 카카오 경로의 단계는 모두 null
 - `RouteSearchPlainTimetableTest`(#130, 같은 시각표)
   - 방 없음: `departingAt` 경로와 출발·도착·`totalTimeSec`·역 순서·환승이 같고 카카오 호출 0회, `waitSec`·`totalWithWaitSec`, 혼잡도 기준 = 첫 열차 출발, `departAt` 생략 = 지금
   - 03:00 → 첫차 05:36 `noService`, 첫차 정각 05:36 → `false`

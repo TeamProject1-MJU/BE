@@ -201,4 +201,15 @@ class RouteSearchKakaoPostgresTest extends RouteSearchPostgresSupport {
         server.verify(); // no expectations: any request would have failed
     }
 
+    /** #174: Kakao routes have no trains, so no step names the first train's alighting station. */
+    @Test void kakaoStepsHaveNoTrainAlightStation() throws Exception {
+        server.expect(ExpectedCount.once(), requestTo(startsWith(URL))).andRespond(withSuccess(KAKAO_OK, MediaType.APPLICATION_JSON));
+        JsonNode data = ok(search(gangnam, sadang, "2026-11-06T08:00:00+09:00", null), member);
+        server.verify();
+        assertThat(data.get("routeSource").asString()).isEqualTo("KAKAO");
+        data.get("routes").forEach(route -> route.get("steps").forEach(step -> {
+            assertThat(step.has("trainAlightStationId")).isTrue();
+            assertThat(step.get("trainAlightStationId").isNull()).isTrue();
+        }));
+    }
 }

@@ -461,11 +461,44 @@ public class RouteSearchService {
     private Route timedRoute(String routeId, TimedRoute timed, RouteDraft path, Wait wait, boolean noService, Integer slackSeconds,
                              boolean arrivesAfterAppointment) {
         int total = (int) Duration.between(timed.leaveAt(), timed.arriveAt()).toSeconds();
-        RouteDraft draft = new RouteDraft(path.steps(), total, path.fare(), path.fareSource(), path.transferCount(),
+        RouteDraft draft = new RouteDraft(withTrainAlights(path.steps(), timed), total, path.fare(), path.fareSource(), path.transferCount(),
                 path.fromStationId(), path.toStationId());
         int walkSeconds = timed.legs().stream().mapToInt(TimedLeg::walkSec).sum();
         return route(routeId, routeTypes(List.of(draft)).get(0), draft, timed.leaveAt(), timed.boardAt(), timed.arriveAt(),
                 walkSeconds, noService, noService ? serviceNotice(timed.boardAt()) : null, arrivesAfterAppointment, wait, slackSeconds);
+    }
+
+    /**
+     * The SUBWAY steps of a timetable route with the station their first train is left at (#174). The router counts every
+     * RIDE edge both in its RIDE steps and in its legs, so the leg holding a step's first edge is the train boarded at the
+     * start of that step: with a change of train on the same line inside one step (2호선 2502 -> 2520 at 성수) that is the
+     * first train's alighting station, not the step's last stop. Steps stay as they are when the counts do not match.
+     */
+    static List<StepDraft> withTrainAlights(List<StepDraft> steps, TimedRoute timed) {
+        List<Long> alights = new ArrayList<>();
+        int offset = 0;
+        for (PathStep step : timed.path().steps()) {
+            if (step.type() != StepType.RIDE) continue;
+            alights.add(alightOfEdge(timed.legs(), offset));
+            offset += step.stationCount();
+        }
+        long subway = steps.stream().filter(step -> RouteDraft.SUBWAY.equals(step.type())).count();
+        if (subway != alights.size()) return steps;
+        Iterator<Long> next = alights.iterator();
+        return steps.stream().map(step -> RouteDraft.SUBWAY.equals(step.type())
+                ? new StepDraft(step.type(), step.guidance(), step.durationSec(), step.distanceM(), step.line(), step.directionCode(),
+                step.stops(), step.path(), next.next())
+                : step).toList();
+    }
+
+    /** toStationId of the leg holding RIDE edge number {@code edge} (0-based) of the route, or null. */
+    private static Long alightOfEdge(List<TimedLeg> legs, int edge) {
+        int end = 0;
+        for (TimedLeg leg : legs) {
+            end += leg.stationCount();
+            if (edge < end) return leg.toStationId();
+        }
+        return null;
     }
 
     /**
@@ -575,7 +608,7 @@ public class RouteSearchService {
                         value.firstTrain(), congestion(value.congestion())));
             }
             steps.add(new Step(step.type(), step.guidance(), step.durationSec(), step.distanceM(), step.line(), null,
-                    step.directionCode(), stopList, step.path(), stationList));
+                    step.directionCode(), stopList, step.path(), stationList, step.trainAlightStationId()));
         }
         int walkingMinutes = (int) Math.round(walkingSeconds / 60.0);
         return new Route(routeId, routeType, new Summary(draft.totalTimeSec(), offsetTime(arrival), draft.fare(), draft.fareSource(),
