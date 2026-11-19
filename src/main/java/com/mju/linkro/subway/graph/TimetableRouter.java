@@ -275,16 +275,6 @@ public class TimetableRouter implements TimetableRouteFinder {
      * (#104): no 6호선 train goes round the 응암 loop twice, so 구산 -> 응암 -> 역촌 always changes trains. Kept here, not in
      * BranchRules, so the fixed-cost graph is unchanged.
      */
-    /**
-     * Junctions where a change of train that the step rules would hide gets a RIDE step of its own (#179): the train
-     * ridden so far goes on from the junction on another arm, so the rider has to leave it there (5호선 천호 -> 올림픽공원:
-     * a 하남검단산 train to 강동, then a 마천 train). Only 5호선 강동; other junctions keep their steps until checked.
-     */
-    private static final Set<BranchRules.Junction> SPLIT_ON_TRAIN_CHANGE = Set.of(new BranchRules.Junction("강동", "5"));
-
-    /** Longest dwell looked at when asking whether the train ridden so far leaves a junction on another arm. */
-    private static final int SPLIT_LOOKAHEAD_SECONDS = 600;
-
     private static final Set<List<String>> CHANGE_ONLY_ON_TIMETABLE = Set.of(List.of("응암", "6", "EUNGAM_LOOP", "EUNGAM_LOOP"));
 
     /**
@@ -304,6 +294,16 @@ public class TimetableRouter implements TimetableRouteFinder {
         var transfer = branchTransfers.get(junction);
         return transfer == null ? costs.getDefaultBranchTransferSeconds() : transfer.getSeconds();
     }
+
+    /**
+     * Junctions where a change of train that the step rules would hide gets a RIDE step of its own (#179): the train
+     * ridden so far goes on from the junction on another arm, so the rider has to leave it there (5호선 천호 -> 올림픽공원:
+     * a 하남검단산 train to 강동, then a 마천 train). Only 5호선 강동; other junctions keep their steps until checked.
+     */
+    private static final Set<BranchRules.Junction> SPLIT_ON_TRAIN_CHANGE = Set.of(new BranchRules.Junction("강동", "5"));
+
+    /** Longest dwell looked at when asking whether the train ridden so far leaves a junction on another arm. */
+    private static final int SPLIT_LOOKAHEAD_SECONDS = 600;
 
     private int changeMeters(long node) {
         var transfer = branchTransfers.get(graph.junction(node));
