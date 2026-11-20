@@ -494,13 +494,25 @@ public class TimetableRouter implements TimetableRouteFinder {
                 Through through = new Through(true);
                 Optional<TimedRoute> route = earliest.routeTo(stationId, through)
                         .map(found -> withFewerTransfers(found, originStationId, stationId, leaveAt, blocked, through));
-                if (!through.used || route.isEmpty()) return route;
-                // The guard of #181: riding through must not cost a transfer (영등포구청 16:10 -> 오금: the 마천 train
-                // through from 왕십리 led to 2호선 and 3호선 instead of the 5호선 trains changed at 강동).
-                Through plain = new Through(false);
-                Optional<TimedRoute> without = earliest.routeTo(stationId, plain)
-                        .map(found -> withFewerTransfers(found, originStationId, stationId, leaveAt, blocked, plain));
-                return without.map(other -> Through.fewerTransfers(route.get(), other));
+                Optional<TimedRoute> without = Optional.empty();
+                Optional<TimedRoute> result = route;
+                if (through.used && route.isPresent()) {
+                    // The guard of #181: riding through must not cost a transfer (영등포구청 16:10 -> 오금: the 마천 train
+                    // through from 왕십리 led to 2호선 and 3호선 instead of the 5호선 trains changed at 강동).
+                    Through plain = new Through(false);
+                    without = earliest.routeTo(stationId, plain)
+                            .map(found -> withFewerTransfers(found, originStationId, stationId, leaveAt, blocked, plain));
+                    result = without.map(other -> Through.fewerTransfers(route.get(), other));
+                }
+                if (result.isEmpty()) return result;
+                // #183: a change of train at a THROUGH_FIRST junction left in the result or in either route the guard
+                // compared gives way to one train from the origin to the destination, when there is one.
+                if (changesAtThroughFirst(result.get()) || route.filter(TimetableRouter.this::changesAtThroughFirst).isPresent()
+                        || without.filter(TimetableRouter.this::changesAtThroughFirst).isPresent()) {
+                    Optional<TimedRoute> direct = earliest.directTrain(stationId);
+                    if (direct.isPresent()) return direct;
+                }
+                return result;
             }
         };
     }
@@ -652,6 +664,35 @@ public class TimetableRouter implements TimetableRouteFinder {
             return routeTo(stationId, new Through(true));
         }
 
+        /**
+         * One train from the origin to {@code stationId} through a {@link #THROUGH_FIRST} junction between its two arms
+         * (#183): the first that leaves the origin once the search starts boarding and rides every edge of the line's way
+         * there. Empty when the two stations are not on those arms or no such train runs that service day.
+         */
+        Optional<TimedRoute> directTrain(long stationId) {
+            List<Integer> way = throughFirstWay(originStationId, stationId);
+            if (way == null) return Optional.empty();
+            TrainTimetable.Rides[] dayRides = rides[search.day().ordinal()];
+            TrainTimetable.Rides first = dayRides[way.get(0)];
+            if (first == null) return Optional.empty();
+            for (int i = Math.max(first.next(search.start()), 0); i >= 0 && i < first.size(); i++) {
+                Departure start = first.departure(i);
+                List<Label> moves = new ArrayList<>(List.of(new Label(start.arriveSec(), 0, edgeTo[way.get(0)], way.get(0), edges[way.get(0)], start, null)));
+                int at = start.arriveSec();
+                for (int k = 1; k < way.size(); k++) {
+                    int e = way.get(k);
+                    Optional<Departure> ride = timetable.rideOf(edges[e].id(), search.day(), start.train(), at);
+                    if (ride.isEmpty() || ride.get().departSec() - at > SPLIT_LOOKAHEAD_SECONDS) break;
+                    moves.add(new Label(ride.get().arriveSec(), 0, edgeTo[e], e, edges[e], ride.get(), null));
+                    at = ride.get().arriveSec();
+                }
+                if (moves.size() == way.size()) {
+                    return Optional.of(build(moves, search.day(), search.serviceDate(), originStationId, stationId));
+                }
+            }
+            return Optional.empty();
+        }
+
         Optional<TimedRoute> routeTo(long stationId, Through through) {
             Label end = search.arrivals().get(stationId);
             if (end == null) return Optional.empty();
@@ -739,6 +780,90 @@ public class TimetableRouter implements TimetableRouteFinder {
             return replaced;
         }
         return moves;
+    }
+
+    /** Junction -> station id -> arm, for the stations of the junction's line on each arm (#183), built once per junction. */
+    private final Map<BranchRules.Junction, Map<Long, String>> throughFirstArms = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Arms of {@code junction}'s line, from each neighbour of its node outwards without passing the node again. */
+    private Map<Long, String> armsOf(BranchRules.Junction junction) {
+        return throughFirstArms.computeIfAbsent(junction, key -> {
+            Map<Long, String> arms = new HashMap<>();
+            graph.junctionNodes().forEach((nodeId, j) -> {
+                if (!j.equals(key)) return;
+                int junctionIndex = nodeIndex.get(nodeId);
+                for (int e : outgoing[junctionIndex]) {
+                    if (edges[e].type() != StepType.RIDE) continue;
+                    String arm = graph.armAt(nodeId, nodeIds[edgeTo[e]]);
+                    Deque<Integer> stack = new ArrayDeque<>(List.of(edgeTo[e]));
+                    Set<Integer> seen = new HashSet<>(List.of(junctionIndex, edgeTo[e]));
+                    while (!stack.isEmpty()) {
+                        int n = stack.pop();
+                        arms.putIfAbsent(graph.node(nodeIds[n]).stationId(), arm);
+                        for (int next : outgoing[n]) {
+                            if (edges[next].type() == StepType.RIDE && seen.add(edgeTo[next])) stack.push(edgeTo[next]);
+                        }
+                    }
+                }
+            });
+            return arms;
+        });
+    }
+
+    /**
+     * The RIDE edges (indices) of the line's way from {@code from} to {@code to} when the two stations lie on the two
+     * arms of a {@link #THROUGH_FIRST} junction, else null.
+     */
+    private List<Integer> throughFirstWay(long from, long to) {
+        for (Map.Entry<BranchRules.Junction, Set<String>> entry : THROUGH_FIRST.entrySet()) {
+            Map<Long, String> arms = armsOf(entry.getKey());
+            String a = arms.get(from), b = arms.get(to);
+            if (a == null || b == null || a.equals(b) || !entry.getValue().contains(a) || !entry.getValue().contains(b)) continue;
+            Long lineId = null;
+            for (var j : graph.junctionNodes().entrySet()) {
+                if (j.getValue().equals(entry.getKey())) lineId = graph.node(j.getKey()).lineId();
+            }
+            Integer start = null, end = null;
+            for (Node node : graph.nodesOf(from)) if (lineId != null && node.lineId() == lineId) start = nodeIndex.get(node.id());
+            for (Node node : graph.nodesOf(to)) if (lineId != null && node.lineId() == lineId) end = nodeIndex.get(node.id());
+            if (start == null || end == null) continue;
+            // Breadth-first over the line's RIDE edges: the way between two stations of one line is unique.
+            int[] via = new int[nodeIds.length];
+            Arrays.fill(via, -1);
+            Deque<Integer> queue = new ArrayDeque<>(List.of(start));
+            boolean[] seen = new boolean[nodeIds.length];
+            seen[start] = true;
+            while (!queue.isEmpty() && !seen[end]) {
+                int n = queue.poll();
+                for (int e : outgoing[n]) {
+                    if (edges[e].type() != StepType.RIDE || seen[edgeTo[e]]) continue;
+                    seen[edgeTo[e]] = true;
+                    via[edgeTo[e]] = e;
+                    queue.add(edgeTo[e]);
+                }
+            }
+            if (!seen[end]) continue;
+            LinkedList<Integer> way = new LinkedList<>();
+            for (int n = end; n != start; n = edgeFrom[via[n]]) way.addFirst(via[n]);
+            return way;
+        }
+        return null;
+    }
+
+    /** The route changes trains at a {@link #THROUGH_FIRST} junction between its two arms (#183). */
+    private boolean changesAtThroughFirst(TimedRoute route) {
+        List<TimedLeg> legs = route.legs();
+        for (Map.Entry<BranchRules.Junction, Set<String>> entry : THROUGH_FIRST.entrySet()) {
+            Map<Long, String> arms = armsOf(entry.getKey());
+            for (int i = 0; i + 1 < legs.size(); i++) {
+                TimedLeg before = legs.get(i), after = legs.get(i + 1);
+                if (before.lineId() != after.lineId() || before.toStationId() != after.fromStationId()) continue;
+                if (!entry.getKey().stationName().equals(before.toStationName())) continue;
+                String a = arms.get(before.fromStationId()), b = arms.get(after.toStationId());
+                if (a != null && b != null && !a.equals(b) && entry.getValue().contains(a) && entry.getValue().contains(b)) return true;
+            }
+        }
+        return false;
     }
 
     /** At a {@link #THROUGH_FIRST} junction, between its two arms (either way). */

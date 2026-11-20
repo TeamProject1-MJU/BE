@@ -23,7 +23,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * #179 on the migrated database and the bundled timetable (Wednesday 2026-11-18): a change at 5호선 강동 from a train that
  * goes on toward 하남 to a 마천 train is its own SUBWAY step; times and transfers stay; other junctions keep their steps.
  * #181: a 마천 train running through 강동 is taken instead of such a change, as 카카오맵 does; the change (and its step)
- * stays only when no such train exists or riding through would cost a transfer.
+ * stays only when no such train exists or riding through would cost a transfer. #183: a change at 강동 still left gives way
+ * to one train from the origin when there is one.
  */
 @Testcontainers
 @SpringBootTest(properties = {
@@ -83,13 +84,36 @@ class RouteSearchJunctionStepPostgresTest extends RouteSearchPostgresSupport {
         assertThat(route.get("summary").get("transferCount").asInt()).isZero();
     }
 
-    @Test void ridingThroughThatCostsATransferKeepsTheChangeAt강동() throws Exception {
-        // #181 guard: riding a 마천 train through made the route 2호선 and 3호선 (one transfer, 17:16:00); the 5호선 trains
-        // 5123 (하남검단산행) and 5639 (강동-origin 마천행) need none and arrive at 17:10:40, in two steps.
+    @Test void ridingThroughNeverCostsATransfer() throws Exception {
+        // #181 guard: riding a 마천 train through from 왕십리 made the route 2호선 and 3호선 (one transfer, 17:16:00), so the
+        // 5호선 trains changed at 강동 (none, 17:10:40) were kept. #183: that change gives way to the one 마천 train from
+        // 영등포구청 (5641, 16:19:50 -> 17:16:00, as 카카오맵), still with no transfer.
         JsonNode route = first("영등포구청", "오금", "2026-11-18T16:10:00+09:00");
-        assertThat(steps(route)).containsExactly("S 영등포구청->강동/강동", "S 강동->오금/오금");
+        assertThat(steps(route)).containsExactly("S 영등포구청->오금/오금");
         assertThat(route.get("summary").get("transferCount").asInt()).isZero();
-        assertThat(route.get("summary").get("arrivalAt").asString()).isEqualTo("2026-11-18T17:10:40+09:00");
+        assertThat(route.get("summary").get("departureAt").asString()).isEqualTo("2026-11-18T16:18:50+09:00");
+        assertThat(route.get("summary").get("arrivalAt").asString()).isEqualTo("2026-11-18T17:16:00+09:00");
+    }
+
+    @Test void aChangeAt강동LeftByTheFewerTransfersSearchGivesWayToTheDirectTrain() throws Exception {
+        // #183: the earliest arrival is 2호선 and 3호선; the fewer-transfers search (#107) turns it into 5133 to 강동 and
+        // 5657 on (18:15:20), and the direct 마천 train arriving later was never a candidate. 카카오맵 shows the direct
+        // 5659 first (17:11 -> 18:19); so does the route now.
+        JsonNode route = first("까치산", "개롱", "2026-11-18T17:00:00+09:00");
+        assertThat(steps(route)).containsExactly("S 까치산->개롱/개롱");
+        assertThat(route.get("summary").get("transferCount").asInt()).isZero();
+        assertThat(route.get("summary").get("arrivalAt").asString()).isEqualTo("2026-11-18T18:19:40+09:00");
+        JsonNode other = first("영등포구청", "개롱", "2026-11-18T17:10:00+09:00");
+        assertThat(steps(other)).containsExactly("S 영등포구청->개롱/개롱");
+        assertThat(other.get("summary").get("arrivalAt").asString()).isEqualTo("2026-11-18T18:19:40+09:00");
+    }
+
+    @Test void aRouteWithoutAChangeAt강동KeepsItsTrains() throws Exception {
+        // #183 replaces only a change at 강동: 2호선, 2호선 and 3호선 (two transfers, 11:11:30) stay although a 마천 train
+        // from 까치산 arrives at 11:12:00.
+        JsonNode route = first("까치산", "오금", "2026-11-18T10:00:00+09:00");
+        assertThat(route.get("summary").get("transferCount").asInt()).isEqualTo(2);
+        assertThat(route.get("summary").get("arrivalAt").asString()).isEqualTo("2026-11-18T11:11:30+09:00");
     }
 
     @Test void aThroughMacheonTrainIs1Step() throws Exception {
