@@ -311,13 +311,13 @@ class TimetableRecommendationPostgresTest {
     @Test
     void eungamLoopToLoopNeedsTheChangeTime() {
         // #104: 6053 reaches 응암 at 08:02:30 and goes on to 새절; 6059 leaves for 역촌 at the same second. With the
-        // 120 s change time the next loop train, 6061 at 08:06:30, is the first one. Leaving at 07:59 so that 6053
-        // (08:00:30) is still caught after the 60 s station access time (#149).
+        // 180 s change time (#183) the next loop train, 6061 at 08:06:30 (240 s), is the first one. Leaving at 07:59 so
+        // that 6053 (08:00:30) is still caught after the 60 s station access time (#149). The change is a transfer (#183).
         long gusan = station("구산");
         long yeokchon = station("역촌");
         var forward = timetable.departingAt(gusan, at(THURSDAY, 7, 59)).routeTo(yeokchon).orElseThrow();
         assertThat(legs(forward)).containsExactly("6053 구산 08:00:30 -> 응암 08:02:30 (0)", "6061 응암 08:06:30 -> 역촌 08:08:10 (240)");
-        assertThat(forward.path().transferCount()).isZero();
+        assertThat(forward.path().transferCount()).isEqualTo(1);
         // Backward (by 09:00) already waited 210 s at 응암: unchanged.
         var backward = timetable.latestDepartures(yeokchon, at(THURSDAY, 9, 0), Set.of(gusan), 0).get(gusan);
         assertThat(legs(backward)).containsExactly("6077 구산 08:49:00 -> 응암 08:51:00 (0)", "6085 응암 08:54:30 -> 역촌 08:56:10 (210)");

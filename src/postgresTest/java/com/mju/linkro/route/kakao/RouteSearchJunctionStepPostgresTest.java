@@ -124,12 +124,14 @@ class RouteSearchJunctionStepPostgresTest extends RouteSearchPostgresSupport {
         assertThat(steps(first("길동", "둔촌동", "2026-11-18T08:00:00+09:00"))).containsExactly("S 길동->강동/강동", "W", "S 강동->둔촌동/둔촌동");
     }
 
-    @Test void 성수KeepsItsStepAnd응암Splits() throws Exception {
+    @Test void 성수KeepsItsStepAnd응암IsATransfer() throws Exception {
         // 2호선 through 성수: the timetable run ends at 성수 and a new one starts; no new step.
         assertThat(steps(first("시청", "건대입구", "2026-11-18T14:00:00+09:00"))).containsExactly("S 시청->건대입구/성수");
-        // 6호선 응암 loop (#181): 구산 -> 역촌 leaves a train going on toward 새절 at 응암 for one going round again, its
-        // own step (no TRANSFER); 구산 -> 신내 turns DOWN there, unchanged.
-        assertThat(steps(first("구산", "역촌", "2026-11-18T14:00:00+09:00"))).containsExactly("S 구산->응암/응암", "S 응암->역촌/역촌");
+        // 6호선 응암 loop: 구산 -> 역촌 leaves a train going on toward 새절 at 응암 for one going round again. #181 split the
+        // step there; #183 makes it a transfer (a WALKING step between). 구산 -> 신내 turns DOWN there, unchanged.
+        JsonNode loop = first("구산", "역촌", "2026-11-18T14:00:00+09:00");
+        assertThat(steps(loop)).containsExactly("S 구산->응암/응암", "W", "S 응암->역촌/역촌");
+        assertThat(loop.get("summary").get("transferCount").asInt()).isEqualTo(1);
         assertThat(steps(first("구산", "신내", "2026-11-18T14:00:00+09:00"))).containsExactly("S 구산->응암/신내", "S 응암->신내/신내");
     }
 
@@ -163,13 +165,13 @@ class RouteSearchJunctionStepPostgresTest extends RouteSearchPostgresSupport {
         assertThat(route.get("summary").get("arrivalAt").asString()).isEqualTo(wednesday + "T17:21:30+09:00");
     }
 
-    @Test void arrivalModeSplitsWhenNoThroughTrainArrivesInTime() throws Exception {
+    @Test void arrivalModeChangesAt강동WhenNoThroughTrainArrivesInTime() throws Exception {
         // By 06:00 at 올림픽공원 no 마천 train runs through 강동 yet (the first from 천호 leaves at 06:13:30): 5001 (하남검단산행)
-        // to 강동 and 5505 (강동-origin 마천행) on, arriving at 05:52:00 in two steps (#179).
+        // to 강동 and 5505 (강동-origin 마천행) on, arriving at 05:52:00. #179 split the step; #183 makes it a transfer.
         java.time.LocalDate wednesday = comingWeekdayWednesday();
         JsonNode route = arrivingBy("천호", "올림픽공원", wednesday, "06:00:00");
-        assertThat(steps(route)).containsExactly("S 천호->강동/강동", "S 강동->올림픽공원/올림픽공원");
-        assertThat(route.get("summary").get("transferCount").asInt()).isZero();
+        assertThat(steps(route)).containsExactly("S 천호->강동/강동", "W", "S 강동->올림픽공원/올림픽공원");
+        assertThat(route.get("summary").get("transferCount").asInt()).isEqualTo(1);
         assertThat(route.get("summary").get("arrivalAt").asString()).isEqualTo(wednesday + "T05:52:00+09:00");
     }
 }

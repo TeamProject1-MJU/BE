@@ -24,6 +24,28 @@ public class SubwayGraphProperties {
     private int defaultBranchTransferSeconds;
     /** Same-line transfer rows of public data 15044419 (excluded from V11 by ck_conn_not_self). */
     private List<BranchTransfer> branchTransfers = new ArrayList<>();
+    /**
+     * Least time to change trains at a junction on timetable routes only (#183): 카카오맵 changes. The fixed-cost graph keeps
+     * {@link #branchTransfers}; a junction missing here falls back to its branch-transfers seconds, then to
+     * {@link #defaultBranchTransferSeconds}.
+     */
+    private List<TimetableChange> timetableChanges = new ArrayList<>();
+
+    @Getter
+    @Setter
+    public static class TimetableChange {
+        private String station;
+        private String line;
+        private int seconds;
+
+        public TimetableChange() {}
+
+        public TimetableChange(String station, String line, int seconds) {
+            this.station = station;
+            this.line = line;
+            this.seconds = seconds;
+        }
+    }
 
     @Getter
     @Setter
@@ -54,6 +76,12 @@ public class SubwayGraphProperties {
             }
             requireNonNegative("branch-transfers.seconds", transfer.seconds);
             requireNonNegative("branch-transfers.meters", transfer.meters);
+        }
+        for (TimetableChange change : timetableChanges) {
+            if (change.station == null || change.station.isBlank() || change.line == null || change.line.isBlank()) {
+                throw new IllegalArgumentException("linkro.subway.graph.timetable-changes entries need station and line");
+            }
+            requireNonNegative("timetable-changes.seconds", change.seconds);
         }
     }
 
