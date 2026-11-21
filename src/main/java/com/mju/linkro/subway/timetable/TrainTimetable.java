@@ -1,6 +1,7 @@
 package com.mju.linkro.subway.timetable;
 
 import com.mju.linkro.subway.api.DayType;
+import com.mju.linkro.subway.api.DirectionCode;
 import com.mju.linkro.subway.api.StepType;
 import com.mju.linkro.subway.congestion.load.StationNames;
 import com.mju.linkro.subway.graph.SubwayGraphData;
@@ -42,9 +43,14 @@ public final class TrainTimetable {
     /** A ride on one edge: leaves A at {@code departSec}, reaches B at {@code arriveSec}. */
     public record Departure(int departSec, int arriveSec, TrainKey train) {}
 
-    /** What loading kept and dropped. Maps are sorted and unmodifiable. */
+    /**
+     * What loading kept and dropped. Maps are sorted and unmodifiable. {@code pairsNotInGraph} counts every stop pair that
+     * is not a RIDE edge; of those, {@code pairsSplit} got the stops between them ({@link #intermediateStops}, #187) and
+     * {@code pairsDropped} were not mapped.
+     */
     public record LoadReport(int rows, int expressSkipped, int unmappedRows, Map<String, Integer> unmappedStations, int trains,
                              int rides, int missingArrivals, int invalidRides, Map<String, Integer> pairsNotInGraph,
+                             Map<String, Integer> pairsSplit, Map<String, Integer> pairsDropped,
                              int rideEdges, int rideEdgesWithTrains, long approxBytes) {}
 
     private record Stop(long nodeId, String station, int arriveSec, int departSec) {}
@@ -183,9 +189,13 @@ public final class TrainTimetable {
             if (r.unmappedRows() > 0) {
                 log.warn("Train timetable: {} rows at stations missing from our DB were skipped: {}", r.unmappedRows(), r.unmappedStations());
             }
-            if (!r.pairsNotInGraph().isEmpty()) {
+            if (!r.pairsSplit().isEmpty()) {
+                log.warn("Train timetable: {} stop pairs are not RIDE edges of the graph and got the stops between them (#187): {}",
+                        r.pairsSplit().size(), r.pairsSplit());
+            }
+            if (!r.pairsDropped().isEmpty()) {
                 log.warn("Train timetable: {} stop pairs are not RIDE edges of the graph and were not mapped: {}",
-                        r.pairsNotInGraph().size(), r.pairsNotInGraph());
+                        r.pairsDropped().size(), r.pairsDropped());
             }
             if (r.missingArrivals() > 0 || r.invalidRides() > 0) {
                 log.warn("Train timetable: {} stops had no arrival time (departure used), {} rides did not move forward in time and were dropped",
@@ -219,12 +229,16 @@ public final class TrainTimetable {
             }
         }
         Map<Long, Map<Long, Long>> rideEdges = new HashMap<>();
+        Map<Long, Edge> edgesById = new HashMap<>();
+        Map<Long, Node> nodesById = new HashMap<>();
+        graph.nodes().forEach(node -> nodesById.put(node.id(), node));
         int rideEdgeCount = 0;
         for (Edge edge : graph.edges()) {
             if (edge.type() != StepType.RIDE || !supportedNodes.contains(edge.fromNodeId()) || !supportedNodes.contains(edge.toNodeId())) continue;
             if (rideEdges.computeIfAbsent(edge.fromNodeId(), id -> new HashMap<>()).putIfAbsent(edge.toNodeId(), edge.id()) == null) {
                 rideEdgeCount++;
             }
+            edgesById.putIfAbsent(edge.id(), edge);
         }
 
         String header = reader.readLine();
@@ -274,13 +288,17 @@ public final class TrainTimetable {
 
         Map<Long, Map<DayType, List<Departure>>> rides = new HashMap<>();
         Map<String, Integer> pairsNotInGraph = new TreeMap<>();
+        Map<String, Integer> pairsSplit = new TreeMap<>();
+        Map<String, Integer> pairsDropped = new TreeMap<>();
         int rideCount = 0;
         int missingArrivals = 0;
         int invalid = 0;
+        // A loop train (2호선 성수 -> 성수) passes some stations twice; departure order still gives the stop order.
+        trains.values().forEach(stops -> stops.sort(Comparator.comparingInt(Stop::departSec).thenComparingInt(Stop::arriveSec)));
+        Map<Long, Integer> dwells = medianDwells(trains.values());
         for (var entry : trains.entrySet()) {
-            List<Stop> stops = entry.getValue();
-            // A loop train (2호선 성수 -> 성수) passes some stations twice; departure order still gives the stop order.
-            stops.sort(Comparator.comparingInt(Stop::departSec).thenComparingInt(Stop::arriveSec));
+            List<Stop> stops = intermediateStops(entry.getKey(), entry.getValue(), rideEdges, edgesById, nodesById, stations, dwells,
+                    pairsNotInGraph, pairsSplit, pairsDropped);
             for (int i = 1; i < stops.size(); i++) {
                 Stop a = stops.get(i - 1);
                 Stop b = stops.get(i);
@@ -296,10 +314,8 @@ public final class TrainTimetable {
                     continue;
                 }
                 Long edge = rideEdges.getOrDefault(a.nodeId(), Map.of()).get(b.nodeId());
-                if (edge == null) {
-                    pairsNotInGraph.merge(entry.getKey().lineCode() + "호선 " + a.station() + "->" + b.station(), 1, Integer::sum);
-                    continue;
-                }
+                if (edge == null) continue; // counted in intermediateStops
+
                 rides.computeIfAbsent(edge, id -> new EnumMap<>(DayType.class))
                         .computeIfAbsent(entry.getKey().dayType(), d -> new ArrayList<>())
                         .add(new Departure(a.departSec(), arrive, entry.getKey()));
@@ -321,10 +337,151 @@ public final class TrainTimetable {
         // Train keys and their strings, roughly.
         bytes += trains.size() * 64L + names.size() * 64L;
         LoadReport report = new LoadReport(rows, express, unmapped, Collections.unmodifiableMap(unmappedStations), trains.size(),
-                rideCount, missingArrivals, invalid, Collections.unmodifiableMap(pairsNotInGraph), rideEdgeCount, series.size(), bytes);
+                rideCount, missingArrivals, invalid, Collections.unmodifiableMap(pairsNotInGraph), Collections.unmodifiableMap(pairsSplit),
+                Collections.unmodifiableMap(pairsDropped), rideEdgeCount, series.size(), bytes);
         Map<Long, Map<Long, Long>> frozenEdges = new HashMap<>();
         rideEdges.forEach((from, to) -> frozenEdges.put(from, Map.copyOf(to)));
         return new TrainTimetable(Map.copyOf(series), Map.copyOf(frozenEdges), Map.copyOf(nodesByStationLine), report);
+    }
+
+    /**
+     * A train's stops with the stations it skips put back (#187). The timetable lists some 5호선 trains without a stop
+     * that the graph has between two of their stops (5694 둔촌동 -> 천호 without 강동, 5153 상일동 -> 하남풍산 without 강일
+     * and 미사), so that pair is no RIDE edge and the train could not be ridden there. A pair gets the stops between
+     * when all hold:
+     * <ul>
+     *   <li>the train has at least three stops. Two-stop trains (5호선 59xx: 상일동 -> 강동, 마천 -> 둔촌동 and so on) look
+     *       like trains to and from the depots and stay unmapped, so they cannot be boarded;</li>
+     *   <li>exactly one way of RIDE edges of the line, all in one direction, joins the two stations;</li>
+     *   <li>none of the stations between is already a stop of the train.</li>
+     * </ul>
+     * Times: the time between the two stops covers running plus stopping at the stations between. What it leaves over
+     * the graph's ride seconds goes to dwelling there, at most each station's median dwell on the line ({@link
+     * #medianDwells}); the rest is running, split in proportion to the ride seconds. Seconds are whole and keep rising.
+     * Every other pair not in the graph is counted in {@code dropped}; all of them in {@code notInGraph}.
+     */
+    static List<Stop> intermediateStops(TrainKey train, List<Stop> stops, Map<Long, Map<Long, Long>> rideEdges, Map<Long, Edge> edgesById,
+                                        Map<Long, Node> nodesById, Map<Long, Station> stations, Map<Long, Integer> dwells,
+                                        Map<String, Integer> notInGraph, Map<String, Integer> split, Map<String, Integer> dropped) {
+        List<Stop> result = new ArrayList<>(List.of(stops.get(0)));
+        boolean changed = false;
+        Set<Long> stopNodes = new HashSet<>();
+        stops.forEach(stop -> stopNodes.add(stop.nodeId()));
+        for (int i = 1; i < stops.size(); i++) {
+            Stop a = stops.get(i - 1);
+            Stop b = stops.get(i);
+            if (a.nodeId() != b.nodeId() && !rideEdges.getOrDefault(a.nodeId(), Map.of()).containsKey(b.nodeId())) {
+                String pair = train.lineCode() + "호선 " + a.station() + "->" + b.station();
+                notInGraph.merge(pair, 1, Integer::sum);
+                int arrive = b.arriveSec() > 0 ? b.arriveSec() : b.departSec();
+                List<Edge> way = stops.size() < 3 || arrive <= a.departSec() ? null : onlyWay(a.nodeId(), b.nodeId(), rideEdges, edgesById, nodesById);
+                boolean skipsAStop = way != null && way.subList(0, way.size() - 1).stream().anyMatch(e -> stopNodes.contains(e.toNodeId()));
+                List<Stop> between = way == null || skipsAStop ? null : between(a, arrive, way, nodesById, stations, dwells);
+                if (between == null) {
+                    dropped.merge(pair, 1, Integer::sum);
+                } else {
+                    split.merge(pair, 1, Integer::sum);
+                    result.addAll(between);
+                    changed = true;
+                }
+            }
+            result.add(b);
+        }
+        return changed ? result : stops;
+    }
+
+    /** The stops between {@code a} and the next stop (arriving at {@code arrive}) along {@code way}, or null when time is short. */
+    private static List<Stop> between(Stop a, int arrive, List<Edge> way, Map<Long, Node> nodesById, Map<Long, Station> stations,
+                                      Map<Long, Integer> dwells) {
+        int total = arrive - a.departSec();
+        int ride = way.stream().mapToInt(Edge::seconds).sum();
+        int stopsBetween = way.size() - 1;
+        int[] dwell = new int[stopsBetween];
+        int wanted = 0;
+        for (int k = 0; k < stopsBetween; k++) {
+            dwell[k] = dwells.getOrDefault(way.get(k).toNodeId(), 0);
+            wanted += dwell[k];
+        }
+        int slack = Math.max(0, total - ride);
+        if (wanted > slack) {
+            // Not enough time over the ride seconds: share what there is in proportion to the median dwells.
+            for (int k = 0; k < stopsBetween; k++) dwell[k] = (int) ((long) slack * dwell[k] / wanted);
+        }
+        int running = total - Arrays.stream(dwell).sum();
+        if (running < way.size() || ride <= 0) return null;
+        List<Stop> result = new ArrayList<>();
+        int done = 0;
+        int dwelt = 0;
+        int previous = a.departSec();
+        for (int k = 0; k < stopsBetween; k++) {
+            done += way.get(k).seconds();
+            int at = a.departSec() + dwelt + (int) Math.round((double) running * done / ride);
+            at = Math.max(at, previous + 1);
+            int leave = at + dwell[k];
+            long node = way.get(k).toNodeId();
+            Station station = stations.get(nodesById.get(node).stationId());
+            result.add(new Stop(node, station.name(), at, leave));
+            dwelt += dwell[k];
+            previous = leave;
+        }
+        return previous < arrive ? result : null;
+    }
+
+    /**
+     * The RIDE edges of the only way from node {@code from} to {@code to} on its line with every edge in one direction (no
+     * station twice), or null when there is none or more than one.
+     */
+    static List<Edge> onlyWay(long from, long to, Map<Long, Map<Long, Long>> rideEdges, Map<Long, Edge> edgesById, Map<Long, Node> nodesById) {
+        long line = nodesById.get(from).lineId();
+        List<List<Edge>> found = new ArrayList<>();
+        for (Long first : rideEdges.getOrDefault(from, Map.of()).values()) {
+            Edge edge = edgesById.get(first);
+            if (nodesById.get(edge.toNodeId()).lineId() != line) continue;
+            List<Edge> way = new ArrayList<>(List.of(edge));
+            Set<Long> seen = new HashSet<>(List.of(from, edge.toNodeId()));
+            walk(way, seen, to, line, edge.direction(), rideEdges, edgesById, nodesById, found);
+            if (found.size() > 1) return null;
+        }
+        return found.size() == 1 ? found.get(0) : null;
+    }
+
+    private static final int MAX_WAY_EDGES = 20;
+
+    private static void walk(List<Edge> way, Set<Long> seen, long to, long line, DirectionCode direction, Map<Long, Map<Long, Long>> rideEdges,
+                             Map<Long, Edge> edgesById, Map<Long, Node> nodesById, List<List<Edge>> found) {
+        long at = way.get(way.size() - 1).toNodeId();
+        if (at == to) {
+            found.add(List.copyOf(way));
+            return;
+        }
+        if (way.size() >= MAX_WAY_EDGES || found.size() > 1) return;
+        for (Long id : rideEdges.getOrDefault(at, Map.of()).values()) {
+            Edge edge = edgesById.get(id);
+            if (edge.direction() != direction || nodesById.get(edge.toNodeId()).lineId() != line || !seen.add(edge.toNodeId())) continue;
+            way.add(edge);
+            walk(way, seen, to, line, direction, rideEdges, edgesById, nodesById, found);
+            way.remove(way.size() - 1);
+            seen.remove(edge.toNodeId());
+        }
+    }
+
+    /** Median dwell (departure − arrival) of each node over the stops that are neither a train's first nor its last. */
+    static Map<Long, Integer> medianDwells(Collection<List<Stop>> trains) {
+        Map<Long, List<Integer>> byNode = new HashMap<>();
+        for (List<Stop> stops : trains) {
+            for (int i = 1; i + 1 < stops.size(); i++) {
+                Stop stop = stops.get(i);
+                if (stop.arriveSec() > 0 && stop.departSec() >= stop.arriveSec()) {
+                    byNode.computeIfAbsent(stop.nodeId(), id -> new ArrayList<>()).add(stop.departSec() - stop.arriveSec());
+                }
+            }
+        }
+        Map<Long, Integer> result = new HashMap<>();
+        byNode.forEach((node, list) -> {
+            Collections.sort(list);
+            result.put(node, list.get(list.size() / 2));
+        });
+        return result;
     }
 
     /** First ride on the edge leaving at or after {@code atOrAfterSec}; empty after the last train or for unknown edges. */
