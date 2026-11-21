@@ -324,6 +324,21 @@ class TimetableRecommendationPostgresTest {
     }
 
     @Test
+    void aBranchChangeAt강동WalksTheMeasuredSecondsAndWaitsTheRest() {
+        // #183: 5210 reaches 강동 at 22:54:10; 5717 (22:54:10 + 1000 s) is the first 마천 train after the 60 s change time.
+        // PR #184 review: the walk is the branch-transfers 16 s, the rest is waiting (not a 60 s walk).
+        LocalDate friday = LocalDate.of(2026, 11, 20);
+        var route = timetable.departingAt(station("하남풍산"), at(friday, 22, 20)).routeTo(station("오금")).orElseThrow();
+        assertThat(legs(route)).containsExactly("5210 하남풍산 22:37:20 -> 강동 22:54:10 (0)", "5717 강동 23:10:50 -> 오금 23:18:30 (984)");
+        assertThat(route.legs()).extracting(com.mju.linkro.subway.api.TimedLeg::walkSec).containsExactly(0, 16);
+        assertThat(route.path().steps()).extracting(com.mju.linkro.subway.api.PathStep::type, com.mju.linkro.subway.api.PathStep::durationSec)
+                .containsExactly(tuple(com.mju.linkro.subway.api.StepType.RIDE, 1010), tuple(com.mju.linkro.subway.api.StepType.TRANSFER, 1000),
+                        tuple(com.mju.linkro.subway.api.StepType.RIDE, 460));
+        assertThat(route.path().totalSeconds()).isEqualTo(2470);
+        assertThat(route.path().transferCount()).isEqualTo(1);
+    }
+
+    @Test
     void forwardRoutesTakeTheSameTrainWithoutTheExtraTransfer() {
         // #107: the forward search alone took 3068K to 연신내 and walked 151 s to 6057 (1 transfer). 6057 also leaves 불광
         // and arrives at the same 08:16:10, so the route is 6057 straight from 불광.

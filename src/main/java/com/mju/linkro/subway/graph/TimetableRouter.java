@@ -329,6 +329,16 @@ public class TimetableRouter implements TimetableRouteFinder {
     private static final Map<BranchRules.Junction, Set<String>> THROUGH_FIRST =
             Map.of(new BranchRules.Junction("강동", "5"), Set.of(BranchRules.MAIN_LOWER, "MACHEON"));
 
+    /**
+     * Walking seconds of a branch change at junction {@code node}: its branch-transfers seconds, else
+     * default-branch-transfer-seconds. Not {@link #timetableChangeSeconds}, which is the least time to change trains
+     * and may include waiting on the platform (강동 60 s against a 16 s walk).
+     */
+    private int branchWalkSeconds(long node) {
+        var transfer = branchTransfers.get(graph.junction(node));
+        return transfer == null ? costs.getDefaultBranchTransferSeconds() : transfer.getSeconds();
+    }
+
     private int changeMeters(long node) {
         var transfer = branchTransfers.get(graph.junction(node));
         return transfer == null ? 0 : transfer.getMeters();
@@ -1055,7 +1065,9 @@ public class TimetableRouter implements TimetableRouteFinder {
                 Node junction = graph.node(edge.fromNodeId());
                 Line line = graph.line(junction.lineId());
                 Station station = graph.station(junction.stationId()).orElseThrow();
-                walk += branchChange ? changeSeconds(previousEdge.fromNodeId(), edge.fromNodeId(), edge.toNodeId()) : 0;
+                // The walk is the measured one (branch-transfers), not the least change time above (PR #184 review):
+                // 강동 하남 <-> 마천 walks 16 s and waits the rest of the 60 s or more.
+                walk += branchChange ? branchWalkSeconds(junction.id()) : 0;
                 steps.add(new PathStep(StepType.TRANSFER, line.id(), line.name(), line.color(), null, station.id(), station.name(),
                         station.id(), station.name(), 0, ride.departSec() - cursor, changeMeters(junction.id())));
                 cursor = ride.departSec();
