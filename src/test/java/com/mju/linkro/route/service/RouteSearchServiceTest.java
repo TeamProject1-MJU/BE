@@ -41,6 +41,25 @@ class RouteSearchServiceTest {
         assertThat(RouteSearchService.routeTypes(List.of(draft(900, 0, 1450)))).containsExactly("FASTEST");
     }
 
+    private static RouteSearchResponse.Route timed(String id, String arrivalAt, int totalTimeSec, int transfers, int fare) {
+        return new RouteSearchResponse.Route(id, null, new RouteSearchResponse.Summary(totalTimeSec, arrivalAt, fare, FareSource.ESTIMATED,
+                transfers, 0, null, null, false, null, false, 0, "TIMETABLE", totalTimeSec, null), List.of());
+    }
+
+    @Test
+    void timetableRoutesLabelTheEarliestArrivalThenTheFewestTransfers() {
+        // FASTEST is the earliest arrival, not the shortest ride: r2 leaves later and rides less but arrives after r1.
+        // FEWER_TRANSFERS goes to the first route with the fewest transfers (창동 -> 강남 before #185: r1 2 transfers, r2 1).
+        assertThat(RouteSearchService.timetableRouteTypes(List.of(timed("r1", "2026-11-16T23:33:30+09:00", 3540, 2, 1850),
+                timed("r2", "2026-11-16T23:36:00+09:00", 3000, 1, 1850), timed("r3", "2026-11-16T23:36:00+09:00", 3000, 1, 1750))))
+                .containsExactly("FASTEST", "FEWER_TRANSFERS", "CHEAPEST");
+        // Since #185 r1 is the earliest route with the fewest transfers: it keeps FASTEST and no other route gets
+        // FEWER_TRANSFERS; a route with as many transfers arriving later gets none either.
+        assertThat(RouteSearchService.timetableRouteTypes(List.of(timed("r1", "2026-11-16T23:33:30+09:00", 3540, 1, 1850),
+                timed("r2", "2026-11-16T23:33:30+09:00", 3540, 2, 1850), timed("r3", "2026-11-16T23:36:00+09:00", 3690, 1, 1850))))
+                .containsExactly("FASTEST", null, null);
+    }
+
     @Test
     void departureRule() {
         Instant departAt = Instant.parse("2026-11-06T09:00:00Z");

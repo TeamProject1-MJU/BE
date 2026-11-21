@@ -34,7 +34,10 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <p>A ride never goes straight back to the station it came from (A -> B, then B -> A): waiting for a train back is
  * never a real route, and it would dodge the junction change walk. Only junction nodes keep one state per edge; at
- * other nodes the best state dominates, because the next train only depends on the time.
+ * other nodes the best state dominates, because the next train only depends on the time. Its transfers do not (#185):
+ * a state settled later that needs fewer transfers than every state that already looked for trains at that node looks
+ * again (a train ridden through the station after a walk reached it first), at most once per fewer transfer count.
+ * Times still come first; the offers only win ties with fewer transfers.
  */
 @Slf4j
 public class TimetableRouter implements TimetableRouteFinder {
@@ -397,6 +400,8 @@ public class TimetableRouter implements TimetableRouteFinder {
         boolean[] settledBoarding = new boolean[nodeIds.length];
         int[] skipped = new int[nodeIds.length];
         Arrays.fill(skipped, -1);
+        int[] rideTransfers = new int[nodeIds.length];
+        Arrays.fill(rideTransfers, Integer.MAX_VALUE);
         while (!queue.isEmpty() && resolved.size() < wanted) {
             Label state = queue.poll();
             if (best[state.key()] != state) continue;
@@ -405,7 +410,11 @@ public class TimetableRouter implements TimetableRouteFinder {
             int uturn = state.ride() == null ? -1 : edgeTo[state.key()];
             int onlyFrom = -1;
             boolean relaxRides = junction || !settledAny[node];
-            if (!relaxRides && skipped[node] >= 0 && skipped[node] != uturn) {
+            if (!relaxRides && state.transfers() < rideTransfers[node]) {
+                // #185: fewer transfers than every state that looked for trains here (a train ridden through after a walk).
+                relaxRides = true;
+                if (skipped[node] >= 0 && skipped[node] != uturn) skipped[node] = -1;
+            } else if (!relaxRides && skipped[node] >= 0 && skipped[node] != uturn) {
                 // The best state here goes back to that neighbour; this one gives it a way forward.
                 relaxRides = true;
                 onlyFrom = skipped[node];
@@ -415,6 +424,7 @@ public class TimetableRouter implements TimetableRouteFinder {
             if (!relaxRides && !relaxWalks) continue;
             boolean first = !settledAny[node];
             settledAny[node] = true;
+            if (relaxRides && onlyFrom < 0) rideTransfers[node] = Math.min(rideTransfers[node], state.transfers());
             if (!state.walked()) settledBoarding[node] = true;
             if (state.ride() != null && originOf[node] >= 0) resolved.putIfAbsent(originOf[node], state);
             for (int e : incoming[node]) {
@@ -618,6 +628,8 @@ public class TimetableRouter implements TimetableRouteFinder {
         boolean[] settledRide = new boolean[nodeIds.length];
         int[] skipped = new int[nodeIds.length];
         Arrays.fill(skipped, -1);
+        int[] rideTransfers = new int[nodeIds.length];
+        Arrays.fill(rideTransfers, Integer.MAX_VALUE);
         Map<Long, Label> arrivals = new HashMap<>();
         while (!queue.isEmpty()) {
             Label state = queue.poll();
@@ -627,7 +639,11 @@ public class TimetableRouter implements TimetableRouteFinder {
             int uturn = state.ride() == null ? -1 : edgeFrom[state.key()];
             int onlyTo = -1;
             boolean relaxRides = junction || !settledAny[node];
-            if (!relaxRides && skipped[node] >= 0 && skipped[node] != uturn) {
+            if (!relaxRides && state.transfers() < rideTransfers[node]) {
+                // #185: fewer transfers than every state that looked for trains here (a train ridden through after a walk).
+                relaxRides = true;
+                if (skipped[node] >= 0 && skipped[node] != uturn) skipped[node] = -1;
+            } else if (!relaxRides && skipped[node] >= 0 && skipped[node] != uturn) {
                 relaxRides = true;
                 onlyTo = skipped[node];
                 skipped[node] = -1;
@@ -636,6 +652,7 @@ public class TimetableRouter implements TimetableRouteFinder {
             if (!relaxRides && !relaxWalks) continue;
             boolean first = !settledAny[node];
             settledAny[node] = true;
+            if (relaxRides && onlyTo < 0) rideTransfers[node] = Math.min(rideTransfers[node], state.transfers());
             if (state.ride() != null) {
                 settledRide[node] = true;
                 long station = graph.node(nodeIds[node]).stationId();

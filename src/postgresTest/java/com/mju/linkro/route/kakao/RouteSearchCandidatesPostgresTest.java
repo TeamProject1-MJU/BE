@@ -69,17 +69,18 @@ class RouteSearchCandidatesPostgresTest extends RouteSearchPostgresSupport {
 
     @Test void mondayNightGivesTheFirstRouteAndItsAlternatives(CapturedOutput output) throws Exception {
         JsonNode data = search("2026-11-16T22:30:00+09:00");
-        // r1 as before (the recommendation's route); then by arrival and transfers. 동대문역사문화공원 (1 transfer) stays
+        // r1 is the recommendation's route: since #185 the same 4207 and 2495 changing at 사당 (1 transfer) instead of
+        // 충무로 and 교대 (2 transfers, same times), which is now r2. Then by arrival and transfers. 동대문역사문화공원 (1 transfer) stays
         // although 사당 has as many and arrives earlier. 노원·건대입구 (2 transfers, 23:36) stays since #155: it arrives
         // with 동대문역사문화공원, within the 6 minute grace. Removed: 동대문·신설동·성수 (3, 23:46:30, 10 minutes after
         // 동대문역사문화공원). The search after it (서울역·시청, 00:00) is more than 15 minutes after r1 and is cut.
         assertThat(routes(data)).containsExactly(
-                "23:33:30 2 충무로,교대",
                 "23:33:30 1 사당",
+                "23:33:30 2 충무로,교대",
                 "23:36 1 동대문역사문화공원",
                 "23:36 2 노원,건대입구");
         assertThat(data.get("routes")).extracting(route -> route.get("routeType").isNull() ? null : route.get("routeType").asString())
-                .containsExactly("FASTEST", "FEWER_TRANSFERS", null, null);
+                .containsExactly("FASTEST", null, null, null);
         // Every route has its own wait and arrival from the request time.
         for (JsonNode route : data.get("routes")) {
             JsonNode summary = route.get("summary");
@@ -93,11 +94,12 @@ class RouteSearchCandidatesPostgresTest extends RouteSearchPostgresSupport {
 
     @Test void saturdayNightHasThreeRoutes() throws Exception {
         JsonNode data = search("2026-11-14T22:30:00+09:00");
-        // 노원·건대입구 (2 transfers, 23:44:30) arrives 6.5 minutes after 사당 (1 transfer, 23:38): more than the 6 minute
-        // grace, so it is removed (with 7 minutes it stayed).
+        // r1 is 사당 since #185 (4173 and 2411, 1 transfer, the same times as 충무로·교대). 노원·건대입구 (2 transfers,
+        // 23:44:30) arrives 6.5 minutes after 사당 (1 transfer, 23:38): more than the 6 minute grace, so it is removed
+        // (with 7 minutes it stayed).
         assertThat(routes(data)).containsExactly(
-                "23:38 2 충무로,교대",
                 "23:38 1 사당",
+                "23:38 2 충무로,교대",
                 "23:44:30 1 동대문역사문화공원");
         server.verify();
     }
