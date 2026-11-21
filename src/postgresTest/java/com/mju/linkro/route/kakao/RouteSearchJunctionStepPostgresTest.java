@@ -109,11 +109,17 @@ class RouteSearchJunctionStepPostgresTest extends RouteSearchPostgresSupport {
     }
 
     @Test void aRouteWithoutAChangeAt강동KeepsItsTrains() throws Exception {
-        // #183 replaces only a change at 강동: 2호선, 2호선 and 3호선 (two transfers, 11:11:30) stay although a 마천 train
-        // from 까치산 arrives at 11:12:00.
-        JsonNode route = first("까치산", "오금", "2026-11-18T10:00:00+09:00");
-        assertThat(route.get("summary").get("transferCount").asInt()).isEqualTo(2);
-        assertThat(route.get("summary").get("arrivalAt").asString()).isEqualTo("2026-11-18T11:11:30+09:00");
+        // #183 replaces only a change at 강동: the router keeps 2호선, 2호선 and 3호선 (two transfers, 11:11:30) although a
+        // 마천 train from 까치산 arrives at 11:12:00. Since #190 that direct train is r1 (no transfer, 30 s later, within
+        // the 15 minute cap) and the router's route is r2.
+        JsonNode data = ok(search(id("까치산"), id("오금"), "2026-11-18T10:00:00+09:00", null), member);
+        server.verify();
+        JsonNode direct = data.get("routes").get(0);
+        assertThat(direct.get("summary").get("transferCount").asInt()).isZero();
+        assertThat(direct.get("summary").get("arrivalAt").asString()).isEqualTo("2026-11-18T11:12:00+09:00");
+        JsonNode router = data.get("routes").get(1);
+        assertThat(router.get("summary").get("transferCount").asInt()).isEqualTo(2);
+        assertThat(router.get("summary").get("arrivalAt").asString()).isEqualTo("2026-11-18T11:11:30+09:00");
     }
 
     @Test void aThroughMacheonTrainIs1Step() throws Exception {
