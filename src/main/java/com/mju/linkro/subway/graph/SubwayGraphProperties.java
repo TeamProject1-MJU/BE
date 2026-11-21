@@ -30,6 +30,12 @@ public class SubwayGraphProperties {
      * {@link #defaultBranchTransferSeconds}.
      */
     private List<TimetableChange> timetableChanges = new ArrayList<>();
+    /**
+     * Timetable routes only (#185): how much longer, in seconds, a route that needs fewer transfers may take than the
+     * quickest one at the same leaving time (arrive-by) or the same arrival (leaving time search). Past it, the quicker
+     * route is taken although it needs more transfers. Provisional 900 s until 카카오맵 samples settle it.
+     */
+    private int timetableDetourCapSeconds = 900;
 
     @Getter
     @Setter
@@ -70,6 +76,7 @@ public class SubwayGraphProperties {
         requireNonNegative("transfer-wait-seconds", transferWaitSeconds);
         requireNonNegative("branch-transfer-wait-seconds", branchTransferWaitSeconds);
         requireNonNegative("default-branch-transfer-seconds", defaultBranchTransferSeconds);
+        requireNonNegative("timetable-detour-cap-seconds", timetableDetourCapSeconds);
         for (BranchTransfer transfer : branchTransfers) {
             if (transfer.station == null || transfer.station.isBlank() || transfer.line == null || transfer.line.isBlank()) {
                 throw new IllegalArgumentException("linkro.subway.graph.branch-transfers entries need station and line");

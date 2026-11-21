@@ -49,6 +49,8 @@ public class TimetableRouter implements TimetableRouteFinder {
     private final int accessSeconds;
     private final Duration noServiceWindow;
     private final SubwayGraphProperties costs;
+    /** {@link SubwayGraphProperties#getTimetableDetourCapSeconds} (#185). */
+    private final int detourCapSeconds;
     private final Map<BranchRules.Junction, SubwayGraphProperties.BranchTransfer> branchTransfers = new HashMap<>();
     /** Timetable-only change times (#183), before {@link #branchTransfers}. */
     private final Map<BranchRules.Junction, Integer> timetableChanges = new HashMap<>();
@@ -89,6 +91,11 @@ public class TimetableRouter implements TimetableRouteFinder {
         this.timetable = timetable;
         this.clock = clock;
         this.costs = costs;
+        if (costs.getTimetableDetourCapSeconds() < 0) {
+            throw new IllegalArgumentException("linkro.subway.graph.timetable-detour-cap-seconds must not be negative: "
+                    + costs.getTimetableDetourCapSeconds());
+        }
+        this.detourCapSeconds = costs.getTimetableDetourCapSeconds();
         this.accessSeconds = accessSeconds;
         costs.getBranchTransfers().forEach(transfer ->
                 branchTransfers.put(new BranchRules.Junction(transfer.getStation(), transfer.getLine()), transfer));
@@ -462,10 +469,12 @@ public class TimetableRouter implements TimetableRouteFinder {
             TimedRoute latest = build(kept, day, service.serviceDate(), origin, destinationStationId);
             // The backward search fixes when to leave; from then on the member takes the earliest way there
             // (장암 -> 모란: an earlier 5호선 and 8호선 connection). Only when it needs no more transfers: one minute is not
-            // worth two extra changes (강남 -> 홍대입구 at 22:00 stays on 2호선).
+            // worth two extra changes (강남 -> 홍대입구 at 22:00 stays on 2호선). Unless the route with fewer transfers
+            // arrives more than the detour cap later (#185): then the earlier one, whatever its transfers.
             TimedRoute replayed = forward(origin, latest.leaveAt(), destinationStationId, blocked).routeTo(destinationStationId, through)
                     .orElse(latest);
-            boolean better = replayed.arriveAt().isBefore(latest.arriveAt()) && noWorse(replayed, latest);
+            boolean better = replayed.arriveAt().isBefore(latest.arriveAt())
+                    && (noWorse(replayed, latest) || overDetourCap(replayed.arriveAt(), latest.arriveAt()));
             routes.put(origin, better ? replayed : latest);
         });
         return routes;
@@ -568,9 +577,18 @@ public class TimetableRouter implements TimetableRouteFinder {
         int maxTravel = (int) Duration.between(leaveAt, earliest.arriveAt()).toSeconds();
         TimedRoute backward = latestDepartures(stationId, earliest.arriveAt(), Set.of(originStationId), Math.max(maxTravel, 1),
                 blocked, through).get(originStationId);
-        if (backward == null || !noWorse(backward, earliest) || backward.leaveAt().isBefore(leaveAt)) return earliest;
+        if (backward == null || backward.leaveAt().isBefore(leaveAt) || backward.arriveAt().isAfter(earliest.arriveAt())) return earliest;
+        // #185: the route with fewer transfers leaves more than the detour cap earlier for the same arrival: the later one,
+        // whatever its transfers.
+        if (overDetourCap(earliest.leaveAt(), backward.leaveAt())) return backward;
+        if (!noWorse(backward, earliest)) return earliest;
         boolean fewerTransfers = backward.path().transferCount() < earliest.path().transferCount();
         return fewerTransfers || backward.leaveAt().isAfter(earliest.leaveAt()) ? backward : earliest;
+    }
+
+    /** {@code later} is more than the detour cap after {@code earlier} (#185): riding that much longer is not worth a transfer. */
+    private boolean overDetourCap(Instant earlier, Instant later) {
+        return Duration.between(earlier, later).getSeconds() > detourCapSeconds;
     }
 
     /** Needs no more transfers and arrives no later. */
