@@ -692,7 +692,10 @@ public class TimetableRouter implements TimetableRouteFinder {
             TrainTimetable.Rides[] dayRides = rides[search.day().ordinal()];
             TrainTimetable.Rides first = dayRides[way.get(0)];
             if (first == null) return Optional.empty();
-            for (int i = Math.max(first.next(search.start()), 0); i >= 0 && i < first.size(); i++) {
+            // No train left on the first edge from the start: none, rather than the earliest of the day (PR #184 review).
+            int from = first.next(search.start());
+            if (from < 0) return Optional.empty();
+            for (int i = from; i < first.size(); i++) {
                 Departure start = first.departure(i);
                 List<Label> moves = new ArrayList<>(List.of(new Label(start.arriveSec(), 0, edgeTo[way.get(0)], way.get(0), edges[way.get(0)], start, null)));
                 int at = start.arriveSec();
