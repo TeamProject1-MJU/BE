@@ -106,11 +106,14 @@ class RouteSearchCandidatesPostgresTest extends RouteSearchPostgresSupport {
 
     @Test void earlyMorningCutsTheSlowRoute(CapturedOutput output) throws Exception {
         JsonNode data = search("2026-11-16T06:00:00+09:00");
-        // 06:55:30 + 15 min = 07:10:30: the next route (동대문·신설동·성수, 07:19) is cut.
+        // 06:55:30 + 15 min = 07:10:30: the next route (동대문·신설동·성수, 07:19) is cut. Since #190 사당 (1 transfer,
+        // 4.5 minutes later, within the 15 minute cap) goes first; the earliest arrival (충무로·교대, 2 transfers) follows.
         assertThat(routes(data)).containsExactly(
-                "06:55:30 2 충무로,교대",
                 "07:00 1 사당",
+                "06:55:30 2 충무로,교대",
                 "07:05:30 1 동대문역사문화공원");
+        assertThat(data.get("routes")).extracting(route -> route.get("routeType").isNull() ? null : route.get("routeType").asString())
+                .containsExactly("FEWER_TRANSFERS", "FASTEST", null);
         assertThat(output.getAll()).contains("3 timetable routes (0 repeated, a later one cut)");
         server.verify();
     }
@@ -122,5 +125,39 @@ class RouteSearchCandidatesPostgresTest extends RouteSearchPostgresSupport {
         assertThat(data.get("routes").get(0).get("routeType").asString()).isEqualTo("FASTEST");
         assertThat(Duration.ofSeconds(data.get("routes").get(0).get("summary").get("waitSec").asInt())).isPositive();
         server.verify();
+    }
+
+    /** #190: r1 of a plain search as "departure arrival transfers", e.g. "10:05:20 11:12 0". */
+    String first(String from, String to, String departAt) throws Exception {
+        JsonNode data = ok(search(id(from), id(to), departAt, null), member);
+        server.verify();
+        JsonNode summary = data.get("routes").get(0).get("summary");
+        return OffsetDateTime.parse(summary.get("departureAt").asString()).toLocalTime() + " "
+                + OffsetDateTime.parse(summary.get("arrivalAt").asString()).toLocalTime() + " " + summary.get("transferCount").asInt();
+    }
+
+    @Test void aDirectTrainWithinTheCapIsTheFirstRoute() throws Exception {
+        // #190, 월 11/23 까치산 -> 오금 10:05: the earliest arrival changes twice (2호선 신도림, 3호선 교대, 11:11:30); 5583
+        // (5호선) runs straight through and arrives 30 s later, so it is r1.
+        assertThat(first("까치산", "오금", "2026-11-23T10:05:00+09:00")).isEqualTo("10:05:20 11:12 0");
+        // 연신내 -> 신내 16:30: 6209 from 연신내 (boarding 16:47:10) arrives with 3261K and 6209 from 약수 (1 transfer) and
+        // takes 11.3 minutes longer, within the 15 minute cap.
+        assertThat(first("연신내", "신내", "2026-11-23T16:30:00+09:00")).isEqualTo("16:46:10 17:53:30 0");
+        // Late at night 5694 (#187) runs from the 마천 branch straight on: 10.7 and 11.3 minutes longer than the 2호선 change at 왕십리.
+        assertThat(first("둔촌동", "동대문역사문화공원", "2026-11-23T23:48:00+09:00")).isEqualTo("00:02:20 00:28:40 0");
+        assertThat(first("마천", "충정로", "2026-11-23T23:37:00+09:00")).isEqualTo("23:51 00:38:20 0");
+    }
+
+    @Test void onFridayTheDirect6209IsTheFirstRouteToo() throws Exception {
+        // 금 11/20 연신내 -> 신내 16:30 has the same candidates as Monday: 6209 from 연신내 (16:47:10, no transfer, 11.3
+        // minutes longer) goes first. The route 27 minutes earlier (6205 round the loop to 봉화산, TimetableDetourPostgresTest)
+        // is not among the candidates.
+        assertThat(first("연신내", "신내", "2026-11-20T16:30:00+09:00")).isEqualTo("16:46:10 17:53:30 0");
+    }
+
+    @Test void aRouteMoreThanTheCapLongerStaysBehind() throws Exception {
+        // 월 11/23 방배 -> 을지로3가 16:40: 2호선 round 성수 (no transfer, 17:29) takes 44.5 minutes against 26.5 for 2호선
+        // to 교대 and 3호선 (1 transfer, 17:17): 18 minutes more, over the cap, so the earliest arrival stays r1.
+        assertThat(first("방배", "을지로3가", "2026-11-23T16:40:00+09:00")).isEqualTo("16:50:30 17:17 1");
     }
 }

@@ -14,6 +14,7 @@ import com.mju.linkro.subway.congestion.CongestionResolver;
 import com.mju.linkro.subway.congestion.DbCongestionLookup;
 import com.mju.linkro.subway.congestion.ServiceSlots;
 import com.mju.linkro.subway.congestion.repository.CongestionStatsRepository;
+import com.mju.linkro.subway.graph.SubwayGraphProperties;
 import com.mju.linkro.subway.timetable.TimetableClock;
 import com.mju.linkro.subway.timetable.TrainTimetable;
 import java.time.*;
@@ -83,6 +84,11 @@ public class RouteSearchService {
      * when the latest route arriving by arriveAt arrives more than this before it (the trains of that time have ended).
      */
     private final int arrivalMaxSlackSeconds;
+    /**
+     * {@code linkro.subway.graph.timetable-detour-cap-seconds} (default 900, #185): how much longer the first route of a
+     * plain search may take than the earliest arrival when it needs fewer transfers ({@link RepresentativeRoute}, #190).
+     */
+    private final int detourCapSeconds;
 
     @Autowired
     public RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
@@ -93,11 +99,12 @@ public class RouteSearchService {
                               @Value("${linkro.route.max-timetable-candidates:10}") int maxTimetableCandidates,
                               @Value("${linkro.route.timetable-candidate-cut-minutes:15}") int candidateCutMinutes,
                               @Value("${linkro.route.timetable-candidate-grace-minutes:6}") int candidateGraceMinutes,
-                              @Value("${linkro.route.arrival-max-slack-minutes:30}") int arrivalMaxSlackMinutes) {
+                              @Value("${linkro.route.arrival-max-slack-minutes:30}") int arrivalMaxSlackMinutes,
+                              Optional<SubwayGraphProperties> graphCosts) {
         this(rooms, stations, kakao, mapper, internal, new DbCongestionLookup(stats, resolver), Clock.systemUTC(),
                 timetable.isPresent() && timetableClock.isPresent() ? new FirstTrainTimer(timetable.get(), timetableClock.get()) : null,
                 timetableRoutes.orElse(null), arriveAtMaxDays, maxTimetableCandidates, candidateCutMinutes, candidateGraceMinutes,
-                arrivalMaxSlackMinutes);
+                arrivalMaxSlackMinutes, graphCosts.orElseGet(SubwayGraphProperties::new).getTimetableDetourCapSeconds());
     }
 
     RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
@@ -141,6 +148,15 @@ public class RouteSearchService {
                        InternalRouteBuilder internal, CongestionLookup congestion, Clock clock, FirstTrainTimer firstTrains,
                        TimetableRouteFinder timetableRoutes, int arriveAtMaxDays, int maxTimetableCandidates,
                        int candidateCutMinutes, int candidateGraceMinutes, int arrivalMaxSlackMinutes) {
+        this(rooms, stations, kakao, mapper, internal, congestion, clock, firstTrains, timetableRoutes, arriveAtMaxDays,
+                maxTimetableCandidates, candidateCutMinutes, candidateGraceMinutes, arrivalMaxSlackMinutes,
+                new SubwayGraphProperties().getTimetableDetourCapSeconds());
+    }
+
+    RouteSearchService(RoomAccess rooms, StationLookup stations, KakaoRouteClient kakao, KakaoRouteMapper mapper,
+                       InternalRouteBuilder internal, CongestionLookup congestion, Clock clock, FirstTrainTimer firstTrains,
+                       TimetableRouteFinder timetableRoutes, int arriveAtMaxDays, int maxTimetableCandidates,
+                       int candidateCutMinutes, int candidateGraceMinutes, int arrivalMaxSlackMinutes, int detourCapSeconds) {
         if (arriveAtMaxDays <= 0) {
             throw new IllegalArgumentException("linkro.route.arrive-at-max-days must be positive");
         }
@@ -170,6 +186,10 @@ public class RouteSearchService {
         this.candidateCut = Duration.ofMinutes(candidateCutMinutes);
         this.candidateGrace = Duration.ofMinutes(candidateGraceMinutes);
         this.arrivalMaxSlackSeconds = arrivalMaxSlackMinutes * 60;
+        if (detourCapSeconds < 0) {
+            throw new IllegalArgumentException("linkro.subway.graph.timetable-detour-cap-seconds must not be negative: " + detourCapSeconds);
+        }
+        this.detourCapSeconds = detourCapSeconds;
     }
 
     public RouteSearchResponse search(UUID userId, RouteSearchRequest request) {
@@ -366,10 +386,12 @@ public class RouteSearchService {
     }
 
     /**
-     * The plain search routes (#153): r1 is the route the plain search always gave ({@link #departingRoute}), then the
-     * alternatives of {@link TimetableCandidates}, searched from the same time (the start of the next service day when r1
-     * was searched again there). routeType compares arrival, transfers and fare across them. When the alternatives fail,
-     * r1 alone is returned. Kakao is not involved.
+     * The plain search routes (#153): the route the plain search always gave ({@link #departingRoute}, the earliest
+     * arrival), then the alternatives of {@link TimetableCandidates}, searched from the same time (the start of the next
+     * service day when it was searched again there). Then {@link RepresentativeRoute} (#190) may put an alternative with
+     * fewer transfers first, so r1 is not always FASTEST; the route ids follow the final order. Recommendations and room
+     * appointment mode keep the earliest arrival. routeType compares arrival, transfers and fare across them. When the
+     * alternatives fail, the first route alone is returned. Kakao is not involved.
      */
     private List<Route> plainSearchRoutes(DepartingRoute first, long originId, long destinationId, Instant requested) {
         List<DepartingRoute> departings = new ArrayList<>(List.of(first));
@@ -391,9 +413,15 @@ public class RouteSearchService {
             log.warn("Route search {} -> {}: timetable alternatives failed, returning the first route only", originId, destinationId,
                     exception);
         }
+        List<DepartingRoute> ordered = RepresentativeRoute.reorder(departings, departings.stream().map(DepartingRoute::route).toList(),
+                detourCapSeconds);
+        if (ordered.get(0) != first) {
+            log.info("Route search {} -> {}: a route with fewer transfers within {} s of the earliest arrival goes first", originId,
+                    destinationId, detourCapSeconds);
+        }
         List<Route> routes = new ArrayList<>();
-        for (int i = 0; i < departings.size(); i++) {
-            routes.add(departingTimedRoute(departings.get(i), originId, destinationId, requested, null, "r" + (i + 1)));
+        for (int i = 0; i < ordered.size(); i++) {
+            routes.add(departingTimedRoute(ordered.get(i), originId, destinationId, requested, null, "r" + (i + 1)));
         }
         List<String> types = timetableRouteTypes(routes);
         List<Route> typed = new ArrayList<>();

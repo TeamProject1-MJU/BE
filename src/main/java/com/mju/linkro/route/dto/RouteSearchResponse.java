@@ -24,7 +24,8 @@ public record RouteSearchResponse(
     @Schema(name = "RouteData", requiredProperties = {"routeId", "routeType", "summary", "steps"})
     public record Route(
             @Schema(description = "응답 안에서 경로를 구분하는 식별자", example = "r1") String routeId,
-            @Schema(description = "FASTEST(소요시간 최소), FEWER_TRANSFERS(환승 최소), CHEAPEST(요금 최소) 중 처음 해당하는 것. 어느 것도 아니면 null",
+            @Schema(description = "FASTEST(소요시간 최소), FEWER_TRANSFERS(환승 최소), CHEAPEST(요금 최소) 중 처음 해당하는 것. 어느 것도 아니면 null. "
+                    + "경로 탐색(시각표 경로)의 첫 경로(r1)는 가장 빨리 도착하는 경로보다 환승이 적고 이동 시간이 15분(설정값) 이내로만 길면 그 경로라서 FASTEST가 아닐 수 있다",
                     example = "FASTEST", types = {"string", "null"}) String routeType,
             Summary summary, List<Step> steps) {}
 
