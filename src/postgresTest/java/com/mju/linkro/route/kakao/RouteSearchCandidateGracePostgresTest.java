@@ -51,8 +51,8 @@ class RouteSearchCandidateGracePostgresTest extends RouteSearchPostgresSupport {
 
     @Test void changdongToGangnamMondayNight() throws Exception {
         assertThat(search("창동", "강남", "2026-11-16T22:30:00+09:00")).containsExactly(
-                "23:33:30 2 충무로,교대",
                 "23:33:30 1 사당",
+                "23:33:30 2 충무로,교대",
                 "23:36 1 동대문역사문화공원",
                 "23:36 2 노원,건대입구");
     }

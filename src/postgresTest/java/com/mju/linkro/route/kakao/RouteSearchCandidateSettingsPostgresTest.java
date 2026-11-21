@@ -49,10 +49,11 @@ class RouteSearchCandidateSettingsPostgresTest extends RouteSearchPostgresSuppor
     }
 
     @Test void aShorterGraceRemovesTheRouteTwoAndAHalfMinutesLater() throws Exception {
-        // 노원·건대입구 (2 transfers, 23:36) is 2.5 minutes after 사당 (1 transfer): kept with 6 minutes, removed with 2.
+        // 노원·건대입구 (2 transfers, 23:36) is 2.5 minutes after 사당 (1 transfer, r1 since #185): kept with 6 minutes,
+        // removed with 2.
         assertThat(search("창동", "강남", "2026-11-16T22:30:00+09:00")).containsExactly(
-                "23:33:30 2 충무로,교대",
                 "23:33:30 1 사당",
+                "23:33:30 2 충무로,교대",
                 "23:36 1 동대문역사문화공원");
     }
 }
