@@ -20,8 +20,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 
 /**
- * #179: at 5호선 강동, a change from a train that goes on along another arm (하남검단산 side) to a 마천 train is its own RIDE
- * step, with no TRANSFER and the same times. The graph and trains of {@link TimetableRouterTest} plus:
+ * #179: at 5호선 강동, a change from a train that goes on along another arm (하남검단산 side) to a 마천 train was its own RIDE
+ * step; #183 makes every change of train between the 천호 side and 마천 there a transfer (TRANSFER step, one transfer,
+ * the same times). The graph and trains of {@link TimetableRouterTest} plus:
  * H2 천호 -> 강동 -> 길동 (하남검단산행), M4 강동 -> 둔촌동 (마천행), K1 천호 -> 강동 (강동행, ends there), M5 강동 -> 둔촌동.
  *
  * <p>#181: when a 마천 train runs through 강동 (M1, M2), it is ridden instead of such a change; the change stays only
@@ -63,16 +64,16 @@ class TimetableRouterJunctionStepTest {
     }
 
     @Test
-    void aChangeFromATrainGoingOnToTheOtherArmIsItsOwnStep() {
+    void aChangeFromATrainGoingOnToTheOtherArmIsATransfer() {
         TimedRoute route = router().departingAt(CHEONHO, at(THURSDAY, 40900)).routeTo(DUNCHON).orElseThrow();
         assertThat(route.legs()).extracting(TimedLeg::trainCode).containsExactly("H2", "M4");
         assertThat(route.path().steps()).extracting(PathStep::type, PathStep::fromStationName, PathStep::toStationName)
-                .containsExactly(tuple(StepType.RIDE, "천호", "강동"), tuple(StepType.RIDE, "강동", "둔촌동"));
-        // Times and transfers as before: no TRANSFER step, the wait at 강동 is in the second step.
-        assertThat(route.path().transferCount()).isZero();
+                .containsExactly(tuple(StepType.RIDE, "천호", "강동"), tuple(StepType.TRANSFER, "강동", "강동"), tuple(StepType.RIDE, "강동", "둔촌동"));
+        // #183: one transfer; the same times, the 30 s wait at 강동 is the TRANSFER step.
+        assertThat(route.path().transferCount()).isEqualTo(1);
         assertThat(route.arriveAt()).isEqualTo(at(THURSDAY, 41210));
         assertThat(route.path().steps().stream().mapToInt(PathStep::durationSec).sum()).isEqualTo(route.path().totalSeconds());
-        assertThat(route.path().steps()).extracting(PathStep::durationSec).containsExactly(70, 140);
+        assertThat(route.path().steps()).extracting(PathStep::durationSec).containsExactly(70, 30, 110);
     }
 
     @Test
@@ -81,16 +82,18 @@ class TimetableRouterJunctionStepTest {
         // the change stays (#181 falls back to #179).
         TimedRoute route = latest(router(List.of(), Set.of("M1", "M2")), CHEONHO, DUNCHON, 41210);
         assertThat(route.legs()).extracting(TimedLeg::trainCode).containsExactly("H2", "M4");
-        assertThat(route.path().steps()).extracting(PathStep::type).containsExactly(StepType.RIDE, StepType.RIDE);
-        assertThat(route.path().transferCount()).isZero();
+        assertThat(route.path().steps()).extracting(PathStep::type).containsExactly(StepType.RIDE, StepType.TRANSFER, StepType.RIDE);
+        assertThat(route.path().transferCount()).isEqualTo(1);
     }
 
     @Test
-    void aTrainEndingAtTheJunctionKeepsOneStep() {
-        // K1 ends at 강동 (as 2호선 trips end at 성수): changing to M5 is not a train going on along another arm.
+    void aTrainEndingAtTheJunctionIsATransferToo() {
+        // K1 ends at 강동 (강동행). #179 kept one step (no train going on along another arm); #183 counts every change of
+        // train between the 천호 side and 마천 at 강동 as a transfer.
         TimedRoute route = router().departingAt(CHEONHO, at(THURSDAY, 41900)).routeTo(DUNCHON).orElseThrow();
         assertThat(route.legs()).extracting(TimedLeg::trainCode).containsExactly("K1", "M5");
-        assertThat(route.path().steps()).extracting(PathStep::type).containsExactly(StepType.RIDE);
+        assertThat(route.path().steps()).extracting(PathStep::type).containsExactly(StepType.RIDE, StepType.TRANSFER, StepType.RIDE);
+        assertThat(route.path().transferCount()).isEqualTo(1);
     }
 
     @Test
@@ -126,10 +129,11 @@ class TimetableRouterJunctionStepTest {
         assertThat(route.path().steps()).extracting(PathStep::type).containsExactly(StepType.RIDE);
         assertThat(route.arriveAt()).isEqualTo(at(THURSDAY, 40690));
         assertThat(route.path().transferCount()).isZero();
-        // Without M2 the change stays, as its own step (#179).
+        // Without M2 the change stays, as a transfer (#183).
         TimedRoute changed = router(extra, Set.of("M2")).departingAt(CHEONHO, at(THURSDAY, 40300)).routeTo(DUNCHON).orElseThrow();
         assertThat(changed.legs()).extracting(TimedLeg::trainCode).containsExactly("H3", "M6");
-        assertThat(changed.path().steps()).extracting(PathStep::type).containsExactly(StepType.RIDE, StepType.RIDE);
+        assertThat(changed.path().steps()).extracting(PathStep::type).containsExactly(StepType.RIDE, StepType.TRANSFER, StepType.RIDE);
+        assertThat(changed.path().transferCount()).isEqualTo(1);
         assertThat(changed.arriveAt()).isEqualTo(at(THURSDAY, 40610));
     }
 }

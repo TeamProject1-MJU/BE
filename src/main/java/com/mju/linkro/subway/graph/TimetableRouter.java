@@ -27,8 +27,9 @@ import lombok.extern.slf4j.Slf4j;
  * walking seconds (station_connections), or the {@code transfer-overrides} seconds for the pairs listed there (#151,
  * 카카오맵 transfer times; timetable routes only, the graph and its distances stay). There is no fixed transfer wait and
  * no dwell setting. Changing trains on the same platform is free,
- * except at a branch junction (#56) where {@link BranchRules} needs a change: there the walk of the junction's
- * {@code branch-transfers} setting is added. Times are seconds of the service day ({@link TimetableClock}), so trains
+ * except at a branch junction (#56) where {@link BranchRules} needs a change, and at 응암 순환 -> 순환 and 강동 천호 side
+ * <-> 마천 (#183): there the junction's {@code timetable-changes} seconds (else {@code branch-transfers}) are the least
+ * time to change, and the change is a transfer. Times are seconds of the service day ({@link TimetableClock}), so trains
  * after midnight keep counting past 86400.
  *
  * <p>A ride never goes straight back to the station it came from (A -> B, then B -> A): waiting for a train back is
@@ -46,6 +47,8 @@ public class TimetableRouter implements TimetableRouteFinder {
     private final Duration noServiceWindow;
     private final SubwayGraphProperties costs;
     private final Map<BranchRules.Junction, SubwayGraphProperties.BranchTransfer> branchTransfers = new HashMap<>();
+    /** Timetable-only change times (#183), before {@link #branchTransfers}. */
+    private final Map<BranchRules.Junction, Integer> timetableChanges = new HashMap<>();
     // Dense indices for the searches: nodes 0..n-1, edges 0..m-1.
     private final Map<Long, Integer> nodeIndex = new HashMap<>();
     private final long[] nodeIds;
@@ -86,6 +89,8 @@ public class TimetableRouter implements TimetableRouteFinder {
         this.accessSeconds = accessSeconds;
         costs.getBranchTransfers().forEach(transfer ->
                 branchTransfers.put(new BranchRules.Junction(transfer.getStation(), transfer.getLine()), transfer));
+        costs.getTimetableChanges().forEach(change ->
+                timetableChanges.put(new BranchRules.Junction(change.getStation(), change.getLine()), change.getSeconds()));
         List<Node> nodes = new ArrayList<>();
         List<Edge> allEdges = new ArrayList<>();
         for (Station station : graph.stations()) {
@@ -266,24 +271,33 @@ public class TimetableRouter implements TimetableRouteFinder {
     private int changeSeconds(long previous, long node, long next) {
         BranchRules.Junction junction = graph.junction(node);
         if (junction == null || BranchRules.through(junction, graph.armAt(node, previous), graph.armAt(node, next))) return 0;
+        return timetableChangeSeconds(junction);
+    }
+
+    /**
+     * Least time to change trains at {@code junction} on timetable routes: its timetable-changes seconds (#183), else its
+     * branch-transfers seconds, else default-branch-transfer-seconds.
+     */
+    private int timetableChangeSeconds(BranchRules.Junction junction) {
+        Integer seconds = timetableChanges.get(junction);
+        if (seconds != null) return seconds;
         var transfer = branchTransfers.get(junction);
         return transfer == null ? costs.getDefaultBranchTransferSeconds() : transfer.getSeconds();
     }
 
     /**
-     * Arm pairs that {@link BranchRules} lets one train run through for the fixed-cost graph, but no timetable train does
-     * (#104): no 6호선 train goes round the 응암 loop twice, so 구산 -> 응암 -> 역촌 always changes trains. Kept here, not in
-     * BranchRules, so the fixed-cost graph is unchanged.
+     * Arm pairs that {@link BranchRules} lets one train run through for the fixed-cost graph, where a timetable route that
+     * changes trains makes a transfer (#183, as 카카오맵): 6호선 응암 순환 -> 순환 (no train goes round twice, #104) and 5호선
+     * 강동 천호 side <-> 마천 (방화 trains run through, 강동-origin and 강동-bound ones do not). Riding one train through
+     * stays free. Kept here, not in BranchRules, so the fixed-cost graph is unchanged.
      */
-    private static final Set<List<String>> CHANGE_ONLY_ON_TIMETABLE = Set.of(List.of("응암", "6", "EUNGAM_LOOP", "EUNGAM_LOOP"));
+    private static final Set<List<String>> CHANGE_ONLY_ON_TIMETABLE = Set.of(List.of("응암", "6", "EUNGAM_LOOP", "EUNGAM_LOOP"),
+            List.of("강동", "5", BranchRules.MAIN_LOWER, "MACHEON"), List.of("강동", "5", "MACHEON", BranchRules.MAIN_LOWER));
 
     /**
-     * Least time between arriving at junction {@code node} and leaving on another train, for the pairs above: the junction's
-     * branch-transfers time, else default-branch-transfer-seconds (the same lookup as {@link #changeSeconds}). It is a wait
-     * on the same line, not a transfer: transfer counts and TRANSFER steps do not change.
-     *
-     * <p>응암 6호선 is set to 60 s in subway-graph-defaults.properties: a provisional value, not measured, and whether the
-     * change is on the same platform is unknown.
+     * Least time between arriving at junction {@code node} and leaving on another train, for the pairs above
+     * ({@link #timetableChangeSeconds}, the same lookup as {@link #changeSeconds}). Changing trains there is a transfer
+     * (#183): it counts in the search and makes a TRANSFER step ({@link #build}). Staying on board waits nothing.
      */
     private int minimumChangeSeconds(long previous, long node, long next) {
         BranchRules.Junction junction = graph.junction(node);
@@ -291,16 +305,14 @@ public class TimetableRouter implements TimetableRouteFinder {
                 String.valueOf(graph.armAt(node, previous)), String.valueOf(graph.armAt(node, next))))) {
             return 0;
         }
-        var transfer = branchTransfers.get(junction);
-        return transfer == null ? costs.getDefaultBranchTransferSeconds() : transfer.getSeconds();
+        return timetableChangeSeconds(junction);
     }
 
     /**
      * Junctions where a change of train that the step rules would hide gets a RIDE step of its own (#179): the train
-     * ridden so far goes on from the junction on another arm, so the rider has to leave it there (5호선 천호 -> 올림픽공원:
-     * a 하남검단산 train to 강동, then a 마천 train). 5호선 강동, and 6호선 응암 (#181): a train coming round the loop goes on
-     * toward 새절, so 구산 -> 역촌 changes there to a train going round again. Only the step is split; no TRANSFER step and
-     * no riding through ({@link #THROUGH_FIRST}) there. 2호선 keeps its steps.
+     * ridden so far goes on from the junction on another arm, so the rider has to leave it there. 5호선 강동 and 6호선 응암
+     * (#181). Since #183 the changes 응암 순환 -> 순환 and 강동 천호 side <-> 마천 are transfers ({@link #CHANGE_ONLY_ON_TIMETABLE});
+     * this split remains for the other arm pairs of these junctions. 2호선 keeps its steps.
      */
     private static final Set<BranchRules.Junction> SPLIT_ON_TRAIN_CHANGE =
             Set.of(new BranchRules.Junction("강동", "5"), new BranchRules.Junction("응암", "6"));
@@ -316,6 +328,16 @@ public class TimetableRouter implements TimetableRouteFinder {
      */
     private static final Map<BranchRules.Junction, Set<String>> THROUGH_FIRST =
             Map.of(new BranchRules.Junction("강동", "5"), Set.of(BranchRules.MAIN_LOWER, "MACHEON"));
+
+    /**
+     * Walking seconds of a branch change at junction {@code node}: its branch-transfers seconds, else
+     * default-branch-transfer-seconds. Not {@link #timetableChangeSeconds}, which is the least time to change trains
+     * and may include waiting on the platform (강동 60 s against a 16 s walk).
+     */
+    private int branchWalkSeconds(long node) {
+        var transfer = branchTransfers.get(graph.junction(node));
+        return transfer == null ? costs.getDefaultBranchTransferSeconds() : transfer.getSeconds();
+    }
 
     private int changeMeters(long node) {
         var transfer = branchTransfers.get(graph.junction(node));
@@ -414,8 +436,8 @@ public class TimetableRouter implements TimetableRouteFinder {
                         ride = edgeRides.lastArriving(state.time() - change - minimum);
                     }
                     if (ride < 0 || edgeRides.departSec(ride) < floor) continue;
-                    offer(best, queue, edgeRides.departSec(ride), state.transfers() + (change > 0 ? 1 : 0), from, e, edge,
-                            edgeRides, ride, state, true);
+                    int transfers = state.transfers() + (change > 0 || changesTrain(minimum, edgeRides, ride, state) ? 1 : 0);
+                    offer(best, queue, edgeRides.departSec(ride), transfers, from, e, edge, edgeRides, ride, state, true);
                 } else if (relaxWalks && state.ride() != null && (blocked == null || !blocked[node])) {
                     int time = state.time() - edge.seconds();
                     if (time >= floor) offer(best, queue, time, state.transfers() + 1, from, e, edge, null, -1, state, true);
@@ -437,6 +459,11 @@ public class TimetableRouter implements TimetableRouteFinder {
             routes.put(origin, better ? replayed : latest);
         });
         return routes;
+    }
+
+    /** A change of train at a {@link #CHANGE_ONLY_ON_TIMETABLE} pair ({@code minimum > 0}): a transfer (#183). */
+    private static boolean changesTrain(int minimum, TrainTimetable.Rides edgeRides, int ride, Label state) {
+        return minimum > 0 && !edgeRides.departure(ride).train().equals(state.ride().train());
     }
 
     /** Keeps the better label per key: later (backwards) or earlier (forwards) time, then fewer transfers. */
@@ -494,13 +521,25 @@ public class TimetableRouter implements TimetableRouteFinder {
                 Through through = new Through(true);
                 Optional<TimedRoute> route = earliest.routeTo(stationId, through)
                         .map(found -> withFewerTransfers(found, originStationId, stationId, leaveAt, blocked, through));
-                if (!through.used || route.isEmpty()) return route;
-                // The guard of #181: riding through must not cost a transfer (영등포구청 16:10 -> 오금: the 마천 train
-                // through from 왕십리 led to 2호선 and 3호선 instead of the 5호선 trains changed at 강동).
-                Through plain = new Through(false);
-                Optional<TimedRoute> without = earliest.routeTo(stationId, plain)
-                        .map(found -> withFewerTransfers(found, originStationId, stationId, leaveAt, blocked, plain));
-                return without.map(other -> Through.fewerTransfers(route.get(), other));
+                Optional<TimedRoute> without = Optional.empty();
+                Optional<TimedRoute> result = route;
+                if (through.used && route.isPresent()) {
+                    // The guard of #181: riding through must not cost a transfer (영등포구청 16:10 -> 오금: the 마천 train
+                    // through from 왕십리 led to 2호선 and 3호선 instead of the 5호선 trains changed at 강동).
+                    Through plain = new Through(false);
+                    without = earliest.routeTo(stationId, plain)
+                            .map(found -> withFewerTransfers(found, originStationId, stationId, leaveAt, blocked, plain));
+                    result = without.map(other -> Through.fewerTransfers(route.get(), other));
+                }
+                if (result.isEmpty()) return result;
+                // #183: a change of train at a THROUGH_FIRST junction left in the result or in either route the guard
+                // compared gives way to one train from the origin to the destination, when there is one.
+                if (changesAtThroughFirst(result.get()) || route.filter(TimetableRouter.this::changesAtThroughFirst).isPresent()
+                        || without.filter(TimetableRouter.this::changesAtThroughFirst).isPresent()) {
+                    Optional<TimedRoute> direct = earliest.directTrain(stationId);
+                    if (direct.isPresent()) return direct;
+                }
+                return result;
             }
         };
     }
@@ -622,8 +661,8 @@ public class TimetableRouter implements TimetableRouteFinder {
                         ride = edgeRides.next(state.time() + change + minimum);
                     }
                     if (ride < 0) continue;
-                    offer(best, queue, edgeRides.arriveSec(ride), state.transfers() + (change > 0 ? 1 : 0), to, e, edge,
-                            edgeRides, ride, state, false);
+                    int transfers = state.transfers() + (change > 0 || changesTrain(minimum, edgeRides, ride, state) ? 1 : 0);
+                    offer(best, queue, edgeRides.arriveSec(ride), transfers, to, e, edge, edgeRides, ride, state, false);
                 } else if (relaxWalks && (blocked == null || !blocked[node])) {
                     offer(best, queue, state.time() + edge.seconds(), state.transfers() + 1, to, e, edge, null, -1, state, false);
                 }
@@ -650,6 +689,38 @@ public class TimetableRouter implements TimetableRouteFinder {
         @Override
         public Optional<TimedRoute> routeTo(long stationId) {
             return routeTo(stationId, new Through(true));
+        }
+
+        /**
+         * One train from the origin to {@code stationId} through a {@link #THROUGH_FIRST} junction between its two arms
+         * (#183): the first that leaves the origin once the search starts boarding and rides every edge of the line's way
+         * there. Empty when the two stations are not on those arms or no such train runs that service day.
+         */
+        Optional<TimedRoute> directTrain(long stationId) {
+            List<Integer> way = throughFirstWay(originStationId, stationId);
+            if (way == null) return Optional.empty();
+            TrainTimetable.Rides[] dayRides = rides[search.day().ordinal()];
+            TrainTimetable.Rides first = dayRides[way.get(0)];
+            if (first == null) return Optional.empty();
+            // No train left on the first edge from the start: none, rather than the earliest of the day (PR #184 review).
+            int from = first.next(search.start());
+            if (from < 0) return Optional.empty();
+            for (int i = from; i < first.size(); i++) {
+                Departure start = first.departure(i);
+                List<Label> moves = new ArrayList<>(List.of(new Label(start.arriveSec(), 0, edgeTo[way.get(0)], way.get(0), edges[way.get(0)], start, null)));
+                int at = start.arriveSec();
+                for (int k = 1; k < way.size(); k++) {
+                    int e = way.get(k);
+                    Optional<Departure> ride = timetable.rideOf(edges[e].id(), search.day(), start.train(), at);
+                    if (ride.isEmpty() || ride.get().departSec() - at > SPLIT_LOOKAHEAD_SECONDS) break;
+                    moves.add(new Label(ride.get().arriveSec(), 0, edgeTo[e], e, edges[e], ride.get(), null));
+                    at = ride.get().arriveSec();
+                }
+                if (moves.size() == way.size()) {
+                    return Optional.of(build(moves, search.day(), search.serviceDate(), originStationId, stationId));
+                }
+            }
+            return Optional.empty();
         }
 
         Optional<TimedRoute> routeTo(long stationId, Through through) {
@@ -739,6 +810,90 @@ public class TimetableRouter implements TimetableRouteFinder {
             return replaced;
         }
         return moves;
+    }
+
+    /** Junction -> station id -> arm, for the stations of the junction's line on each arm (#183), built once per junction. */
+    private final Map<BranchRules.Junction, Map<Long, String>> throughFirstArms = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Arms of {@code junction}'s line, from each neighbour of its node outwards without passing the node again. */
+    private Map<Long, String> armsOf(BranchRules.Junction junction) {
+        return throughFirstArms.computeIfAbsent(junction, key -> {
+            Map<Long, String> arms = new HashMap<>();
+            graph.junctionNodes().forEach((nodeId, j) -> {
+                if (!j.equals(key)) return;
+                int junctionIndex = nodeIndex.get(nodeId);
+                for (int e : outgoing[junctionIndex]) {
+                    if (edges[e].type() != StepType.RIDE) continue;
+                    String arm = graph.armAt(nodeId, nodeIds[edgeTo[e]]);
+                    Deque<Integer> stack = new ArrayDeque<>(List.of(edgeTo[e]));
+                    Set<Integer> seen = new HashSet<>(List.of(junctionIndex, edgeTo[e]));
+                    while (!stack.isEmpty()) {
+                        int n = stack.pop();
+                        arms.putIfAbsent(graph.node(nodeIds[n]).stationId(), arm);
+                        for (int next : outgoing[n]) {
+                            if (edges[next].type() == StepType.RIDE && seen.add(edgeTo[next])) stack.push(edgeTo[next]);
+                        }
+                    }
+                }
+            });
+            return arms;
+        });
+    }
+
+    /**
+     * The RIDE edges (indices) of the line's way from {@code from} to {@code to} when the two stations lie on the two
+     * arms of a {@link #THROUGH_FIRST} junction, else null.
+     */
+    private List<Integer> throughFirstWay(long from, long to) {
+        for (Map.Entry<BranchRules.Junction, Set<String>> entry : THROUGH_FIRST.entrySet()) {
+            Map<Long, String> arms = armsOf(entry.getKey());
+            String a = arms.get(from), b = arms.get(to);
+            if (a == null || b == null || a.equals(b) || !entry.getValue().contains(a) || !entry.getValue().contains(b)) continue;
+            Long lineId = null;
+            for (var j : graph.junctionNodes().entrySet()) {
+                if (j.getValue().equals(entry.getKey())) lineId = graph.node(j.getKey()).lineId();
+            }
+            Integer start = null, end = null;
+            for (Node node : graph.nodesOf(from)) if (lineId != null && node.lineId() == lineId) start = nodeIndex.get(node.id());
+            for (Node node : graph.nodesOf(to)) if (lineId != null && node.lineId() == lineId) end = nodeIndex.get(node.id());
+            if (start == null || end == null) continue;
+            // Breadth-first over the line's RIDE edges: the way between two stations of one line is unique.
+            int[] via = new int[nodeIds.length];
+            Arrays.fill(via, -1);
+            Deque<Integer> queue = new ArrayDeque<>(List.of(start));
+            boolean[] seen = new boolean[nodeIds.length];
+            seen[start] = true;
+            while (!queue.isEmpty() && !seen[end]) {
+                int n = queue.poll();
+                for (int e : outgoing[n]) {
+                    if (edges[e].type() != StepType.RIDE || seen[edgeTo[e]]) continue;
+                    seen[edgeTo[e]] = true;
+                    via[edgeTo[e]] = e;
+                    queue.add(edgeTo[e]);
+                }
+            }
+            if (!seen[end]) continue;
+            LinkedList<Integer> way = new LinkedList<>();
+            for (int n = end; n != start; n = edgeFrom[via[n]]) way.addFirst(via[n]);
+            return way;
+        }
+        return null;
+    }
+
+    /** The route changes trains at a {@link #THROUGH_FIRST} junction between its two arms (#183). */
+    private boolean changesAtThroughFirst(TimedRoute route) {
+        List<TimedLeg> legs = route.legs();
+        for (Map.Entry<BranchRules.Junction, Set<String>> entry : THROUGH_FIRST.entrySet()) {
+            Map<Long, String> arms = armsOf(entry.getKey());
+            for (int i = 0; i + 1 < legs.size(); i++) {
+                TimedLeg before = legs.get(i), after = legs.get(i + 1);
+                if (before.lineId() != after.lineId() || before.toStationId() != after.fromStationId()) continue;
+                if (!entry.getKey().stationName().equals(before.toStationName())) continue;
+                String a = arms.get(before.fromStationId()), b = arms.get(after.toStationId());
+                if (a != null && b != null && !a.equals(b) && entry.getValue().contains(a) && entry.getValue().contains(b)) return true;
+            }
+        }
+        return false;
     }
 
     /** At a {@link #THROUGH_FIRST} junction, between its two arms (either way). */
@@ -900,13 +1055,19 @@ public class TimetableRouter implements TimetableRouteFinder {
             boolean branchChange = previousEdge != null && previousEdge.type() == StepType.RIDE
                     && changeSeconds(previousEdge.fromNodeId(), edge.fromNodeId(), edge.toNodeId()) > 0;
             boolean newTrain = previousRide == null || !previousRide.train().equals(ride.train()) || previousEdge.type() == StepType.TRANSFER;
-            if (branchChange) {
+            // #183: another train at a CHANGE_ONLY_ON_TIMETABLE pair (응암 순환 -> 순환, 강동 천호 side <-> 마천) is a transfer
+            // too, whether the train ridden so far goes on or ends there. Its step lasts the whole wait; no walk is added.
+            boolean trainChange = !branchChange && newTrain && previousEdge != null && previousEdge.type() == StepType.RIDE
+                    && minimumChangeSeconds(previousEdge.fromNodeId(), edge.fromNodeId(), edge.toNodeId()) > 0;
+            if (branchChange || trainChange) {
                 cursor = closeRide(steps, stepFirst, stepLast, stepEdges, stepMeters, previousRide.arriveSec(), cursor);
                 stepFirst = null;
                 Node junction = graph.node(edge.fromNodeId());
                 Line line = graph.line(junction.lineId());
                 Station station = graph.station(junction.stationId()).orElseThrow();
-                walk += changeSeconds(previousEdge.fromNodeId(), edge.fromNodeId(), edge.toNodeId());
+                // The walk is the measured one (branch-transfers), not the least change time above (PR #184 review):
+                // 강동 하남 <-> 마천 walks 16 s and waits the rest of the 60 s or more.
+                walk += branchChange ? branchWalkSeconds(junction.id()) : 0;
                 steps.add(new PathStep(StepType.TRANSFER, line.id(), line.name(), line.color(), null, station.id(), station.name(),
                         station.id(), station.name(), 0, ride.departSec() - cursor, changeMeters(junction.id())));
                 cursor = ride.departSec();

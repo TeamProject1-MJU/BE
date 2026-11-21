@@ -96,9 +96,9 @@ class TimetableRouterEungamTest {
         assertThat(route.legs().get(1).waitSec()).isEqualTo(90);
         assertThat(route.legs().get(1).walkSec()).isZero();
         assertThat(route.arriveAt()).isEqualTo(at(THURSDAY, 30190));
-        // A wait on the same line: no transfer, no TRANSFER step.
-        assertThat(route.path().transferCount()).isZero();
-        assertThat(route.path().steps()).extracting(PathStep::type).containsOnly(StepType.RIDE);
+        // #183: the change of train is a transfer, its wait a TRANSFER step (it was a wait on the same line before).
+        assertThat(route.path().transferCount()).isEqualTo(1);
+        assertThat(route.path().steps()).extracting(PathStep::type).containsExactly(StepType.RIDE, StepType.TRANSFER, StepType.RIDE);
         assertThat(route.path().steps().stream().mapToInt(PathStep::durationSec).sum()).isEqualTo(route.path().totalSeconds());
     }
 
@@ -140,20 +140,23 @@ class TimetableRouterEungamTest {
     }
 
     @Test
-    void aChangeFromATrainGoingOnTowardSaejeolIsItsOwnStep() {
-        // #181: 6053 reaches 응암 from the loop and goes on toward 새절, so 구산 -> 역촌 leaves it at 응암 for 6063, going
-        // round again. That change is its own RIDE step: no TRANSFER step, times and transfers as before.
+    void aChangeFromATrainGoingOnTowardSaejeolIsATransfer() {
+        // 6053 reaches 응암 from the loop and goes on toward 새절, so 구산 -> 역촌 leaves it at 응암 for 6063, going round
+        // again. #181 made that change its own RIDE step; #183 makes it a transfer: a TRANSFER step at 응암 holding the
+        // 90 s wait, one transfer, the same trains and times.
         TimedRoute route = router(trains()).departingAt(4, at(THURSDAY, 29800)).routeTo(3).orElseThrow();
         assertThat(route.legs()).extracting(TimedLeg::trainCode).containsExactly("6053", "6063");
         assertThat(route.path().steps()).extracting(PathStep::type, PathStep::fromStationName, PathStep::toStationName)
-                .containsExactly(tuple(StepType.RIDE, "구산", "응암"), tuple(StepType.RIDE, "응암", "역촌"));
-        assertThat(route.path().transferCount()).isZero();
+                .containsExactly(tuple(StepType.RIDE, "구산", "응암"), tuple(StepType.TRANSFER, "응암", "응암"), tuple(StepType.RIDE, "응암", "역촌"));
+        assertThat(route.path().steps()).extracting(PathStep::durationSec).containsExactly(120, 90, 100);
+        assertThat(route.path().transferCount()).isEqualTo(1);
         assertThat(route.arriveAt()).isEqualTo(at(THURSDAY, 30190));
         assertThat(route.path().steps().stream().mapToInt(PathStep::durationSec).sum()).isEqualTo(route.path().totalSeconds());
-        // The backward search splits the same way.
+        // The backward search makes the same transfer.
         TimedRoute latest = router(trains()).latestDepartures(3, at(THURSDAY, 30190), Set.of(4L), 0).get(4L);
         assertThat(latest.path().steps()).extracting(PathStep::type, PathStep::fromStationName, PathStep::toStationName)
-                .containsExactly(tuple(StepType.RIDE, "구산", "응암"), tuple(StepType.RIDE, "응암", "역촌"));
+                .containsExactly(tuple(StepType.RIDE, "구산", "응암"), tuple(StepType.TRANSFER, "응암", "응암"), tuple(StepType.RIDE, "응암", "역촌"));
+        assertThat(latest.path().transferCount()).isEqualTo(1);
     }
 
     @Test
@@ -166,12 +169,13 @@ class TimetableRouterEungamTest {
     }
 
     @Test
-    void aTrainEndingAtEungamKeepsOneStep() {
-        // 6077 ends at 응암 (does not go on toward 새절): changing to 6063 there is not leaving a train that goes on, as
-        // 2호선 runs ending at 성수.
+    void aTrainEndingAtEungamIsATransferToo() {
+        // 6077 ends at 응암 (does not go on toward 새절). #181 kept one step there (no train left behind); #183 counts every
+        // change of train 순환 -> 순환 at 응암 as a transfer, whether the first train goes on or ends.
         List<String> ending = train("6077", "응암", "응암", "구산:29870:29880", "응암:30000:30000");
         TimedRoute route = router(List.of(ending, LOOP.get(2))).departingAt(4, at(THURSDAY, 29800)).routeTo(3).orElseThrow();
         assertThat(route.legs()).extracting(TimedLeg::trainCode).containsExactly("6077", "6063");
-        assertThat(route.path().steps()).extracting(PathStep::type).containsExactly(StepType.RIDE);
+        assertThat(route.path().steps()).extracting(PathStep::type).containsExactly(StepType.RIDE, StepType.TRANSFER, StepType.RIDE);
+        assertThat(route.path().transferCount()).isEqualTo(1);
     }
 }
