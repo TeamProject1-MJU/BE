@@ -66,9 +66,26 @@ class ChatRoomContext {
 
     ChatReplyRequest build(UUID roomId, Message question) {
         List<ChatTurn> recent = messages.conversationBefore(roomId, question.id(), properties.getAiContextMessages()).stream()
-                .map(message -> new ChatTurn(message.senderType() == SenderType.AI ? AI_NAME : oneLine(message.nickname()), message.content()))
+                .map(ChatRoomContext::turn)
                 .toList();
-        return new ChatReplyRequest(LinkroMention.question(question.content()), recent, describe(roomId, question));
+        return new ChatReplyRequest(oneLine(LinkroMention.question(question.content())), recent, describe(roomId, question));
+    }
+
+    private static ChatTurn turn(Message message) {
+        String content = oneLine(message.content());
+        if (message.senderType() == SenderType.AI) {
+            return new ChatTurn(AI_NAME, content);
+        }
+        return new ChatTurn(userSpeaker(oneLine(message.nickname())), content);
+    }
+
+    /** A user whose nickname matches the AI's name must not look like an assistant turn. */
+    private static String userSpeaker(String nickname) {
+        return imitatesAiName(nickname) ? "사용자(" + nickname + ")" : nickname;
+    }
+
+    private static boolean imitatesAiName(String nickname) {
+        return nickname != null && nickname.equalsIgnoreCase(AI_NAME);
     }
 
     private String describe(UUID roomId, Message question) {
@@ -87,15 +104,15 @@ class ChatRoomContext {
         // "나"/"내" in the question mean the asker: the member's current nickname, else the one the message carried.
         String asker = members.stream().filter(member -> question.senderId() != null && Objects.equals(member.userId(), question.senderId())).map(MemberRow::nickname)
                 .findFirst().orElse(question.nickname());
-        asker = oneLine(asker);
+        asker = userSpeaker(oneLine(asker));
         var text = new StringBuilder("[지금] ").append(APPOINTMENT.format(clock.instant())).append(" (한국 시간)\n")
                 .append("질문자: ").append(asker == null || asker.isEmpty() ? "알 수 없음" : asker).append('\n')
-                .append("약속방 이름: ").append(room.getName()).append('\n');
+                .append("약속방 이름: ").append(oneLine(room.getName())).append('\n');
         text.append("약속 시각: ").append(room.getAppointmentAt() == null ? "미정" : APPOINTMENT.format(room.getAppointmentAt())).append('\n');
         text.append("확정된 약속역: ").append(name(stations, room.getSelectedStationId(), "아직 없음")).append('\n');
         List<String> people = new ArrayList<>();
         for (MemberRow member : members) {
-            people.add(oneLine(member.nickname()) + "(출발역: " + name(stations, member.stationId(), "미설정") + ")");
+            people.add(userSpeaker(oneLine(member.nickname())) + "(출발역: " + name(stations, member.stationId(), "미설정") + ")");
         }
         text.append("참여자: ").append(String.join(", ", people)).append('\n');
         List<String> best = new ArrayList<>();
@@ -106,7 +123,7 @@ class ChatRoomContext {
         return text.toString();
     }
 
-    /** A nickname is user input that goes into the prompt: line breaks and other control characters become one space. */
+    /** User-provided text that goes into the prompt: line breaks and other control characters become one space. */
     static String oneLine(String text) {
         return text == null ? null : text.replaceAll("[\\p{Cc}\\p{Zl}\\p{Zp}\\s]+", " ").strip();
     }
