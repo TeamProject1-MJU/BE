@@ -38,10 +38,16 @@ public class ExplanationWriter {
     public record Item(Facts facts, String stationName) {}
 
     /** The numbers behind one result; the same values are the only ones an AI sentence may contain. */
-    public record Facts(Criterion criterion, int participantCount, Metrics metrics, int totalFareWon, int totalDistanceM) {
+    /** @param maxDistanceM the farthest rider's metres, what the DISTANCE criterion picks by (#193) */
+    public record Facts(Criterion criterion, int participantCount, Metrics metrics, int totalFareWon, int totalDistanceM,
+                        int maxDistanceM) {
 
         double totalDistanceKm() {
             return Math.round(totalDistanceM / 100.0) / 10.0;
+        }
+
+        double maxDistanceKm() {
+            return Math.round(maxDistanceM / 100.0) / 10.0;
         }
 
         Map<String, Object> asMap() {
@@ -54,6 +60,8 @@ public class ExplanationWriter {
             facts.put("averageFareWon", metrics.averageFare());
             facts.put("totalDistanceM", totalDistanceM);
             facts.put("totalDistanceKm", totalDistanceKm());
+            facts.put("maxDistanceM", maxDistanceM);
+            facts.put("maxDistanceKm", maxDistanceKm());
             facts.put("totalTransfers", metrics.totalTransfers());
             return facts;
         }
@@ -97,7 +105,8 @@ public class ExplanationWriter {
         return switch (facts.criterion()) {
             case TIME -> "가장 오래 걸리는 사람이 " + facts.metrics().maxMinutes() + "분으로 모두에게 가장 공평한 역입니다.";
             case FARE -> "참여자 총요금이 " + won(facts.totalFareWon()) + "원으로 가장 저렴한 역입니다.";
-            case DISTANCE -> "참여자 이동거리 합이 " + String.format(Locale.ROOT, "%.1f", facts.totalDistanceKm()) + "km로 가장 짧은 역입니다.";
+            case DISTANCE -> "가장 멀리 가는 사람의 이동거리가 " + String.format(Locale.ROOT, "%.1f", facts.maxDistanceKm())
+                    + "km로 가장 짧은 역입니다.";
         };
     }
 

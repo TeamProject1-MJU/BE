@@ -366,7 +366,8 @@ public class RecommendationService {
     }
 
     private static Facts facts(Criterion criterion, List<ParticipantTime> trips, Candidate best) {
-        return new Facts(criterion, trips.size(), metrics(trips), best.totalFareWon(), best.totalDistanceM());
+        return new Facts(criterion, trips.size(), metrics(trips), best.totalFareWon(), best.totalDistanceM(),
+                best.maxDistanceM());
     }
 
     /** recommendation_results.metric_value: TIME minutes, FARE won, DISTANCE metres. */
