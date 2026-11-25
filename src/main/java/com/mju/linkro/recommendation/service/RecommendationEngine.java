@@ -103,7 +103,10 @@ public class RecommendationEngine {
                 .thenComparingInt(Candidate::spreadMinutes).thenComparingInt(Candidate::sumMinutes)
                 .thenComparingLong(Candidate::stationId);
 
-        /** DISTANCE (#193): farthest rider, then spread, then total metres, like TIME; totals alone favoured one side. */
+        /**
+         * DISTANCE (#193): farthest rider, then spread, then total metres, then station id, over every candidate. No
+         * tolerance and no TIME rule (PR #194 review): totals alone favoured one side, and time already has its own result.
+         */
         static final Comparator<Candidate> BY_DISTANCE = Comparator.comparingInt(Candidate::maxDistanceM)
                 .thenComparingInt(Candidate::spreadDistanceM).thenComparingInt(Candidate::totalDistanceM)
                 .thenComparingLong(Candidate::stationId);
@@ -116,11 +119,11 @@ public class RecommendationEngine {
                 case TIME -> candidates.values().stream().min(BY_TIME);
                 case FARE -> withinTolerance(Comparator.comparingInt(Candidate::totalFareWon),
                         Candidate::totalFareWon, properties.getFareToleranceWon());
-                case DISTANCE -> withinTolerance(BY_DISTANCE, Candidate::maxDistanceM, properties.getDistanceToleranceM());
+                case DISTANCE -> candidates.values().stream().min(BY_DISTANCE);
             };
         }
 
-        /** The cheapest/shortest plus the tolerance counts as a tie; the TIME rule picks among the tied. */
+        /** The cheapest plus the tolerance counts as a tie; the TIME rule picks among the tied (FARE). */
         private Optional<Candidate> withinTolerance(Comparator<Candidate> order,
                 java.util.function.ToIntFunction<Candidate> metric, int tolerance) {
             int lowest = metric.applyAsInt(candidates.values().stream().min(order).orElseThrow());

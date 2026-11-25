@@ -67,12 +67,28 @@ class ExplanationWriterTest {
     }
 
     @Test
-    void theDistanceTemplateAndAiSentenceUseTheFarthestRidersDistance() {
+    void theDistanceTemplateStatesTheFarthestRidersDistanceWithoutASuperlative() {
         // #193: DISTANCE picks by the farthest rider, so 11.2 km (not the 18.8 km total) is the number to name.
-        assertThat(ExplanationWriter.template(facts(Criterion.DISTANCE))).contains("11.2km").doesNotContain("합");
+        assertThat(ExplanationWriter.template(facts(Criterion.DISTANCE)))
+                .isEqualTo("가장 멀리 가는 사람의 예상 탑승 거리는 11.2km입니다.");
         var explanations = new ExplanationWriter(saying(Map.of("DISTANCE", "가장 멀리 가는 사람도 11.2km만 갑니다.")))
                 .explain(List.of(item(Criterion.DISTANCE)));
         assertThat(explanations.get(Criterion.DISTANCE).source()).isEqualTo("AI");
+    }
+
+    @Test
+    void aDistanceSentenceClaimingTheShortestTotalFallsBackEvenWithMatchingNumbers() {
+        // PR #194 review: the numbers are right, but DISTANCE no longer picks the shortest total.
+        for (String claim : List.of("참여자 이동거리 합이 18.8km로 가장 짧은 역입니다.", "총 이동거리가 18.8km로 제일 짧아요.",
+                "가장 짧은 이동거리 합계 18.8km인 역입니다.", "이동거리 합이 최소인 18.8km입니다.")) {
+            var explanations = new ExplanationWriter(saying(Map.of("DISTANCE", claim))).explain(List.of(item(Criterion.DISTANCE)));
+            assertThat(explanations.get(Criterion.DISTANCE)).as(claim)
+                    .isEqualTo(new Explanation("가장 멀리 가는 사람의 예상 탑승 거리는 11.2km입니다.", "TEMPLATE"));
+        }
+        // stating the total without claiming it is the shortest stays
+        var kept = new ExplanationWriter(saying(Map.of("DISTANCE", "이동거리 합은 18.8km이고 가장 멀리 가는 사람은 11.2km입니다.")))
+                .explain(List.of(item(Criterion.DISTANCE)));
+        assertThat(kept.get(Criterion.DISTANCE).source()).isEqualTo("AI");
     }
 
     @Test
@@ -104,7 +120,7 @@ class ExplanationWriterTest {
         assertThat(explanations.get(Criterion.TIME).source()).isEqualTo("TEMPLATE");
         assertThat(explanations.get(Criterion.FARE).source()).isEqualTo("AI");
         assertThat(explanations.get(Criterion.DISTANCE))
-                .isEqualTo(new Explanation("가장 멀리 가는 사람의 이동거리가 11.2km로 가장 짧은 역입니다.", "TEMPLATE"));
+                .isEqualTo(new Explanation("가장 멀리 가는 사람의 예상 탑승 거리는 11.2km입니다.", "TEMPLATE"));
     }
 
     @Test

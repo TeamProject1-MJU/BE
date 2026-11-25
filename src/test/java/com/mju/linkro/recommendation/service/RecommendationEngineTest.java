@@ -100,14 +100,39 @@ class RecommendationEngineTest {
     }
 
     @Test
-    void distanceWithinToleranceIsATieDecidedByTime() {
+    void distanceTakesTheShortestFarthestRiderEvenWhenAnotherIsFaster() {
         Routes routes = new Routes()
                 .route(1, 1, 0, 0, 0).route(1, 2, 600, 0, 5000).route(1, 3, 1200, 0, 4000).route(1, 4, 1500, 0, 3200)
                 .route(2, 1, 600, 0, 5900).route(2, 2, 0, 0, 0).route(2, 3, 300, 0, 3500).route(2, 4, 1800, 0, 3900);
-        // departures st1/st2 are out. Farthest person: st3 4000 m, st4 3900 m → both within 1000 m of 3900.
-        // TIME: st3 (max 20) beats st4 (max 30).
+        // departures st1/st2 are out. Farthest person: st3 4000 m, st4 3900 m. #193 (PR #194 review): no tolerance and
+        // no TIME rule for DISTANCE, so st4 wins although st3 is faster (max 20 against 30 minutes).
+        Evaluation evaluation = engine(routes, fare(1, 1)).evaluate(MEMBERS, NONE);
+        assertThat(evaluation.best(Criterion.DISTANCE).orElseThrow().stationId()).isEqualTo(4);
+        assertThat(evaluation.best(Criterion.TIME).orElseThrow().stationId()).isEqualTo(3);
+    }
+
+    @Test
+    void distanceBreaksAFarthestRiderTieBySpreadNotByTime() {
+        // PR #194 review: st3 and st4 both have a farthest rider of 4000 m. st3 is spread 100 m (4000/3900), st4 is
+        // spread 3000 m (4000/1000) but faster (5 against 10 minutes). The spread decides, not the TIME rule.
+        Routes routes = new Routes()
+                .route(1, 1, 0, 0, 0).route(1, 2, 600, 0, 5000).route(1, 3, 600, 0, 4000).route(1, 4, 300, 0, 4000)
+                .route(2, 1, 600, 0, 5000).route(2, 2, 0, 0, 0).route(2, 3, 600, 0, 3900).route(2, 4, 300, 0, 1000);
         Evaluation evaluation = engine(routes, fare(1, 1)).evaluate(MEMBERS, NONE);
         assertThat(evaluation.best(Criterion.DISTANCE).orElseThrow().stationId()).isEqualTo(3);
+        assertThat(evaluation.best(Criterion.TIME).orElseThrow().stationId()).isEqualTo(4);
+    }
+
+    @Test
+    void distanceBreaksAFarthestAndSpreadTieByTotalThenStationId() {
+        Routes routes = new Routes()
+                .route(1, 1, 0, 0, 0).route(1, 2, 600, 0, 9000).route(1, 3, 300, 0, 4000).route(1, 4, 300, 0, 4000)
+                .route(1, 5, 300, 0, 4000)
+                .route(2, 1, 600, 0, 9000).route(2, 2, 0, 0, 0).route(2, 3, 300, 0, 3000).route(2, 4, 300, 0, 3000)
+                .route(2, 5, 300, 0, 3000);
+        // st3, st4, st5 tie on farthest (4000), spread (1000) and total (7000): the lowest station id wins.
+        assertThat(engine(routes, fare(1, 1)).evaluate(MEMBERS, NONE).best(Criterion.DISTANCE).orElseThrow().stationId())
+                .isEqualTo(3);
     }
 
     /** Seconds proportional to metres (2 minutes per km) so TIME agrees with distance in the skew cases. */

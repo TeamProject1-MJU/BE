@@ -500,7 +500,7 @@ class RecommendationServiceTest {
         assertThat(response.results()).extracting(Result::explanation).containsExactly(
                 "가장 오래 걸리는 사람이 20분으로 모두에게 가장 공평한 역입니다.",
                 "참여자 총요금이 1,200원으로 가장 저렴한 역입니다.",
-                "가장 멀리 가는 사람의 이동거리가 4.0km로 가장 짧은 역입니다.");
+                "가장 멀리 가는 사람의 예상 탑승 거리는 4.0km입니다.");
         verify(ai, times(1)).explainRecommendation(any());
         assertThat(repository.results).extracting(RecommendationRepository.ResultRow::reasonSource).containsOnly("TEMPLATE");
     }
@@ -514,7 +514,7 @@ class RecommendationServiceTest {
         assertThat(response.results()).extracting(Result::explanationSource).containsExactly("TEMPLATE", "AI", "TEMPLATE");
         assertThat(response.results().get(0).explanation()).isEqualTo("가장 오래 걸리는 사람이 20분으로 모두에게 가장 공평한 역입니다.");
         assertThat(response.results().get(1).explanation()).isEqualTo("총요금이 1,200원입니다.");
-        assertThat(response.results().get(2).explanation()).startsWith("가장 멀리 가는 사람의 이동거리가");   // the AI left DISTANCE out
+        assertThat(response.results().get(2).explanation()).startsWith("가장 멀리 가는 사람의 예상 탑승 거리는");   // the AI left DISTANCE out
         verify(wrong, times(1)).explainRecommendation(any());
     }
 
