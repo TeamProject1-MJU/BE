@@ -103,6 +103,11 @@ public class RecommendationEngine {
                 .thenComparingInt(Candidate::spreadMinutes).thenComparingInt(Candidate::sumMinutes)
                 .thenComparingLong(Candidate::stationId);
 
+        /** DISTANCE (#193): farthest rider, then spread, then total metres, like TIME; totals alone favoured one side. */
+        static final Comparator<Candidate> BY_DISTANCE = Comparator.comparingInt(Candidate::maxDistanceM)
+                .thenComparingInt(Candidate::spreadDistanceM).thenComparingInt(Candidate::totalDistanceM)
+                .thenComparingLong(Candidate::stationId);
+
         public Optional<Candidate> best(Criterion criterion) {
             if (candidates.isEmpty()) {
                 return Optional.empty();
@@ -111,8 +116,7 @@ public class RecommendationEngine {
                 case TIME -> candidates.values().stream().min(BY_TIME);
                 case FARE -> withinTolerance(Comparator.comparingInt(Candidate::totalFareWon),
                         Candidate::totalFareWon, properties.getFareToleranceWon());
-                case DISTANCE -> withinTolerance(Comparator.comparingInt(Candidate::totalDistanceM),
-                        Candidate::totalDistanceM, properties.getDistanceToleranceM());
+                case DISTANCE -> withinTolerance(BY_DISTANCE, Candidate::maxDistanceM, properties.getDistanceToleranceM());
             };
         }
 

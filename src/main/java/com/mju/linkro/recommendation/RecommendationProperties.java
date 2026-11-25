@@ -7,7 +7,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * Tie tolerances of API 8.1 ("허용 폭은 설정값"). The FARE criterion treats candidates within
  * {@code fareToleranceWon} of the cheapest as tied and the DISTANCE criterion within {@code distanceToleranceM} of the
- * shortest; ties are decided by the TIME rule.
+ * shortest farthest-rider distance (#193); ties are decided by the TIME rule.
  */
 @Getter
 @Setter
