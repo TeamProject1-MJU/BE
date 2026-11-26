@@ -238,7 +238,7 @@ Table recommendation_results {
   run_id        uuid                     [not null]
   criterion     recommendation_criterion [not null]
   station_id    bigint                   [not null]
-  metric_value  numeric(10,2)            [not null, note: 'TIME=분, FARE=원, DISTANCE=m']
+  metric_value  numeric(10,2)            [not null, note: 'TIME=분(가장 오래 걸리는 사람), FARE=원(총요금), DISTANCE=m(가장 멀리 가는 사람, #193 이전 행은 이동거리 합)']
   trips         jsonb                    [not null, note: '참여자별 이동 정보 배열(API participantTimes 스냅샷). 모든 값은 다익스트라 기준 추천용 추정치(예상 시간·예상 요금)이며 카카오 응답값이 아님. 원소 키: userId, nickname, departureStationId(필수), travelMinutes, transferCount, fareWon, distanceM, departureAt(출발 예정 시각 = appointment_at − travelMinutes, appointment_at이 없으면 요청 시각), congestion({pct, level, levelLabel}: 경로 정차역 혼잡도 최댓값), segments(API participantTimes[].segments 형식 그대로). 응답의 departureStation{id, name}은 departureStationId로 조회 시 채움']
   nearby        jsonb                    [not null, note: '앞뒤 역 목록']
   reason        text                     [not null]

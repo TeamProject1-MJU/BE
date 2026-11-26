@@ -258,10 +258,11 @@ class RecommendationServiceTest {
         assertThat(response.appliedConstraints().maxMinutes()).isNull();
         assertThat(response.createdAt()).isEqualTo("2026-11-12T09:00:00+09:00");
 
-        // stored: one run, one row per criterion (unique), metric_value in minutes / won / metres
+        // stored: one run, one row per criterion (unique), metric_value in minutes / won / metres. DISTANCE stores the
+        // farthest rider (st3: 3000 m and 4000 m → 4000), not the 7000 m total (#193), as TIME stores the slowest person.
         assertThat(repository.runs).hasSize(1);
         assertThat(repository.results).extracting(RecommendationRepository.ResultRow::criterion).containsExactly("TIME", "FARE", "DISTANCE");
-        assertThat(repository.results).extracting(row -> row.metricValue().intValue()).containsExactly(20, 1200, 7000);
+        assertThat(repository.results).extracting(row -> row.metricValue().intValue()).containsExactly(20, 1200, 4000);
         assertThat(repository.results).extracting(RecommendationRepository.ResultRow::runId).containsOnly(repository.runs.get(0).id());
         assertThat(repository.results).extracting(RecommendationRepository.ResultRow::reasonSource).containsOnly("AI");
 

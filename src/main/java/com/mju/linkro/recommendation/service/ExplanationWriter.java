@@ -37,8 +37,11 @@ public class ExplanationWriter {
     /** One result to explain: its numbers and the station the AI names. */
     public record Item(Facts facts, String stationName) {}
 
-    /** The numbers behind one result; the same values are the only ones an AI sentence may contain. */
-    /** @param maxDistanceM the farthest rider's metres, what the DISTANCE criterion picks by (#193) */
+    /**
+     * The numbers behind one result; the same values are the only ones an AI sentence may contain.
+     *
+     * @param maxDistanceM the farthest rider's metres, what the DISTANCE criterion picks by (#193)
+     */
     public record Facts(Criterion criterion, int participantCount, Metrics metrics, int totalFareWon, int totalDistanceM,
                         int maxDistanceM) {
 
@@ -144,6 +147,7 @@ public class ExplanationWriter {
         return false;
     }
 
+    // A regex backstop only: the real guards are the prohibition in explanation.txt and the template fallback.
     private static final Pattern TOTAL = Pattern.compile("합|총|전체|모두 더");
     private static final Pattern SUPERLATIVE = Pattern.compile("(가장|제일)\\s*(짧|적|작)|최소|최단|최저");
 

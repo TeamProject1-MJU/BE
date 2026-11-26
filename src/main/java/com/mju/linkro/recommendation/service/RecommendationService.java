@@ -370,12 +370,15 @@ public class RecommendationService {
                 best.maxDistanceM());
     }
 
-    /** recommendation_results.metric_value: TIME minutes, FARE won, DISTANCE metres. */
+    /**
+     * recommendation_results.metric_value: the value each criterion picks by. TIME the slowest person's minutes, FARE
+     * total won, DISTANCE the farthest rider's metres (#193; rows saved before it hold the total metres).
+     */
     private static BigDecimal metric(Criterion criterion, Candidate best) {
         return BigDecimal.valueOf(switch (criterion) {
             case TIME -> best.maxMinutes();
             case FARE -> best.totalFareWon();
-            case DISTANCE -> best.totalDistanceM();
+            case DISTANCE -> best.maxDistanceM();
         });
     }
 

@@ -126,6 +126,9 @@ class RecommendationPostgresTest {
                 .isEqualTo("object2");
         assertThat(jdbc.queryForObject("select metric_value::int from recommendation_results where criterion = 'TIME'", Integer.class))
                 .isEqualTo(created.results().get(0).metrics().maxMinutes());
+        // #193: DISTANCE stores the farthest rider's metres, the value it picks by
+        assertThat(jdbc.queryForObject("select metric_value::int from recommendation_results where criterion = 'DISTANCE'", Integer.class))
+                .isEqualTo(created.results().get(2).participantTimes().stream().mapToInt(trip -> trip.distanceM()).max().orElseThrow());
 
         assertThat(service.latest(owner, room)).isEqualTo(created);
         assertThat(service.byRun(member, room, UUID.fromString(created.runId()))).isEqualTo(created);
