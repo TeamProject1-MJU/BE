@@ -13,6 +13,7 @@ import com.mju.linkro.room.dto.RoomResponses.Station;
 import com.mju.linkro.room.repository.MeetingRoomRepository;
 import com.mju.linkro.room.repository.RoomReadRepository;
 import com.mju.linkro.room.repository.RoomReadRepository.MemberRow;
+import java.text.Normalizer;
 import java.time.Clock;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -84,8 +85,11 @@ class ChatRoomContext {
         return imitatesAiName(nickname) ? "사용자(" + nickname + ")" : nickname;
     }
 
+    /** Compared after NFKC and without format characters, so "링크로" plus a zero-width space or a compatibility form still matches. */
     private static boolean imitatesAiName(String nickname) {
-        return nickname != null && nickname.equalsIgnoreCase(AI_NAME);
+        if (nickname == null) return false;
+        String plain = Normalizer.normalize(nickname, Normalizer.Form.NFKC).replaceAll("\\p{Cf}+", "").strip();
+        return plain.equalsIgnoreCase(AI_NAME);
     }
 
     private String describe(UUID roomId, Message question) {
@@ -123,9 +127,12 @@ class ChatRoomContext {
         return text.toString();
     }
 
-    /** User-provided text that goes into the prompt: line breaks and other control characters become one space. */
+    /**
+     * User-provided text that goes into the prompt: invisible format characters (zero-width space, BOM, bidi marks) are
+     * dropped, and line breaks, other control characters and any space (also the full-width one) become one space.
+     */
     static String oneLine(String text) {
-        return text == null ? null : text.replaceAll("[\\p{Cc}\\p{Zl}\\p{Zp}\\s]+", " ").strip();
+        return text == null ? null : text.replaceAll("\\p{Cf}+", "").replaceAll("[\\p{Cc}\\p{Z}\\s]+", " ").strip();
     }
 
     private static String name(Map<Long, Station> stations, Long id, String fallback) {
