@@ -137,24 +137,30 @@ public class OpenAiClient implements AiClient {
 
     @Override
     public GeneratedText replyToChat(ChatReplyRequest req) {
+        String input = chatInput(req);
+        if (req.tools() != null) {
+            try {
+                return text(chatWithTools(input, req.tools()), CHAT_MAX_LENGTH);
+            } catch (IllegalArgumentException exception) {
+                throw unavailable(exception);
+            }
+        }
+        try {
+            return text(call(textClient, CHAT_PROMPT, textInput(input), null, chatReasoningEffort), CHAT_MAX_LENGTH);
+        } catch (ReasoningRejected rejected) {
+            return text(call(textClient, CHAT_PROMPT, textInput(input), null, null), CHAT_MAX_LENGTH);
+        }
+    }
+
+    /** The text an @링크로 question goes to the model as: the room context, one "닉네임: 내용" line per earlier turn, then the question. */
+    public static String chatInput(ChatReplyRequest req) {
         var input = new StringBuilder();
         if (req.roomContext() != null) input.append("방 정보: ").append(req.roomContext()).append('\n');
         for (ChatTurn turn : req.recentMessages()) {
             input.append(turn.nickname()).append(": ").append(turn.content()).append('\n');
         }
         input.append("질문: ").append(req.question());
-        if (req.tools() != null) {
-            try {
-                return text(chatWithTools(input.toString(), req.tools()), CHAT_MAX_LENGTH);
-            } catch (IllegalArgumentException exception) {
-                throw unavailable(exception);
-            }
-        }
-        try {
-            return text(call(textClient, CHAT_PROMPT, textInput(input.toString()), null, chatReasoningEffort), CHAT_MAX_LENGTH);
-        } catch (ReasoningRejected rejected) {
-            return text(call(textClient, CHAT_PROMPT, textInput(input.toString()), null, null), CHAT_MAX_LENGTH);
-        }
+        return input.toString();
     }
 
     /**
