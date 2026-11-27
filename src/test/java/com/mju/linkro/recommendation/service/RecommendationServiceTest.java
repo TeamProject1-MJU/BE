@@ -258,10 +258,11 @@ class RecommendationServiceTest {
         assertThat(response.appliedConstraints().maxMinutes()).isNull();
         assertThat(response.createdAt()).isEqualTo("2026-11-12T09:00:00+09:00");
 
-        // stored: one run, one row per criterion (unique), metric_value in minutes / won / metres
+        // stored: one run, one row per criterion (unique), metric_value in minutes / won / metres. DISTANCE stores the
+        // farthest rider (st3: 3000 m and 4000 m → 4000), not the 7000 m total (#193), as TIME stores the slowest person.
         assertThat(repository.runs).hasSize(1);
         assertThat(repository.results).extracting(RecommendationRepository.ResultRow::criterion).containsExactly("TIME", "FARE", "DISTANCE");
-        assertThat(repository.results).extracting(row -> row.metricValue().intValue()).containsExactly(20, 1200, 7000);
+        assertThat(repository.results).extracting(row -> row.metricValue().intValue()).containsExactly(20, 1200, 4000);
         assertThat(repository.results).extracting(RecommendationRepository.ResultRow::runId).containsOnly(repository.runs.get(0).id());
         assertThat(repository.results).extracting(RecommendationRepository.ResultRow::reasonSource).containsOnly("AI");
 
@@ -500,7 +501,7 @@ class RecommendationServiceTest {
         assertThat(response.results()).extracting(Result::explanation).containsExactly(
                 "가장 오래 걸리는 사람이 20분으로 모두에게 가장 공평한 역입니다.",
                 "참여자 총요금이 1,200원으로 가장 저렴한 역입니다.",
-                "참여자 이동거리 합이 7.0km로 가장 짧은 역입니다.");
+                "가장 멀리 가는 사람의 예상 탑승 거리는 4.0km입니다.");
         verify(ai, times(1)).explainRecommendation(any());
         assertThat(repository.results).extracting(RecommendationRepository.ResultRow::reasonSource).containsOnly("TEMPLATE");
     }
@@ -514,7 +515,7 @@ class RecommendationServiceTest {
         assertThat(response.results()).extracting(Result::explanationSource).containsExactly("TEMPLATE", "AI", "TEMPLATE");
         assertThat(response.results().get(0).explanation()).isEqualTo("가장 오래 걸리는 사람이 20분으로 모두에게 가장 공평한 역입니다.");
         assertThat(response.results().get(1).explanation()).isEqualTo("총요금이 1,200원입니다.");
-        assertThat(response.results().get(2).explanation()).startsWith("참여자 이동거리 합이");   // the AI left DISTANCE out
+        assertThat(response.results().get(2).explanation()).startsWith("가장 멀리 가는 사람의 예상 탑승 거리는");   // the AI left DISTANCE out
         verify(wrong, times(1)).explainRecommendation(any());
     }
 

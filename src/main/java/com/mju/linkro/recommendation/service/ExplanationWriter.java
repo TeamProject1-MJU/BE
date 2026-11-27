@@ -37,11 +37,20 @@ public class ExplanationWriter {
     /** One result to explain: its numbers and the station the AI names. */
     public record Item(Facts facts, String stationName) {}
 
-    /** The numbers behind one result; the same values are the only ones an AI sentence may contain. */
-    public record Facts(Criterion criterion, int participantCount, Metrics metrics, int totalFareWon, int totalDistanceM) {
+    /**
+     * The numbers behind one result; the same values are the only ones an AI sentence may contain.
+     *
+     * @param maxDistanceM the farthest rider's metres, what the DISTANCE criterion picks by (#193)
+     */
+    public record Facts(Criterion criterion, int participantCount, Metrics metrics, int totalFareWon, int totalDistanceM,
+                        int maxDistanceM) {
 
         double totalDistanceKm() {
             return Math.round(totalDistanceM / 100.0) / 10.0;
+        }
+
+        double maxDistanceKm() {
+            return Math.round(maxDistanceM / 100.0) / 10.0;
         }
 
         Map<String, Object> asMap() {
@@ -54,6 +63,8 @@ public class ExplanationWriter {
             facts.put("averageFareWon", metrics.averageFare());
             facts.put("totalDistanceM", totalDistanceM);
             facts.put("totalDistanceKm", totalDistanceKm());
+            facts.put("maxDistanceM", maxDistanceM);
+            facts.put("maxDistanceKm", maxDistanceKm());
             facts.put("totalTransfers", metrics.totalTransfers());
             return facts;
         }
@@ -81,11 +92,13 @@ public class ExplanationWriter {
             Criterion criterion = item.facts().criterion();
             String text = texts.get(criterion.name());
             text = text == null ? "" : text.strip();
-            if (!text.isEmpty() && numbersMatch(text, item.stationName(), item.facts())) {
+            if (!text.isEmpty() && numbersMatch(text, item.stationName(), item.facts())
+                    && !(criterion == Criterion.DISTANCE && claimsShortestTotal(text))) {
                 explanations.put(criterion, new Explanation(text, SOURCE_AI));
             } else {
                 if (!texts.isEmpty()) {
-                    log.warn("AI explanation for {} dropped: {}", criterion, text.isEmpty() ? "missing" : "number mismatch");
+                    log.warn("AI explanation for {} dropped: {}", criterion, text.isEmpty() ? "missing"
+                            : criterion == Criterion.DISTANCE && claimsShortestTotal(text) ? "shortest-total claim" : "number mismatch");
                 }
                 explanations.put(criterion, new Explanation(template(item.facts()), SOURCE_TEMPLATE));
             }
@@ -97,7 +110,8 @@ public class ExplanationWriter {
         return switch (facts.criterion()) {
             case TIME -> "가장 오래 걸리는 사람이 " + facts.metrics().maxMinutes() + "분으로 모두에게 가장 공평한 역입니다.";
             case FARE -> "참여자 총요금이 " + won(facts.totalFareWon()) + "원으로 가장 저렴한 역입니다.";
-            case DISTANCE -> "참여자 이동거리 합이 " + String.format(Locale.ROOT, "%.1f", facts.totalDistanceKm()) + "km로 가장 짧은 역입니다.";
+            case DISTANCE -> "가장 멀리 가는 사람의 예상 탑승 거리는 " + String.format(Locale.ROOT, "%.1f", facts.maxDistanceKm())
+                    + "km입니다.";
         };
     }
 
@@ -118,6 +132,24 @@ public class ExplanationWriter {
         }
         return true;
     }
+
+    /**
+     * #193: DISTANCE is not picked by the total any more, so a sentence that calls the total the shortest or smallest
+     * (합/합계/총/전체 with 가장·제일 짧/적/작, 최소, 최단 or 최저 in one sentence; "가장 멀리" is fine) is false even
+     * when its numbers match.
+     */
+    static boolean claimsShortestTotal(String text) {
+        for (String sentence : text.split("(?<=[.!?。])\\s+|\\R")) {
+            if (TOTAL.matcher(sentence).find() && SUPERLATIVE.matcher(sentence).find()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // A regex backstop only: the real guards are the prohibition in explanation.txt and the template fallback.
+    private static final Pattern TOTAL = Pattern.compile("합|총|전체|모두 더");
+    private static final Pattern SUPERLATIVE = Pattern.compile("(가장|제일)\\s*(짧|적|작)|최소|최단|최저");
 
     private static String won(int value) {
         return String.format(Locale.ROOT, "%,d", value);

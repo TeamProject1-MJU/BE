@@ -127,7 +127,7 @@ linkro:
       chat-reasoning-effort: ${OPENAI_CHAT_REASONING_EFFORT:low}
       explain-read-timeout: ${OPENAI_EXPLAIN_READ_TIMEOUT:6s}
 
-# Recommendation (#74, API 8.1). Tie tolerances ("허용 폭") with their defaults; see docs/recommendation-74.md.
+# Recommendation (#74, API 8.1). Tie tolerance ("허용 폭") with its default; see docs/recommendation-74.md.
 #   linkro.recommendation.fare-tolerance-won: 100       FARE: within this of the cheapest counts as a tie (TIME rule decides)
-#   linkro.recommendation.distance-tolerance-m: 1000    DISTANCE: within this of the shortest counts as a tie
+#   (DISTANCE has no tolerance since #193: farthest rider, then spread, then total, then station id)
 #   linkro.recommendation.in-progress-max-seconds: 60   one calculation per room at a time; a hold older than this is taken over (#98)

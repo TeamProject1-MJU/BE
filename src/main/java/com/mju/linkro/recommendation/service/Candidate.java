@@ -31,6 +31,8 @@ public final class Candidate {
     private final int sumMinutes;
     private final int totalFareWon;
     private final int totalDistanceM;
+    private final int maxDistanceM;
+    private final int minDistanceM;
     private final int totalTransfers;
 
     public Candidate(long stationId, List<Trip> trips) {
@@ -41,6 +43,8 @@ public final class Candidate {
         this.sumMinutes = trips.stream().mapToInt(Trip::minutes).sum();
         this.totalFareWon = trips.stream().mapToInt(Trip::fareWon).sum();
         this.totalDistanceM = trips.stream().mapToInt(trip -> trip.path().rideDistanceM()).sum();
+        this.maxDistanceM = trips.stream().mapToInt(trip -> trip.path().rideDistanceM()).max().orElse(0);
+        this.minDistanceM = trips.stream().mapToInt(trip -> trip.path().rideDistanceM()).min().orElse(0);
         this.totalTransfers = trips.stream().mapToInt(trip -> trip.path().transferCount()).sum();
     }
 
@@ -51,5 +55,7 @@ public final class Candidate {
     public int sumMinutes() { return sumMinutes; }
     public int totalFareWon() { return totalFareWon; }
     public int totalDistanceM() { return totalDistanceM; }
+    public int maxDistanceM() { return maxDistanceM; }
+    public int spreadDistanceM() { return maxDistanceM - minDistanceM; }
     public int totalTransfers() { return totalTransfers; }
 }

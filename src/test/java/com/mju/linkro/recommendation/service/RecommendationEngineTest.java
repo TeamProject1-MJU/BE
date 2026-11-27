@@ -100,14 +100,77 @@ class RecommendationEngineTest {
     }
 
     @Test
-    void distanceWithinToleranceIsATieDecidedByTime() {
+    void distanceTakesTheShortestFarthestRiderEvenWhenAnotherIsFaster() {
         Routes routes = new Routes()
-                .route(1, 1, 0, 0, 0).route(1, 2, 600, 0, 5000).route(1, 3, 1200, 0, 5600).route(1, 4, 1500, 0, 2000)
-                .route(2, 1, 600, 0, 5900).route(2, 2, 0, 0, 0).route(2, 3, 300, 0, 400).route(2, 4, 1800, 0, 3900);
-        // departures st1/st2 are out. st3: 6000 m, st4: 5900 m → shortest 5900, both within 1000 m.
-        // TIME: st3 (max 20) beats st4 (max 30).
+                .route(1, 1, 0, 0, 0).route(1, 2, 600, 0, 5000).route(1, 3, 1200, 0, 4000).route(1, 4, 1500, 0, 3200)
+                .route(2, 1, 600, 0, 5900).route(2, 2, 0, 0, 0).route(2, 3, 300, 0, 3500).route(2, 4, 1800, 0, 3900);
+        // departures st1/st2 are out. Farthest person: st3 4000 m, st4 3900 m. #193 (PR #194 review): no tolerance and
+        // no TIME rule for DISTANCE, so st4 wins although st3 is faster (max 20 against 30 minutes).
+        Evaluation evaluation = engine(routes, fare(1, 1)).evaluate(MEMBERS, NONE);
+        assertThat(evaluation.best(Criterion.DISTANCE).orElseThrow().stationId()).isEqualTo(4);
+        assertThat(evaluation.best(Criterion.TIME).orElseThrow().stationId()).isEqualTo(3);
+    }
+
+    @Test
+    void distanceBreaksAFarthestRiderTieBySpreadNotByTime() {
+        // PR #194 review: st3 and st4 both have a farthest rider of 4000 m. st3 is spread 100 m (4000/3900), st4 is
+        // spread 3000 m (4000/1000) but faster (5 against 10 minutes). The spread decides, not the TIME rule.
+        Routes routes = new Routes()
+                .route(1, 1, 0, 0, 0).route(1, 2, 600, 0, 5000).route(1, 3, 600, 0, 4000).route(1, 4, 300, 0, 4000)
+                .route(2, 1, 600, 0, 5000).route(2, 2, 0, 0, 0).route(2, 3, 600, 0, 3900).route(2, 4, 300, 0, 1000);
         Evaluation evaluation = engine(routes, fare(1, 1)).evaluate(MEMBERS, NONE);
         assertThat(evaluation.best(Criterion.DISTANCE).orElseThrow().stationId()).isEqualTo(3);
+        assertThat(evaluation.best(Criterion.TIME).orElseThrow().stationId()).isEqualTo(4);
+    }
+
+    @Test
+    void distanceBreaksAFarthestAndSpreadTieByTotalThenStationId() {
+        Routes routes = new Routes()
+                .route(1, 1, 0, 0, 0).route(1, 2, 600, 0, 9000).route(1, 3, 300, 0, 4000).route(1, 4, 300, 0, 4000)
+                .route(1, 5, 300, 0, 4000)
+                .route(2, 1, 600, 0, 9000).route(2, 2, 0, 0, 0).route(2, 3, 300, 0, 3000).route(2, 4, 300, 0, 3000)
+                .route(2, 5, 300, 0, 3000);
+        // st3, st4, st5 tie on farthest (4000), spread (1000) and total (7000): the lowest station id wins.
+        assertThat(engine(routes, fare(1, 1)).evaluate(MEMBERS, NONE).best(Criterion.DISTANCE).orElseThrow().stationId())
+                .isEqualTo(3);
+    }
+
+    /** Seconds proportional to metres (2 minutes per km) so TIME agrees with distance in the skew cases. */
+    private static int secondsFor(int metres) {
+        return metres * 120 / 1000;
+    }
+
+    private static Routes route(Routes routes, long from, long to, int metres) {
+        return routes.route(from, to, secondsFor(metres), 0, metres);
+    }
+
+    @Test
+    void distanceDoesNotPickTheStationNextToOneMemberOfTwo() {
+        // #193: A (st1) and B (st2) are 10 km apart. st10 is next to A on the direct line (500 m / 9500 m, total
+        // 10000 m). st11 is the fair middle but one line over, so the total is 11500 m (5500 m / 6000 m), more than
+        // 1000 m over the shortest total. Comparing totals picked st10, where B rides almost the whole way.
+        Routes routes = new Routes().route(1, 1, 0, 0, 0).route(2, 2, 0, 0, 0);
+        route(routes, 1, 2, 10_000); route(routes, 2, 1, 10_000);
+        route(routes, 1, 10, 500); route(routes, 2, 10, 9_500);
+        route(routes, 1, 11, 5_500); route(routes, 2, 11, 6_000);
+        Candidate best = engine(routes, fare(1, 1)).evaluate(MEMBERS, NONE).best(Criterion.DISTANCE).orElseThrow();
+        assertThat(best.stationId()).isEqualTo(11);
+        assertThat(best.maxDistanceM()).isEqualTo(6_000);
+    }
+
+    @Test
+    void distanceDoesNotFollowTheLargerGroup() {
+        // #193: two members near 강남 (st1, st2) and one near 일산 (st3). st10 is by 강남 (1000 m, 1500 m, 30000 m:
+        // total 32500 m), st11 is in between (12000 m, 12500 m, 18000 m: total 42500 m). Comparing totals picked st10,
+        // so only the 일산 member rode 30 km.
+        UUID c = UUID.randomUUID();
+        List<Member> three = List.of(new Member(A, "선호", 1), new Member(B, "인준", 2), new Member(c, "가율", 3));
+        Routes routes = new Routes().route(1, 1, 0, 0, 0).route(2, 2, 0, 0, 0).route(3, 3, 0, 0, 0);
+        route(routes, 1, 10, 1_000); route(routes, 2, 10, 1_500); route(routes, 3, 10, 30_000);
+        route(routes, 1, 11, 12_000); route(routes, 2, 11, 12_500); route(routes, 3, 11, 18_000);
+        Candidate best = engine(routes, fare(1, 1)).evaluate(three, NONE).best(Criterion.DISTANCE).orElseThrow();
+        assertThat(best.stationId()).isEqualTo(11);
+        assertThat(best.maxDistanceM()).isEqualTo(18_000);
     }
 
     @Test
